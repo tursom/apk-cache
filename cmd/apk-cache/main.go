@@ -22,6 +22,9 @@ var (
 	socks5Proxy        = flag.String("proxy", "", "SOCKS5 代理地址 (例如: socks5://127.0.0.1:1080)")
 	indexCacheDuration = flag.Duration("index-cache", 1*time.Hour, "APKINDEX.tar.gz 缓存时间")
 	httpClient         *http.Client
+
+	// 文件锁管理器
+	lockManager = NewFileLockManager()
 )
 
 func main() {
@@ -55,19 +58,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// 生成缓存文件路径
 	cacheFile := getCacheFilePath(r.URL.Path)
 
-	// 检查是否是索引文件
-	isIndex := strings.HasSuffix(r.URL.Path, "/APKINDEX.tar.gz")
-
 	// 检查缓存是否存在
-	if fileExists(cacheFile) {
-		// 对于索引文件，检查是否过期
-		if isIndex && isCacheExpired(cacheFile, *indexCacheDuration) {
-			log.Printf("索引缓存已过期: %s", r.URL.Path)
-		} else {
-			log.Printf("缓存命中: %s", r.URL.Path)
-			serveFromCache(w, cacheFile)
-			return
-		}
+	if cacheValid(cacheFile) {
+		log.Printf("缓存命中: %s", r.URL.Path)
+		serveFromCache(w, cacheFile)
+		return
 	}
 
 	// 缓存未命中,从上游获取
@@ -80,7 +75,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer upstreamResp.Body.Close()
 
-	// 保存到缓存
+	// 保存到缓存（带文件锁）
 	if err := updateCacheFile(cacheFile, upstreamResp.Body, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
 		log.Printf("保存缓存失败: %v", err)
 	} else {
@@ -93,9 +88,20 @@ func getCacheFilePath(urlPath string) string {
 	return safePath
 }
 
-func fileExists(path string) bool {
+func cacheValid(path string) bool {
 	_, err := os.Stat(path)
-	return err == nil
+	if err != nil {
+		return false
+	}
+
+	// 检查是否是索引文件
+	isIndex := strings.HasSuffix(path, "/APKINDEX.tar.gz")
+	if isIndex && isCacheExpired(path, *indexCacheDuration) {
+		log.Printf("索引缓存已过期: %s", path)
+		return false
+	}
+
+	return true
 }
 
 func serveFromCache(w http.ResponseWriter, cacheFile string) {
@@ -120,6 +126,18 @@ func fetchFromUpstream(urlPath string) (*http.Response, error) {
 }
 
 func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, statusCode int, headers http.Header) error {
+	// 获取该文件的锁
+	unlock := lockManager.Acquire(cacheFile)
+	defer unlock()
+
+	// 再次检查文件是否已存在（可能在等待锁期间已被其他 goroutine 创建）
+	if cacheValid(cacheFile) {
+		log.Printf("文件已被其他请求缓存: %s", cacheFile)
+		// 文件已存在，直接从缓存读取并发送给客户端
+		serveFromCache(w, cacheFile)
+		return nil
+	}
+
 	// 创建缓存文件的目录
 	dir := filepath.Dir(cacheFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
