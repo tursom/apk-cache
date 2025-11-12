@@ -9,16 +9,19 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"golang.org/x/net/proxy"
 )
 
 var (
-	listenAddr  = flag.String("addr", ":8080", "监听地址")
-	cachePath   = flag.String("cache", "./cache", "缓存目录")
-	upstreamURL = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "上游服务器地址")
-	socks5Proxy = flag.String("proxy", "", "SOCKS5 代理地址 (例如: socks5://127.0.0.1:1080)")
-	httpClient  *http.Client
+	listenAddr         = flag.String("addr", ":8080", "监听地址")
+	cachePath          = flag.String("cache", "./cache", "缓存目录")
+	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "上游服务器地址")
+	socks5Proxy        = flag.String("proxy", "", "SOCKS5 代理地址 (例如: socks5://127.0.0.1:1080)")
+	indexCacheDuration = flag.Duration("index-cache", 1*time.Hour, "APKINDEX.tar.gz 缓存时间")
+	httpClient         *http.Client
 )
 
 func main() {
@@ -52,11 +55,19 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// 生成缓存文件路径
 	cacheFile := getCacheFilePath(r.URL.Path)
 
+	// 检查是否是索引文件
+	isIndex := strings.HasSuffix(r.URL.Path, "/APKINDEX.tar.gz")
+
 	// 检查缓存是否存在
 	if fileExists(cacheFile) {
-		log.Printf("缓存命中: %s", r.URL.Path)
-		serveFromCache(w, cacheFile)
-		return
+		// 对于索引文件，检查是否过期
+		if isIndex && isCacheExpired(cacheFile, *indexCacheDuration) {
+			log.Printf("索引缓存已过期: %s", r.URL.Path)
+		} else {
+			log.Printf("缓存命中: %s", r.URL.Path)
+			serveFromCache(w, cacheFile)
+			return
+		}
 	}
 
 	// 缓存未命中,从上游获取
@@ -70,7 +81,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	defer upstreamResp.Body.Close()
 
 	// 保存到缓存
-	if err := saveToCacheFirst(cacheFile, upstreamResp.Body, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
+	if err := updateCacheFile(cacheFile, upstreamResp.Body, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
 		log.Printf("保存缓存失败: %v", err)
 	} else {
 		log.Printf("缓存已保存: %s", r.URL.Path)
@@ -108,47 +119,7 @@ func fetchFromUpstream(urlPath string) (*http.Response, error) {
 	return resp, nil
 }
 
-func saveToCache(cacheFile string, body io.Reader, w http.ResponseWriter, statusCode int, headers http.Header) error {
-	// 创建缓存文件的目录
-	dir := filepath.Dir(cacheFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建缓存目录失败: %w", err)
-	}
-
-	// 创建临时文件
-	tmpFile, err := os.CreateTemp(dir, "tmp-")
-	if err != nil {
-		return fmt.Errorf("创建临时文件失败: %w", err)
-	}
-	defer os.Remove(tmpFile.Name())
-
-	// 复制响应头
-	for key, values := range headers {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-	w.Header().Set("X-Cache", "MISS")
-	w.WriteHeader(statusCode)
-
-	// 同时写入临时文件和响应
-	writer := io.MultiWriter(tmpFile, w)
-	if _, err := io.Copy(writer, body); err != nil {
-		tmpFile.Close()
-		return fmt.Errorf("写入数据失败: %w", err)
-	}
-
-	tmpFile.Close()
-
-	// 重命名临时文件为最终缓存文件
-	if err := os.Rename(tmpFile.Name(), cacheFile); err != nil {
-		return fmt.Errorf("重命名缓存文件失败: %w", err)
-	}
-
-	return nil
-}
-
-func saveToCacheFirst(cacheFile string, body io.Reader, w http.ResponseWriter, statusCode int, headers http.Header) error {
+func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, statusCode int, headers http.Header) error {
 	// 创建缓存文件的目录
 	dir := filepath.Dir(cacheFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -166,24 +137,6 @@ func saveToCacheFirst(cacheFile string, body io.Reader, w http.ResponseWriter, s
 		os.Remove(tmpFileName)
 	}()
 
-	// 先完整下载到临时文件
-	if _, err := io.Copy(tmpFile, body); err != nil {
-		return fmt.Errorf("写入临时文件失败: %w", err)
-	}
-
-	// 关闭并重命名为最终缓存文件
-	tmpFile.Close()
-	if err := os.Rename(tmpFileName, cacheFile); err != nil {
-		return fmt.Errorf("重命名缓存文件失败: %w", err)
-	}
-
-	// 从缓存文件读取并发送给客户端
-	cacheFileReader, err := os.Open(cacheFile)
-	if err != nil {
-		return fmt.Errorf("打开缓存文件失败: %w", err)
-	}
-	defer cacheFileReader.Close()
-
 	// 复制响应头
 	for key, values := range headers {
 		for _, value := range values {
@@ -193,10 +146,51 @@ func saveToCacheFirst(cacheFile string, body io.Reader, w http.ResponseWriter, s
 	w.Header().Set("X-Cache", "MISS")
 	w.WriteHeader(statusCode)
 
-	// 发送给客户端,忽略客户端断开连接的错误
-	if _, err := io.Copy(w, cacheFileReader); err != nil {
-		log.Printf("发送响应到客户端失败(可能客户端已断开): %v", err)
-		// 不返回错误,因为缓存已经保存成功
+	buf := make([]byte, 32*1024)
+	var cacheErr, clientErr error
+
+	for {
+		// 读取数据
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			// 写入缓存文件（只要缓存没出错就继续写）
+			if cacheErr == nil {
+				if _, err := tmpFile.Write(buf[:n]); err != nil {
+					cacheErr = err
+					log.Printf("写入缓存失败: %v", err)
+				}
+			}
+
+			// 写入客户端（只要客户端没出错就继续写）
+			if clientErr == nil {
+				if _, err := w.Write(buf[:n]); err != nil {
+					clientErr = err
+					log.Printf("写入客户端失败(可能客户端已断开): %v", err)
+				}
+			}
+		}
+
+		// 检查读取错误
+		if readErr != nil {
+			if readErr != io.EOF {
+				return fmt.Errorf("读取上游响应失败: %w", readErr)
+			}
+			break // EOF，正常结束
+		}
+	}
+
+	// 关闭临时文件
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("关闭临时文件失败: %w", err)
+	}
+
+	// 只有缓存写入成功才重命名
+	if cacheErr != nil {
+		return fmt.Errorf("缓存写入失败: %w", cacheErr)
+	}
+
+	if err := os.Rename(tmpFileName, cacheFile); err != nil {
+		return fmt.Errorf("重命名缓存文件失败: %w", err)
 	}
 
 	return nil
@@ -235,4 +229,12 @@ func createHTTPClient() *http.Client {
 	return &http.Client{
 		Transport: transport,
 	}
+}
+
+func isCacheExpired(path string, duration time.Duration) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	return time.Since(info.ModTime()) > duration
 }
