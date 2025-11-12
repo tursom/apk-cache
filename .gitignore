@@ -1,0 +1,18 @@
+# Cache directories
+cache/
+logs/
+*.log
+
+# Docker volumes
+data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

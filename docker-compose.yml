@@ -1,0 +1,14 @@
+services:
+  apk-cache:
+    build: .
+    container_name: apk-cache
+    ports:
+      - "3000:80"
+    volumes:
+      - apk-cache-data:/var/cache/nginx/apk
+      - apk-cache-logs:/var/log/nginx
+    restart: unless-stopped
+
+volumes:
+  apk-cache-data:
+  apk-cache-logs:
