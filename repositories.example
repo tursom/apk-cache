@@ -1,0 +1,18 @@
+# Example Alpine repositories configuration
+# Save this to /etc/apk/repositories on your Alpine Linux system
+# Replace <cache-server-ip> with your cache server's IP address or hostname
+# Replace <alpine-version> with your Alpine version (e.g., v3.18, v3.19, edge)
+
+http://<cache-server-ip>:3000/alpine/<alpine-version>/main
+http://<cache-server-ip>:3000/alpine/<alpine-version>/community
+
+# Example for Alpine 3.18:
+# http://192.168.1.100:3000/alpine/v3.18/main
+# http://192.168.1.100:3000/alpine/v3.18/community
+
+# Example for Alpine 3.19:
+# http://192.168.1.100:3000/alpine/v3.19/main
+# http://192.168.1.100:3000/alpine/v3.19/community
+
+# After updating /etc/apk/repositories, run:
+# apk update
