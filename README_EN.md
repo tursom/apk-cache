@@ -11,11 +11,18 @@ A caching proxy server for Alpine Linux APK packages with SOCKS5 proxy support a
 - 🔄 Fetch from upstream server and save on cache miss
 - 🌐 SOCKS5 proxy support for upstream server access
 - 💾 Configurable cache directory and listen address
-- ⏱️ Automatic expiration and refresh for APKINDEX.tar.gz index files
+- ⏱️ Flexible cache expiration strategies
+  - APKINDEX index files expire by **modification time** (default 24 hours)
+  - APK package files expire by **access time** (default never expire)
+  - Prioritize in-memory access time for better performance
+- 🧹 Automatic expired cache cleanup (configurable interval)
 - 🔒 Client disconnection doesn't affect cache file saving
 - ⚡ Simultaneous writing to cache and client for improved response speed
 - 🔐 File-level lock management to avoid concurrent download conflicts
 - 🌍 Multilingual support (Chinese/English) with automatic system language detection
+- 📊 Prometheus monitoring metrics
+- 🎛️ Web admin dashboard with real-time statistics
+- 🔑 Optional HTTP Basic Auth for admin interface
 
 ## Quick Start
 
@@ -49,8 +56,11 @@ go build -o apk-cache cmd/apk-cache/main.go
 | `-cache` | `./cache` | Cache directory path |
 | `-upstream` | `https://dl-cdn.alpinelinux.org` | Upstream server URL |
 | `-proxy` | (empty) | SOCKS5 proxy address, format: `socks5://[username:password@]host:port` |
-| `-index-cache` | `24h` | APKINDEX.tar.gz index file cache duration |
+| `-index-cache` | `24h` | APKINDEX.tar.gz index file cache duration (by modification time) |
+| `-pkg-cache` | `0` | APK package file cache duration (by access time, 0 = never expire) |
+| `-cleanup-interval` | `1h` | Automatic cleanup interval for expired cache (0 = disabled) |
 | `-locale` | (auto-detect) | Interface language (`en`/`zh`), auto-detect from `LANG` environment variable if empty |
+| `-admin-password` | (empty) | Admin dashboard password (empty = no authentication) |
 
 ## Usage
 
@@ -83,9 +93,22 @@ apk add --repositories-file /dev/null --repository http://your-cache-server:3142
 
 ### Cache Strategy
 
-- **APK package files**: Permanent cache, never expires
-- **APKINDEX.tar.gz index files**: Periodic expiration (default 24 hours), adjustable via `-index-cache` parameter
-- **Other files**: Permanent cache
+- **APKINDEX.tar.gz index files**: 
+  - Expire by **modification time** (default 24 hours)
+  - Refresh periodically to get latest package information
+  - Adjustable via `-index-cache` parameter
+  
+- **APK package files**: 
+  - Expire by **access time** (default never expire)
+  - Prioritize in-memory recorded access time
+  - If not in memory, read atime from file system
+  - If atime unavailable, use process start time (prevents immediate cleanup after restart)
+  - Set expiration time via `-pkg-cache` parameter (e.g., `168h` = 7 days)
+
+- **Automatic cleanup**:
+  - Set cleanup interval via `-cleanup-interval`
+  - Only enabled when `-pkg-cache` is not 0
+  - Periodically scans and deletes expired files
 
 ### Concurrency Control
 
@@ -103,6 +126,45 @@ apk add --repositories-file /dev/null --repository http://your-cache-server:3142
 - Concurrent requests for the same file will only download once, other requests wait and share cache
 
 ## Advanced Configuration
+
+### Web Admin Dashboard
+
+Visit `http://your-server:3142/_admin/` to view:
+
+- 📈 Real-time statistics (cache hit rate, download volume, etc.)
+- 🔒 Active file locks count
+- 📝 Tracked access time records
+- 💾 Total cache size
+- 🗑️ One-click cache clearing
+- 📊 Prometheus metrics link
+
+#### Enable Authentication
+
+```bash
+# Set admin dashboard password
+./apk-cache -admin-password "your-secret-password"
+
+# Access requires:
+# Username: admin
+# Password: your-secret-password
+```
+
+### Prometheus Monitoring
+
+Visit `http://your-server:3142/metrics` for metrics:
+
+- `apk_cache_hits_total` - Total cache hits
+- `apk_cache_misses_total` - Total cache misses
+- `apk_cache_download_bytes_total` - Total bytes downloaded from upstream
+
+Configure Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: 'apk-cache'
+    static_configs:
+      - targets: ['your-server:3142']
+```
 
 ### Multilingual Support
 
@@ -155,6 +217,26 @@ LANG=en_US.UTF-8 ./apk-cache
 ./apk-cache -upstream https://mirrors.aliyun.com/alpine
 ```
 
+### Cache Expiration and Auto Cleanup
+
+```bash
+# Index files expire in 24h, package files in 7 days, cleanup every hour
+./apk-cache -index-cache 24h -pkg-cache 168h -cleanup-interval 1h
+
+# Index files expire in 12h, package files in 30 days, cleanup every 6 hours
+./apk-cache -index-cache 12h -pkg-cache 720h -cleanup-interval 6h
+
+# Disable package file expiration (permanent cache)
+./apk-cache -pkg-cache 0
+
+# Set expiration but disable auto cleanup (manual cleanup via admin dashboard)
+./apk-cache -pkg-cache 168h -cleanup-interval 0
+```
+
+**Note**: 
+- Auto cleanup only enabled when `-pkg-cache` is not 0
+- When `-cleanup-interval` is 0, auto cleanup goroutine won't start
+
 ## Performance Features
 
 ### Concurrency Safety
@@ -169,22 +251,64 @@ LANG=en_US.UTF-8 ./apk-cache
 - **Resilient caching**: Client disconnection doesn't affect cache integrity
 - **Concurrent downloads**: Different files can be downloaded concurrently without interfering with each other
 
+### Smart Access Time Tracking
+
+- **Memory priority**: Prioritize in-memory recorded access time, avoid frequent syscalls
+- **File system fallback**: Read atime from file system when not in memory
+- **Process start protection**: Use process start time when atime unavailable, prevents immediate cleanup after restart
+- **Auto cleanup**: Synchronize memory cleanup when deleting files
+
+## Monitoring and Management
+
+### Web Admin Dashboard
+
+- **Access URL**: `http://your-server:3142/_admin/`
+- **Real-time Stats**: Cache hit rate, download volume, active locks, tracked files, etc.
+- **Cache Management**: View cache size, one-click cache clearing
+- **Server Info**: Listen address, cache directory, upstream server, configuration parameters, etc.
+
+### Prometheus Metrics
+
+- **Access URL**: `http://your-server:3142/metrics`
+- **Metrics List**:
+  - `apk_cache_hits_total` - Total cache hits
+  - `apk_cache_misses_total` - Total cache misses
+  - `apk_cache_download_bytes_total` - Total bytes downloaded from upstream
+
+### Authentication Protection
+
+```bash
+# Enable admin interface authentication
+./apk-cache -admin-password "secure-password"
+
+# Access /_admin/ requires:
+# Username: admin
+# Password: secure-password
+```
+
 ## Project Structure
 
 ```
 apk-cache/
 ├── cmd/
 │   └── apk-cache/
-│       ├── main.go          # Main program
-│       ├── lockman.go       # File lock manager
-│       └── lockman_test.go  # Unit tests
-├── locales/
-│   ├── en.toml             # English translations
-│   └── zh.toml             # Chinese translations
-├── cache/                  # Cache directory (generated at runtime)
+│       ├── main.go            # Main program entry
+│       ├── cache.go           # Cache handling logic
+│       ├── web.go             # Web admin dashboard
+│       ├── cleanup.go         # Auto cleanup functionality
+│       ├── lockman.go         # File lock manager
+│       ├── lockman_test.go    # Lock manager unit tests
+│       ├── access_tracker.go  # Access time tracker
+│       ├── admin.html         # Admin dashboard HTML (embedded)
+│       └── locales/
+│           ├── en.toml        # English translations (embedded)
+│           └── zh.toml        # Chinese translations (embedded)
+├── cache/                     # Cache directory (generated at runtime)
 ├── go.mod
 ├── go.sum
-└── README.md
+├── README.md                  # Chinese documentation
+├── README_EN.md               # English documentation
+└── ADMIN.md                   # Admin dashboard documentation
 ```
 
 ## Dependencies
@@ -192,6 +316,8 @@ apk-cache/
 - `golang.org/x/net/proxy` - SOCKS5 proxy support
 - `github.com/nicksnyder/go-i18n/v2` - Internationalization support
 - `github.com/BurntSushi/toml` - TOML configuration file parsing
+- `github.com/prometheus/client_golang` - Prometheus monitoring metrics
+- `golang.org/x/text/language` - Language detection and handling
 
 ## License
 

@@ -54,6 +54,7 @@ var (
 	pkgCacheDuration   = flag.Duration("pkg-cache", 0, "Package cache duration (0 = never expire)")
 	cleanupInterval    = flag.Duration("cleanup-interval", time.Hour, "Automatic cleanup interval (0 = disabled)")
 	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
+	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
 	httpClient         *http.Client
 
 	// 进程启动时间
@@ -150,7 +151,7 @@ func main() {
 
 	// 使用自定义 Registry
 	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	http.HandleFunc("/_admin/", adminDashboardHandler)
+	http.HandleFunc("/_admin/", authMiddleware(adminDashboardHandler))
 	http.HandleFunc("/", proxyHandler)
 
 	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
@@ -162,5 +163,24 @@ func main() {
 
 	if err := http.ListenAndServe(*listenAddr, nil); err != nil {
 		log.Fatalln(t("ServerStartFailed", map[string]any{"Error": err}))
+	}
+}
+
+func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 如果没有设置密码，跳过认证
+		if *adminPassword == "" {
+			next(w, r)
+			return
+		}
+
+		// Basic Auth
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "admin" || password != *adminPassword {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Admin"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
 	}
 }
