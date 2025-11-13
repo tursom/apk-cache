@@ -1,0 +1,29 @@
+# APK Cache Server Configuration
+# 配置文件优先级低于命令行参数
+
+[server]
+# 监听地址
+addr = ":3142"
+# 语言设置 (en/zh)，留空自动检测
+locale = ""
+
+[upstream]
+# 上游服务器地址
+url = "https://dl-cdn.alpinelinux.org"
+# SOCKS5 代理（可选）
+# proxy = "socks5://127.0.0.1:1080"
+# proxy = "socks5://username:password@127.0.0.1:1080"
+
+[cache]
+# 缓存目录
+dir = "./cache"
+# APKINDEX 索引文件缓存时间（按修改时间过期）
+index_duration = "24h"
+# APK 包文件缓存时间（按访问时间过期，0 = 永不过期）
+pkg_duration = "0"
+# 自动清理间隔（0 = 禁用自动清理）
+cleanup_interval = "1h"
+
+[security]
+# 管理界面密码（留空则无需认证）
+# admin_password = "your-secret-password"

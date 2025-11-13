@@ -55,6 +55,7 @@ var (
 	cleanupInterval    = flag.Duration("cleanup-interval", time.Hour, "Automatic cleanup interval (0 = disabled)")
 	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
 	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
+	configFile         = flag.String("config", "", "Config file path (optional)")
 	httpClient         *http.Client
 
 	// 进程启动时间
@@ -127,6 +128,20 @@ func t(messageID string, templateData map[string]any) string {
 
 func main() {
 	flag.Parse()
+
+	// 加载配置文件（如果指定）
+	if *configFile != "" {
+		config, err := LoadConfig(*configFile)
+		if err != nil {
+			log.Fatalf("Failed to load config file: %v\n", err)
+		}
+		if config != nil {
+			if err := ApplyConfig(config); err != nil {
+				log.Fatalf("Failed to apply config: %v\n", err)
+			}
+			log.Printf("Loaded config from: %s\n", *configFile)
+		}
+	}
 
 	initI18n()
 

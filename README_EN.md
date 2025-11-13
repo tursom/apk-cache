@@ -40,18 +40,25 @@ go build -o apk-cache cmd/apk-cache/main.go
 # Run with default configuration (auto-detect system language)
 ./apk-cache
 
+# Use config file
+./apk-cache -config config.toml
+
 # Run with custom configuration
 ./apk-cache -addr :3142 -cache ./cache -proxy socks5://127.0.0.1:1080
 
 # Specify language
 ./apk-cache -locale zh  # Chinese
 ./apk-cache -locale en  # English
+
+# Config file + command line args (command line has higher priority)
+./apk-cache -config config.toml -addr :8080
 ```
 
 ### Command Line Arguments
 
 | Argument | Default | Description |
 |----------|---------|-------------|
+| `-config` | (empty) | Config file path (optional) |
 | `-addr` | `:3142` | Listen address |
 | `-cache` | `./cache` | Cache directory path |
 | `-upstream` | `https://dl-cdn.alpinelinux.org` | Upstream server URL |
@@ -164,6 +171,44 @@ scrape_configs:
   - job_name: 'apk-cache'
     static_configs:
       - targets: ['your-server:3142']
+```
+
+### Configuration File
+
+Create `config.toml`:
+
+```toml
+[server]
+addr = ":3142"
+locale = "en"  # or "zh"
+
+[upstream]
+url = "https://dl-cdn.alpinelinux.org"
+# proxy = "socks5://127.0.0.1:1080"
+
+[cache]
+dir = "./cache"
+index_duration = "24h"
+pkg_duration = "168h"  # 7 days
+cleanup_interval = "1h"
+
+[security]
+admin_password = "your-secret-password"
+```
+
+Use config file:
+
+```bash
+./apk-cache -config config.toml
+```
+
+**Priority Rule**: Command line arguments > Config file > Default values
+
+```bash
+# Config file sets addr = ":3142"
+# But command line argument overrides it
+./apk-cache -config config.toml -addr :8080
+# Finally listens on :8080
 ```
 
 ### Multilingual Support

@@ -40,18 +40,25 @@ go build -o apk-cache cmd/apk-cache/main.go
 # 默认配置运行（自动检测系统语言）
 ./apk-cache
 
+# 使用配置文件
+./apk-cache -config config.toml
+
 # 自定义配置
 ./apk-cache -addr :3142 -cache ./cache -proxy socks5://127.0.0.1:1080
 
 # 指定语言
 ./apk-cache -locale zh  # 中文
 ./apk-cache -locale en  # 英文
+
+# 配置文件 + 命令行参数（命令行参数优先级更高）
+./apk-cache -config config.toml -addr :8080
 ```
 
 ### 命令行参数
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
+| `-config` | (空) | 配置文件路径（可选） |
 | `-addr` | `:3142` | 监听地址 |
 | `-cache` | `./cache` | 缓存目录路径 |
 | `-upstream` | `https://dl-cdn.alpinelinux.org` | 上游服务器地址 |
@@ -164,6 +171,44 @@ scrape_configs:
   - job_name: 'apk-cache'
     static_configs:
       - targets: ['your-server:3142']
+```
+
+### 配置文件
+
+创建 `config.toml`：
+
+```toml
+[server]
+addr = ":3142"
+locale = "zh"  # 或 "en"
+
+[upstream]
+url = "https://dl-cdn.alpinelinux.org"
+# proxy = "socks5://127.0.0.1:1080"
+
+[cache]
+dir = "./cache"
+index_duration = "24h"
+pkg_duration = "168h"  # 7 天
+cleanup_interval = "1h"
+
+[security]
+admin_password = "your-secret-password"
+```
+
+使用配置文件：
+
+```bash
+./apk-cache -config config.toml
+```
+
+**优先级规则**：命令行参数 > 配置文件 > 默认值
+
+```bash
+# 配置文件设置 addr = ":3142"
+# 但命令行参数会覆盖它
+./apk-cache -config config.toml -addr :8080
+# 最终监听在 :8080
 ```
 
 ### 多语言支持
