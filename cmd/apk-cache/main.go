@@ -2,15 +2,10 @@ package main
 
 import (
 	_ "embed"
-	"encoding/json"
 	"flag"
-	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,8 +13,6 @@ import (
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	dto "github.com/prometheus/client_model/go"
-	"golang.org/x/net/proxy"
 	"golang.org/x/text/language"
 )
 
@@ -33,6 +26,9 @@ var enToml []byte
 var zhToml []byte
 
 var (
+	// 创建自定义 Registry，不包含默认的 Go 运行时指标
+	registry = prometheus.NewRegistry()
+
 	cacheHits = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_hits_total",
 		Help: "Total number of cache hits",
@@ -55,12 +51,19 @@ var (
 	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "Upstream server URL")
 	socks5Proxy        = flag.String("proxy", "", "SOCKS5 proxy address (e.g. socks5://127.0.0.1:1080)")
 	indexCacheDuration = flag.Duration("index-cache", 24*time.Hour, "APKINDEX.tar.gz cache duration")
+	pkgCacheDuration   = flag.Duration("pkg-cache", 0, "Package cache duration (0 = never expire)")
+	cleanupInterval    = flag.Duration("cleanup-interval", time.Hour, "Automatic cleanup interval (0 = disabled)")
 	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
 	httpClient         *http.Client
 
+	// 进程启动时间
+	processStartTime = time.Now()
+
 	// 文件锁管理器
 	lockManager = NewFileLockManager()
-	localizer   *i18n.Localizer
+	// 访问时间跟踪器
+	accessTimeTracker = NewAccessTimeTracker()
+	localizer         *i18n.Localizer
 )
 
 // detectLocale 自动检测系统语言
@@ -126,6 +129,11 @@ func main() {
 
 	initI18n()
 
+	// 注册 Prometheus 指标到自定义 Registry
+	registry.MustRegister(cacheHits)
+	registry.MustRegister(cacheMisses)
+	registry.MustRegister(downloadBytes)
+
 	// 创建缓存目录
 	if err := os.MkdirAll(*cachePath, 0755); err != nil {
 		log.Fatalln(t("CreateCacheDirFailed", map[string]any{"Error": err}))
@@ -134,7 +142,14 @@ func main() {
 	// 配置 HTTP 客户端
 	httpClient = createHTTPClient()
 
-	http.Handle("/metrics", promhttp.Handler())
+	// 启动自动清理
+	if *cleanupInterval > 0 && *pkgCacheDuration != 0 {
+		go startAutoCleanup()
+		log.Printf("自动清理已启用，间隔：%v\n", *cleanupInterval)
+	}
+
+	// 使用自定义 Registry
+	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	http.HandleFunc("/_admin/", adminDashboardHandler)
 	http.HandleFunc("/", proxyHandler)
 
@@ -148,319 +163,4 @@ func main() {
 	if err := http.ListenAndServe(*listenAddr, nil); err != nil {
 		log.Fatalln(t("ServerStartFailed", map[string]any{"Error": err}))
 	}
-}
-
-func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println(t("RequestReceived", map[string]any{
-		"Method": r.Method,
-		"Path":   r.URL.Path,
-	}))
-
-	// 生成缓存文件路径
-	cacheFile := getCacheFilePath(r.URL.Path)
-
-	// 检查缓存是否存在
-	if cacheValid(cacheFile) {
-		log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-		cacheHits.Add(1)
-		serveFromCache(w, cacheFile)
-		return
-	}
-
-	cacheMisses.Add(1)
-
-	// 缓存未命中,从上游获取
-	log.Println(t("CacheMiss", map[string]any{"Path": r.URL.Path}))
-	upstreamResp, err := fetchFromUpstream(r.URL.Path)
-	if err != nil {
-		log.Println(t("FetchUpstreamFailed", map[string]any{"Error": err}))
-		http.Error(w, t("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
-		return
-	}
-	defer upstreamResp.Body.Close()
-
-	// 保存到缓存（带文件锁）
-	if err := updateCacheFile(cacheFile, upstreamResp.Body, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
-		log.Println(t("SaveCacheFailed", map[string]any{"Error": err}))
-	} else {
-		log.Println(t("CacheSaved", map[string]any{"Path": r.URL.Path}))
-	}
-}
-
-func getCacheFilePath(urlPath string) string {
-	safePath := filepath.Join(*cachePath, urlPath)
-	return safePath
-}
-
-func cacheValid(path string) bool {
-	_, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-
-	// 检查是否是索引文件
-	isIndex := strings.HasSuffix(path, "/APKINDEX.tar.gz")
-	if isIndex && isCacheExpired(path, *indexCacheDuration) {
-		log.Println(t("IndexExpired", map[string]any{"Path": path}))
-		return false
-	}
-
-	return true
-}
-
-func serveFromCache(w http.ResponseWriter, cacheFile string) {
-	file, err := os.Open(cacheFile)
-	if err != nil {
-		http.Error(w, t("ReadCacheFailed", nil), http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	w.Header().Set("X-Cache", "HIT")
-	io.Copy(w, file)
-}
-
-func fetchFromUpstream(urlPath string) (*http.Response, error) {
-	url := *upstreamURL + urlPath
-	resp, err := httpClient.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
-
-func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, statusCode int, headers http.Header) error {
-	// 获取该文件的锁
-	unlock := lockManager.Acquire(cacheFile)
-	defer unlock()
-
-	// 再次检查文件是否已存在（可能在等待锁期间已被其他 goroutine 创建）
-	if cacheValid(cacheFile) {
-		log.Println(t("CachedByOther", map[string]any{"Path": cacheFile}))
-		// 文件已存在，直接从缓存读取并发送给客户端
-		serveFromCache(w, cacheFile)
-		return nil
-	}
-
-	// 创建缓存文件的目录
-	dir := filepath.Dir(cacheFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("%s", t("CreateCacheDirFailed", map[string]any{"Error": err}))
-	}
-
-	// 创建临时文件
-	tmpFile, err := os.CreateTemp(dir, "tmp-")
-	if err != nil {
-		return fmt.Errorf("%s", t("CreateTempFileFailed", map[string]any{"Error": err}))
-	}
-	tmpFileName := tmpFile.Name()
-	defer func() {
-		tmpFile.Close()
-		os.Remove(tmpFileName)
-	}()
-
-	// 复制响应头
-	for key, values := range headers {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-	w.Header().Set("X-Cache", "MISS")
-	w.WriteHeader(statusCode)
-
-	buf := make([]byte, 32*1024)
-	var cacheErr, clientErr error
-
-	for {
-		// 读取数据
-		n, readErr := body.Read(buf)
-		if n > 0 {
-			downloadBytes.Add(float64(n))
-
-			// 写入缓存文件（只要缓存没出错就继续写）
-			if cacheErr == nil {
-				if _, err := tmpFile.Write(buf[:n]); err != nil {
-					cacheErr = err
-					log.Println(t("WriteCacheFailed", map[string]any{"Error": err}))
-				}
-			}
-
-			// 写入客户端（只要客户端没出错就继续写）
-			if clientErr == nil {
-				if _, err := w.Write(buf[:n]); err != nil {
-					clientErr = err
-					log.Println(t("WriteClientFailed", map[string]any{"Error": err}))
-				}
-			}
-		}
-
-		// 检查读取错误
-		if readErr != nil {
-			if readErr != io.EOF {
-				return fmt.Errorf("%s", t("ReadUpstreamFailed", map[string]any{"Error": readErr}))
-			}
-			break // EOF，正常结束
-		}
-	}
-
-	// 关闭临时文件
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("%s", t("CloseTempFileFailed", map[string]any{"Error": err}))
-	}
-
-	// 只有缓存写入成功才重命名
-	if cacheErr != nil {
-		return fmt.Errorf("%s", t("CacheWriteFailed", map[string]any{"Error": cacheErr}))
-	}
-
-	if err := os.Rename(tmpFileName, cacheFile); err != nil {
-		return fmt.Errorf("%s", t("RenameCacheFileFailed", map[string]any{"Error": err}))
-	}
-
-	return nil
-}
-
-func createHTTPClient() *http.Client {
-	if *socks5Proxy == "" {
-		return http.DefaultClient
-	}
-
-	proxyURL, err := url.Parse(*socks5Proxy)
-	if err != nil {
-		log.Fatalln(t("ParseProxyFailed", map[string]any{"Error": err}))
-	}
-
-	// 创建 SOCKS5 dialer
-	var auth *proxy.Auth
-	if proxyURL.User != nil {
-		password, _ := proxyURL.User.Password()
-		auth = &proxy.Auth{
-			User:     proxyURL.User.Username(),
-			Password: password,
-		}
-	}
-
-	dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
-	if err != nil {
-		log.Fatalln(t("CreateDialerFailed", map[string]any{"Error": err}))
-	}
-
-	// 创建带代理的 HTTP Transport
-	transport := &http.Transport{
-		Dial: dialer.Dial,
-	}
-
-	return &http.Client{
-		Transport: transport,
-	}
-}
-
-func isCacheExpired(path string, duration time.Duration) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		return true
-	}
-	return time.Since(info.ModTime()) > duration
-}
-
-func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-
-	switch {
-	case path == "/_admin/" || path == "/_admin":
-		serveAdminDashboard(w, r)
-	case path == "/_admin/stats":
-		serveAdminStats(w, r)
-	case path == "/_admin/clear":
-		handleCacheClear(w, r)
-	default:
-		http.NotFound(w, r)
-	}
-}
-
-func serveAdminDashboard(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(adminHTML))
-}
-
-func serveAdminStats(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	// 获取 Prometheus metrics
-	cacheHitsVal := getMetricValue(cacheHits)
-	cacheMissesVal := getMetricValue(cacheMisses)
-	downloadBytesVal := getMetricValue(downloadBytes)
-
-	// 计算缓存大小
-	cacheSize, _ := getDirSize(*cachePath)
-
-	stats := map[string]interface{}{
-		"cache_hits":           int64(cacheHitsVal),
-		"cache_misses":         int64(cacheMissesVal),
-		"download_bytes":       int64(downloadBytesVal),
-		"active_locks":         lockManager.Size(),
-		"cache_size":           cacheSize,
-		"listen_addr":          *listenAddr,
-		"cache_dir":            *cachePath,
-		"upstream":             *upstreamURL,
-		"index_cache_duration": indexCacheDuration.String(),
-		"proxy":                *socks5Proxy,
-	}
-
-	json.NewEncoder(w).Encode(stats)
-}
-
-func handleCacheClear(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-
-	// 删除缓存目录中的所有文件
-	err := os.RemoveAll(*cachePath)
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": fmt.Sprintf("Failed to clear cache: %v", err),
-		})
-		return
-	}
-
-	// 重新创建缓存目录
-	err = os.MkdirAll(*cachePath, 0755)
-	if err != nil {
-		json.NewEncoder(w).Encode(map[string]string{
-			"status":  "error",
-			"message": fmt.Sprintf("Failed to recreate cache directory: %v", err),
-		})
-		return
-	}
-
-	json.NewEncoder(w).Encode(map[string]string{
-		"status":  "success",
-		"message": "Cache cleared successfully",
-	})
-}
-
-func getMetricValue(counter prometheus.Counter) float64 {
-	// 使用 prometheus 的 Write 方法获取值
-	metric := &dto.Metric{}
-	counter.Write(metric)
-	return metric.GetCounter().GetValue()
-}
-
-func getDirSize(path string) (int64, error) {
-	var size int64
-	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			size += info.Size()
-		}
-		return nil
-	})
-	return size, err
 }

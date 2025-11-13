@@ -31,6 +31,9 @@ other = "Cache saved: {{.Path}}"
 [IndexExpired]
 other = "Index cache expired: {{.Path}}"
 
+[CacheExpired]
+other = "Cache expired: {{.Path}}"
+
 [CachedByOther]
 other = "File cached by another request: {{.Path}}"
 

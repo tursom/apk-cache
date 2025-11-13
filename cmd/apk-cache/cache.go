@@ -1,0 +1,277 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
+
+	"golang.org/x/net/proxy"
+)
+
+func proxyHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println(t("RequestReceived", map[string]any{
+		"Method": r.Method,
+		"Path":   r.URL.Path,
+	}))
+
+	// 生成缓存文件路径
+	cacheFile := getCacheFilePath(r.URL.Path)
+
+	// 检查缓存是否存在
+	if cacheValid(cacheFile) {
+		log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
+		cacheHits.Add(1)
+		serveFromCache(w, r, cacheFile)
+		return
+	}
+
+	cacheMisses.Add(1)
+
+	// 缓存未命中,从上游获取
+	log.Println(t("CacheMiss", map[string]any{"Path": r.URL.Path}))
+	upstreamResp, err := fetchFromUpstream(r.URL.Path)
+	if err != nil {
+		log.Println(t("FetchUpstreamFailed", map[string]any{"Error": err}))
+		http.Error(w, t("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
+		return
+	}
+	defer upstreamResp.Body.Close()
+
+	// 保存到缓存（带文件锁）
+	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
+		log.Println(t("SaveCacheFailed", map[string]any{"Error": err}))
+	} else {
+		log.Println(t("CacheSaved", map[string]any{"Path": r.URL.Path}))
+	}
+}
+
+func getCacheFilePath(urlPath string) string {
+	safePath := filepath.Join(*cachePath, urlPath)
+	return safePath
+}
+
+func cacheValid(path string) bool {
+	_, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+
+	// 检查是否是索引文件
+	isIndex := strings.HasSuffix(path, "/APKINDEX.tar.gz")
+	if isIndex {
+		// index 文件按修改时间过期
+		if isCacheExpiredByModTime(path, *indexCacheDuration) {
+			log.Println(t("IndexExpired", map[string]any{"Path": path}))
+			return false
+		}
+	} else {
+		// 普通包文件按访问时间过期（pkgCacheDuration > 0 时才检查）
+		if *pkgCacheDuration > 0 && isCacheExpiredByAccessTime(path, *pkgCacheDuration) {
+			log.Println(t("CacheExpired", map[string]any{"Path": path}))
+			return false
+		}
+	}
+
+	return true
+}
+
+func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
+	file, err := os.Open(cacheFile)
+	if err != nil {
+		http.Error(w, t("ReadCacheFailed", nil), http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	// 记录访问时间（只记录非索引文件）
+	if !strings.HasSuffix(cacheFile, "/APKINDEX.tar.gz") {
+		accessTimeTracker.RecordAccess(cacheFile)
+	}
+
+	stat, _ := file.Stat()
+	w.Header().Set("X-Cache", "HIT")
+	http.ServeContent(w, r, filepath.Base(cacheFile), stat.ModTime(), file)
+}
+
+func fetchFromUpstream(urlPath string) (*http.Response, error) {
+	url := *upstreamURL + urlPath
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.ResponseWriter, statusCode int, headers http.Header) error {
+	// 获取该文件的锁
+	unlock := lockManager.Acquire(cacheFile)
+	defer unlock()
+
+	// 再次检查文件是否已存在（可能在等待锁期间已被其他 goroutine 创建）
+	if cacheValid(cacheFile) {
+		log.Println(t("CachedByOther", map[string]any{"Path": cacheFile}))
+		// 文件已存在，直接从缓存读取并发送给客户端
+		serveFromCache(w, r, cacheFile)
+		return nil
+	}
+
+	// 创建缓存文件的目录
+	dir := filepath.Dir(cacheFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("%s", t("CreateCacheDirFailed", map[string]any{"Error": err}))
+	}
+
+	// 创建临时文件
+	tmpFile, err := os.CreateTemp(dir, "tmp-")
+	if err != nil {
+		return fmt.Errorf("%s", t("CreateTempFileFailed", map[string]any{"Error": err}))
+	}
+	tmpFileName := tmpFile.Name()
+	defer func() {
+		tmpFile.Close()
+		os.Remove(tmpFileName)
+	}()
+
+	// 复制响应头
+	for key, values := range headers {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.Header().Set("X-Cache", "MISS")
+	w.WriteHeader(statusCode)
+
+	buf := make([]byte, 32*1024)
+	var cacheErr, clientErr error
+
+	for {
+		// 读取数据
+		n, readErr := body.Read(buf)
+		if n > 0 {
+			downloadBytes.Add(float64(n))
+
+			// 写入缓存文件（只要缓存没出错就继续写）
+			if cacheErr == nil {
+				if _, err := tmpFile.Write(buf[:n]); err != nil {
+					cacheErr = err
+					log.Println(t("WriteCacheFailed", map[string]any{"Error": err}))
+				}
+			}
+
+			// 写入客户端（只要客户端没出错就继续写）
+			if clientErr == nil {
+				if _, err := w.Write(buf[:n]); err != nil {
+					clientErr = err
+					log.Println(t("WriteClientFailed", map[string]any{"Error": err}))
+				}
+			}
+		}
+
+		// 检查读取错误
+		if readErr != nil {
+			if readErr != io.EOF {
+				return fmt.Errorf("%s", t("ReadUpstreamFailed", map[string]any{"Error": readErr}))
+			}
+			break // EOF，正常结束
+		}
+	}
+
+	// 关闭临时文件
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("%s", t("CloseTempFileFailed", map[string]any{"Error": err}))
+	}
+
+	// 只有缓存写入成功才重命名
+	if cacheErr != nil {
+		return fmt.Errorf("%s", t("CacheWriteFailed", map[string]any{"Error": cacheErr}))
+	}
+
+	if err := os.Rename(tmpFileName, cacheFile); err != nil {
+		return fmt.Errorf("%s", t("RenameCacheFileFailed", map[string]any{"Error": err}))
+	}
+
+	return nil
+}
+
+func createHTTPClient() *http.Client {
+	if *socks5Proxy == "" {
+		return http.DefaultClient
+	}
+
+	proxyURL, err := url.Parse(*socks5Proxy)
+	if err != nil {
+		log.Fatalln(t("ParseProxyFailed", map[string]any{"Error": err}))
+	}
+
+	// 创建 SOCKS5 dialer
+	var auth *proxy.Auth
+	if proxyURL.User != nil {
+		password, _ := proxyURL.User.Password()
+		auth = &proxy.Auth{
+			User:     proxyURL.User.Username(),
+			Password: password,
+		}
+	}
+
+	dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
+	if err != nil {
+		log.Fatalln(t("CreateDialerFailed", map[string]any{"Error": err}))
+	}
+
+	// 创建带代理的 HTTP Transport
+	transport := &http.Transport{
+		Dial: dialer.Dial,
+	}
+
+	return &http.Client{
+		Transport: transport,
+	}
+}
+
+// isCacheExpiredByModTime 检查文件是否按修改时间过期（用于 index 文件）
+func isCacheExpiredByModTime(path string, duration time.Duration) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	return time.Since(info.ModTime()) > duration
+}
+
+// isCacheExpiredByAccessTime 检查文件是否按访问时间过期（用于普通包文件）
+func isCacheExpiredByAccessTime(path string, duration time.Duration) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+
+	// 优先使用内存中记录的访问时间
+	if memAccessTime, ok := accessTimeTracker.GetAccessTime(path); ok {
+		return time.Since(memAccessTime) > duration
+	}
+
+	// 如果内存中没有记录，从文件系统获取访问时间
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		// 如果无法获取访问时间，回退到进程启动时间
+		// 这样可以避免程序启动后立即清理旧缓存
+		return time.Since(processStartTime) > duration
+	}
+
+	// 访问时间
+	atime := time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
+
+	// 如果文件的访问时间早于进程启动时间，使用进程启动时间
+	// 这表示文件在程序启动前就存在，我们假设它在启动时被"访问"
+	if atime.Before(processStartTime) {
+		return time.Since(processStartTime) > duration
+	}
+
+	return time.Since(atime) > duration
+}

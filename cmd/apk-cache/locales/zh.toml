@@ -31,6 +31,9 @@ other = "缓存已保存: {{.Path}}"
 [IndexExpired]
 other = "索引缓存已过期: {{.Path}}"
 
+[CacheExpired]
+other = "缓存已过期: {{.Path}}"
+
 [CachedByOther]
 other = "文件已被其他请求缓存: {{.Path}}"
 

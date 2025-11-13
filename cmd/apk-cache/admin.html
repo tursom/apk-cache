@@ -143,6 +143,11 @@
                 <div class="label">Current downloads</div>
             </div>
             <div class="stat-card">
+                <h3>Tracked Files</h3>
+                <div class="value" id="tracked-files">-</div>
+                <div class="label">Access time in memory</div>
+            </div>
+            <div class="stat-card">
                 <h3>Cache Size</h3>
                 <div class="value" id="cache-size">-</div>
                 <div class="label">Disk usage</div>
@@ -176,6 +181,14 @@
                 <span class="info-value" id="index-cache">-</span>
             </div>
             <div class="info-row">
+                <span class="info-label">Package Cache Duration:</span>
+                <span class="info-value" id="pkg-cache">-</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Cleanup Interval:</span>
+                <span class="info-value" id="cleanup-interval">-</span>
+            </div>
+            <div class="info-row">
                 <span class="info-label">SOCKS5 Proxy:</span>
                 <span class="info-value" id="proxy">-</span>
             </div>
@@ -206,12 +219,15 @@
                     
                     document.getElementById('download-bytes').textContent = formatBytes(data.download_bytes);
                     document.getElementById('active-locks').textContent = data.active_locks;
+                    document.getElementById('tracked-files').textContent = data.tracked_files.toLocaleString();
                     document.getElementById('cache-size').textContent = formatBytes(data.cache_size);
                     
                     document.getElementById('listen-addr').textContent = data.listen_addr;
                     document.getElementById('cache-dir').textContent = data.cache_dir;
                     document.getElementById('upstream').textContent = data.upstream;
                     document.getElementById('index-cache').textContent = data.index_cache_duration;
+                    document.getElementById('pkg-cache').textContent = data.pkg_cache_duration === '0s' ? 'Never expire' : data.pkg_cache_duration;
+                    document.getElementById('cleanup-interval').textContent = data.cleanup_interval === '0s' ? 'Disabled' : data.cleanup_interval;
                     document.getElementById('proxy').textContent = data.proxy || 'None';
                     
                     document.getElementById('loading').style.display = 'none';
