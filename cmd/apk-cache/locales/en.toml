@@ -10,6 +10,9 @@ other = "Cache directory: {{.Path}}"
 [SOCKS5Proxy]
 other = "SOCKS5 proxy: {{.Proxy}}"
 
+[ProxyServer]
+other = "Proxy server: {{.Proxy}}"
+
 [RequestReceived]
 other = "Request: {{.Method}} {{.Path}}"
 

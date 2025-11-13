@@ -10,6 +10,9 @@ other = "缓存目录: {{.Path}}"
 [SOCKS5Proxy]
 other = "SOCKS5 代理: {{.Proxy}}"
 
+[ProxyServer]
+other = "代理服务器: {{.Proxy}}"
+
 [RequestReceived]
 other = "请求: {{.Method}} {{.Path}}"
 
