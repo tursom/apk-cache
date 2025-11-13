@@ -111,6 +111,7 @@ docker run -d \
 | `-pkg-cache` | `0` | APK package file cache duration (by access time, 0 = never expire) |
 | `-cleanup-interval` | `1h` | Automatic cleanup interval for expired cache (0 = disabled) |
 | `-locale` | (auto-detect) | Interface language (`en`/`zh`), auto-detect from `LANG` environment variable if empty |
+| `-admin-user` | `admin` | Admin dashboard username |
 | `-admin-password` | (empty) | Admin dashboard password (empty = no authentication) |
 
 ## Usage
@@ -332,11 +333,17 @@ docker run -d \
 ```
 
 **Supported Environment Variables**:
-- `ADDR` - Listen address (default `:80`)
+- `ADDR` - Listen address (default `:3142`)
 - `CACHE_DIR` - Cache directory (default `./cache`)
 - `INDEX_CACHE` - Index cache duration (default `24h`)
+- `PKG_CACHE` - Package cache duration (default `0`, never expire)
+- `CLEANUP_INTERVAL` - Automatic cleanup interval (default `1h`)
 - `PROXY` - Proxy address (optional)
-- `UPSTREAM` - Upstream server (optional)
+- `UPSTREAM` - Upstream server (default `https://dl-cdn.alpinelinux.org`)
+- `LOCALE` - Interface language, `en` or `zh` (optional, auto-detect by default)
+- `ADMIN_USER` - Admin dashboard username (default `admin`)
+- `ADMIN_PASSWORD` - Admin dashboard password (optional, no auth if empty)
+- `CONFIG` - Config file path (optional)
 
 #### Using Configuration File
 
@@ -382,7 +389,13 @@ services:
       - ADDR=:80
       - CACHE_DIR=/app/cache
       - INDEX_CACHE=24h
+      - PKG_CACHE=168h  # 7 days
+      - CLEANUP_INTERVAL=1h
+      - LOCALE=en  # or zh
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=your-secret-password
       # - PROXY=socks5://host.docker.internal:1080
+      # - CONFIG=/app/config.toml
     restart: unless-stopped
 ```
 

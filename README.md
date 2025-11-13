@@ -111,6 +111,7 @@ docker run -d \
 | `-pkg-cache` | `0` | APK 包文件缓存时间（按访问时间，0 = 永不过期） |
 | `-cleanup-interval` | `1h` | 自动清理过期缓存的间隔（0 = 禁用自动清理） |
 | `-locale` | (自动检测) | 界面语言 (`en`/`zh`)，留空则根据 `LANG` 环境变量自动检测 |
+| `-admin-user` | `admin` | 管理界面用户名 |
 | `-admin-password` | (空) | 管理界面密码（留空则无需认证） |
 
 ## 使用方法
@@ -332,11 +333,17 @@ docker run -d \
 ```
 
 **支持的环境变量**：
-- `ADDR` - 监听地址（默认 `:80`）
+- `ADDR` - 监听地址（默认 `:3142`）
 - `CACHE_DIR` - 缓存目录（默认 `./cache`）
 - `INDEX_CACHE` - 索引缓存时间（默认 `24h`）
+- `PKG_CACHE` - 包缓存时间（默认 `0`，永不过期）
+- `CLEANUP_INTERVAL` - 自动清理间隔（默认 `1h`）
 - `PROXY` - 代理地址（可选）
-- `UPSTREAM` - 上游服务器（可选）
+- `UPSTREAM` - 上游服务器（默认 `https://dl-cdn.alpinelinux.org`）
+- `LOCALE` - 界面语言，`en` 或 `zh`（可选，默认自动检测）
+- `ADMIN_USER` - 管理界面用户名（默认 `admin`）
+- `ADMIN_PASSWORD` - 管理界面密码（可选，留空则无需认证）
+- `CONFIG` - 配置文件路径（可选）
 
 #### 使用配置文件
 
@@ -382,7 +389,13 @@ services:
       - ADDR=:80
       - CACHE_DIR=/app/cache
       - INDEX_CACHE=24h
+      - PKG_CACHE=168h  # 7天
+      - CLEANUP_INTERVAL=1h
+      - LOCALE=zh  # 或 en
+      - ADMIN_USER=admin
+      - ADMIN_PASSWORD=your-secret-password
       # - PROXY=socks5://host.docker.internal:1080
+      # - CONFIG=/app/config.toml
     restart: unless-stopped
 ```
 
