@@ -99,7 +99,7 @@ apk add --repositories-file /dev/null --repository http://your-cache-server:8080
 - 使用 SOCKS5 代理时，确保代理服务器可访问
 - 服务器默认监听所有网络接口，生产环境建议配置防火墙规则
 - APKINDEX.tar.gz 索引文件会定期刷新以获取最新的软件包信息
-- 索引缓存时间建议设置在 30 分钟到 2 小时之间，生产环境可根据实际情况调整
+- 索引缓存时间建议设置在 1 小时到 24 小时之间，生产环境可根据实际情况调整
 - 并发请求同一文件时，只会下载一次，其他请求会等待并共享缓存
 
 ## 高级配置
@@ -124,14 +124,17 @@ LANG=en_US.UTF-8 ./apk-cache
 ### 调整索引缓存时间
 
 ```bash
-# 设置索引文件缓存 30 分钟
-./apk-cache -index-cache 30m
+# stable 版本（生产环境推荐）- 主要是安全更新，更新不频繁
+./apk-cache -index-cache 24h   # 1 天
 
-# 设置索引文件缓存 2 小时
-./apk-cache -index-cache 2h
+# edge 版本（开发环境）- 包更新频繁
+./apk-cache -index-cache 2h    # 2 小时
 
-# 设置索引文件缓存 1 天（24 小时）
-./apk-cache -index-cache 24h
+# 对时效性要求极高的场景
+./apk-cache -index-cache 1h    # 1 小时
+
+# 内网环境，对上游服务器负载不敏感
+./apk-cache -index-cache 12h   # 12 小时
 ```
 
 **注意**: Go 的 `time.ParseDuration` 不支持 `d`（天）单位，请使用小时 `h`。例如 1 天 = `24h`，7 天 = `168h`。

@@ -14,8 +14,27 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/nicksnyder/go-i18n/v2/i18n"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/net/proxy"
 	"golang.org/x/text/language"
+)
+
+var (
+	cacheHits = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_hits_total",
+		Help: "Total number of cache hits",
+	})
+
+	cacheMisses = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_misses_total",
+		Help: "Total number of cache misses",
+	})
+
+	downloadBytes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_download_bytes_total",
+		Help: "Total bytes downloaded from upstream",
+	})
 )
 
 var (
@@ -103,6 +122,7 @@ func main() {
 	// 配置 HTTP 客户端
 	httpClient = createHTTPClient()
 
+	http.Handle("/metrics", promhttp.Handler())
 	http.HandleFunc("/", proxyHandler)
 
 	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
@@ -129,9 +149,12 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// 检查缓存是否存在
 	if cacheValid(cacheFile) {
 		log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
+		cacheHits.Add(1)
 		serveFromCache(w, cacheFile)
 		return
 	}
+
+	cacheMisses.Add(1)
 
 	// 缓存未命中,从上游获取
 	log.Println(t("CacheMiss", map[string]any{"Path": r.URL.Path}))
@@ -239,6 +262,8 @@ func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, st
 		// 读取数据
 		n, readErr := body.Read(buf)
 		if n > 0 {
+			downloadBytes.Add(float64(n))
+
 			// 写入缓存文件（只要缓存没出错就继续写）
 			if cacheErr == nil {
 				if _, err := tmpFile.Write(buf[:n]); err != nil {

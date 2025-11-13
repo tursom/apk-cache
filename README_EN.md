@@ -99,7 +99,7 @@ apk add --repositories-file /dev/null --repository http://your-cache-server:8080
 - When using SOCKS5 proxy, ensure proxy server is accessible
 - Server listens on all network interfaces by default, firewall rules recommended for production
 - APKINDEX.tar.gz index files refresh periodically to get latest package information
-- Index cache time recommended between 30 minutes to 2 hours, adjust based on production needs
+- Index cache time recommended between 1 hour to 24 hours, adjust based on production needs
 - Concurrent requests for the same file will only download once, other requests wait and share cache
 
 ## Advanced Configuration
@@ -124,14 +124,17 @@ LANG=en_US.UTF-8 ./apk-cache
 ### Adjust Index Cache Time
 
 ```bash
-# Set index file cache to 30 minutes
-./apk-cache -index-cache 30m
+# stable version (recommended for production) - mainly security updates, infrequent updates
+./apk-cache -index-cache 24h   # 1 day
 
-# Set index file cache to 2 hours
-./apk-cache -index-cache 2h
+# edge version (development environment) - frequent package updates
+./apk-cache -index-cache 2h    # 2 hours
 
-# Set index file cache to 1 day (24 hours)
-./apk-cache -index-cache 24h
+# High timeliness requirements
+./apk-cache -index-cache 1h    # 1 hour
+
+# Intranet environment, not sensitive to upstream server load
+./apk-cache -index-cache 12h   # 12 hours
 ```
 
 **Note**: Go's `time.ParseDuration` doesn't support `d` (days) unit, please use hours `h`. For example: 1 day = `24h`, 7 days = `168h`.
