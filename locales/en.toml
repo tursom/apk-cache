@@ -1,0 +1,74 @@
+[ServerStarted]
+other = "APK cache server started on {{.Addr}}"
+
+[UpstreamServer]
+other = "Upstream server: {{.URL}}"
+
+[CacheDirectory]
+other = "Cache directory: {{.Path}}"
+
+[SOCKS5Proxy]
+other = "SOCKS5 proxy: {{.Proxy}}"
+
+[RequestReceived]
+other = "Request: {{.Method}} {{.Path}}"
+
+[CacheHit]
+other = "Cache hit: {{.Path}}"
+
+[CacheMiss]
+other = "Cache miss, fetching from upstream: {{.Path}}"
+
+[FetchUpstreamFailed]
+other = "Failed to fetch from upstream: {{.Error}}"
+
+[SaveCacheFailed]
+other = "Failed to save cache: {{.Error}}"
+
+[CacheSaved]
+other = "Cache saved: {{.Path}}"
+
+[IndexExpired]
+other = "Index cache expired: {{.Path}}"
+
+[CachedByOther]
+other = "File cached by another request: {{.Path}}"
+
+[WriteCacheFailed]
+other = "Write cache failed: {{.Error}}"
+
+[WriteClientFailed]
+other = "Write to client failed (client may disconnected): {{.Error}}"
+
+[UsingLanguage]
+other = "Using language: {{.Lang}}"
+
+[CreateCacheDirFailed]
+other = "Failed to create cache directory: {{.Error}}"
+
+[ServerStartFailed]
+other = "Failed to start server: {{.Error}}"
+
+[ReadCacheFailed]
+other = "Failed to read cache"
+
+[CreateTempFileFailed]
+other = "Failed to create temporary file: {{.Error}}"
+
+[ReadUpstreamFailed]
+other = "Failed to read upstream response: {{.Error}}"
+
+[CloseTempFileFailed]
+other = "Failed to close temporary file: {{.Error}}"
+
+[CacheWriteFailed]
+other = "Cache write failed: {{.Error}}"
+
+[RenameCacheFileFailed]
+other = "Failed to rename cache file: {{.Error}}"
+
+[ParseProxyFailed]
+other = "Failed to parse proxy address: {{.Error}}"
+
+[CreateDialerFailed]
+other = "Failed to create SOCKS5 dialer: {{.Error}}"

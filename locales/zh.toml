@@ -1,0 +1,74 @@
+[ServerStarted]
+other = "APK 缓存服务器启动在 {{.Addr}}"
+
+[UpstreamServer]
+other = "上游服务器: {{.URL}}"
+
+[CacheDirectory]
+other = "缓存目录: {{.Path}}"
+
+[SOCKS5Proxy]
+other = "SOCKS5 代理: {{.Proxy}}"
+
+[RequestReceived]
+other = "请求: {{.Method}} {{.Path}}"
+
+[CacheHit]
+other = "缓存命中: {{.Path}}"
+
+[CacheMiss]
+other = "缓存未命中，从上游获取: {{.Path}}"
+
+[FetchUpstreamFailed]
+other = "获取上游数据失败: {{.Error}}"
+
+[SaveCacheFailed]
+other = "保存缓存失败: {{.Error}}"
+
+[CacheSaved]
+other = "缓存已保存: {{.Path}}"
+
+[IndexExpired]
+other = "索引缓存已过期: {{.Path}}"
+
+[CachedByOther]
+other = "文件已被其他请求缓存: {{.Path}}"
+
+[WriteCacheFailed]
+other = "写入缓存失败: {{.Error}}"
+
+[WriteClientFailed]
+other = "写入客户端失败(可能客户端已断开): {{.Error}}"
+
+[UsingLanguage]
+other = "使用语言: {{.Lang}}"
+
+[CreateCacheDirFailed]
+other = "创建缓存目录失败: {{.Error}}"
+
+[ServerStartFailed]
+other = "服务器启动失败: {{.Error}}"
+
+[ReadCacheFailed]
+other = "读取缓存失败"
+
+[CreateTempFileFailed]
+other = "创建临时文件失败: {{.Error}}"
+
+[ReadUpstreamFailed]
+other = "读取上游响应失败: {{.Error}}"
+
+[CloseTempFileFailed]
+other = "关闭临时文件失败: {{.Error}}"
+
+[CacheWriteFailed]
+other = "缓存写入失败: {{.Error}}"
+
+[RenameCacheFileFailed]
+other = "重命名缓存文件失败: {{.Error}}"
+
+[ParseProxyFailed]
+other = "解析代理地址失败: {{.Error}}"
+
+[CreateDialerFailed]
+other = "创建 SOCKS5 dialer 失败: {{.Error}}"

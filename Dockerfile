@@ -13,4 +13,4 @@ FROM alpine:latest
 WORKDIR /app
 COPY --from=builder /app/apk-cache /app/entrypoint.sh /app/
 
-CMD sh /app/entrypoint.sh
+CMD ["/app/entrypoint.sh"]

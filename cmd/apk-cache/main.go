@@ -12,27 +12,92 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
+	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"golang.org/x/net/proxy"
+	"golang.org/x/text/language"
 )
 
 var (
-	listenAddr         = flag.String("addr", ":8080", "监听地址")
-	cachePath          = flag.String("cache", "./cache", "缓存目录")
-	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "上游服务器地址")
-	socks5Proxy        = flag.String("proxy", "", "SOCKS5 代理地址 (例如: socks5://127.0.0.1:1080)")
-	indexCacheDuration = flag.Duration("index-cache", 1*time.Hour, "APKINDEX.tar.gz 缓存时间")
+	listenAddr         = flag.String("addr", ":8080", "Listen address")
+	cachePath          = flag.String("cache", "./cache", "Cache directory path")
+	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "Upstream server URL")
+	socks5Proxy        = flag.String("proxy", "", "SOCKS5 proxy address (e.g. socks5://127.0.0.1:1080)")
+	indexCacheDuration = flag.Duration("index-cache", 24*time.Hour, "APKINDEX.tar.gz cache duration")
+	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
 	httpClient         *http.Client
 
 	// 文件锁管理器
 	lockManager = NewFileLockManager()
+	localizer   *i18n.Localizer
 )
+
+// detectLocale 自动检测系统语言
+func detectLocale() string {
+	// 如果命令行参数已指定，直接使用
+	if *locale != "" {
+		return *locale
+	}
+
+	// 按优先级检查环境变量
+	envVars := []string{"LC_ALL", "LC_MESSAGES", "LANG"}
+	for _, env := range envVars {
+		if val := os.Getenv(env); val != "" {
+			// 解析语言代码，如 "zh_CN.UTF-8" -> "zh"
+			lang := strings.Split(val, ".")[0] // 去除编码部分
+			lang = strings.Split(lang, "_")[0] // 去除地区部分
+			lang = strings.ToLower(lang)
+
+			// 支持的语言列表
+			supported := map[string]bool{
+				"zh": true,
+				"en": true,
+			}
+
+			if supported[lang] {
+				return lang
+			}
+		}
+	}
+
+	// 默认使用英语
+	return "en"
+}
+
+func initI18n() {
+	bundle := i18n.NewBundle(language.English)
+	bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
+
+	// 加载翻译文件
+	bundle.MustLoadMessageFile("locales/en.toml")
+	bundle.MustLoadMessageFile("locales/zh.toml")
+	// 自动检测语言
+	detectedLocale := detectLocale()
+
+	localizer = i18n.NewLocalizer(bundle, detectedLocale)
+
+	log.Println(t("UsingLanguage", map[string]any{"Lang": detectedLocale}))
+}
+
+func t(messageID string, templateData map[string]any) string {
+	msg, err := localizer.Localize(&i18n.LocalizeConfig{
+		MessageID:    messageID,
+		TemplateData: templateData,
+	})
+	if err != nil {
+		return messageID // 回退到 ID
+	}
+	return msg
+}
 
 func main() {
 	flag.Parse()
 
+	initI18n()
+
 	// 创建缓存目录
 	if err := os.MkdirAll(*cachePath, 0755); err != nil {
-		log.Fatalf("创建缓存目录失败: %v", err)
+		log.Fatalln(t("CreateCacheDirFailed", map[string]any{"Error": err}))
 	}
 
 	// 配置 HTTP 客户端
@@ -40,46 +105,49 @@ func main() {
 
 	http.HandleFunc("/", proxyHandler)
 
-	log.Printf("APK 缓存服务器启动在 %s", *listenAddr)
-	log.Printf("上游服务器: %s", *upstreamURL)
-	log.Printf("缓存目录: %s", *cachePath)
+	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
+	log.Println(t("UpstreamServer", map[string]any{"URL": *upstreamURL}))
+	log.Println(t("CacheDirectory", map[string]any{"Path": *cachePath}))
 	if *socks5Proxy != "" {
-		log.Printf("SOCKS5 代理: %s", *socks5Proxy)
+		log.Println(t("SOCKS5Proxy", map[string]any{"Proxy": *socks5Proxy}))
 	}
 
 	if err := http.ListenAndServe(*listenAddr, nil); err != nil {
-		log.Fatalf("服务器启动失败: %v", err)
+		log.Fatalln(t("ServerStartFailed", map[string]any{"Error": err}))
 	}
 }
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	log.Printf("请求: %s %s", r.Method, r.URL.Path)
+	log.Println(t("RequestReceived", map[string]any{
+		"Method": r.Method,
+		"Path":   r.URL.Path,
+	}))
 
 	// 生成缓存文件路径
 	cacheFile := getCacheFilePath(r.URL.Path)
 
 	// 检查缓存是否存在
 	if cacheValid(cacheFile) {
-		log.Printf("缓存命中: %s", r.URL.Path)
+		log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
 		serveFromCache(w, cacheFile)
 		return
 	}
 
 	// 缓存未命中,从上游获取
-	log.Printf("缓存未命中,从上游获取: %s", r.URL.Path)
+	log.Println(t("CacheMiss", map[string]any{"Path": r.URL.Path}))
 	upstreamResp, err := fetchFromUpstream(r.URL.Path)
 	if err != nil {
-		log.Printf("获取上游数据失败: %v", err)
-		http.Error(w, "获取上游数据失败", http.StatusBadGateway)
+		log.Println(t("FetchUpstreamFailed", map[string]any{"Error": err}))
+		http.Error(w, t("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
 		return
 	}
 	defer upstreamResp.Body.Close()
 
 	// 保存到缓存（带文件锁）
 	if err := updateCacheFile(cacheFile, upstreamResp.Body, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
-		log.Printf("保存缓存失败: %v", err)
+		log.Println(t("SaveCacheFailed", map[string]any{"Error": err}))
 	} else {
-		log.Printf("缓存已保存: %s", r.URL.Path)
+		log.Println(t("CacheSaved", map[string]any{"Path": r.URL.Path}))
 	}
 }
 
@@ -97,7 +165,7 @@ func cacheValid(path string) bool {
 	// 检查是否是索引文件
 	isIndex := strings.HasSuffix(path, "/APKINDEX.tar.gz")
 	if isIndex && isCacheExpired(path, *indexCacheDuration) {
-		log.Printf("索引缓存已过期: %s", path)
+		log.Println(t("IndexExpired", map[string]any{"Path": path}))
 		return false
 	}
 
@@ -107,7 +175,7 @@ func cacheValid(path string) bool {
 func serveFromCache(w http.ResponseWriter, cacheFile string) {
 	file, err := os.Open(cacheFile)
 	if err != nil {
-		http.Error(w, "读取缓存失败", http.StatusInternalServerError)
+		http.Error(w, t("ReadCacheFailed", nil), http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
@@ -132,7 +200,7 @@ func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, st
 
 	// 再次检查文件是否已存在（可能在等待锁期间已被其他 goroutine 创建）
 	if cacheValid(cacheFile) {
-		log.Printf("文件已被其他请求缓存: %s", cacheFile)
+		log.Println(t("CachedByOther", map[string]any{"Path": cacheFile}))
 		// 文件已存在，直接从缓存读取并发送给客户端
 		serveFromCache(w, cacheFile)
 		return nil
@@ -141,13 +209,13 @@ func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, st
 	// 创建缓存文件的目录
 	dir := filepath.Dir(cacheFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建缓存目录失败: %w", err)
+		return fmt.Errorf("%s", t("CreateCacheDirFailed", map[string]any{"Error": err}))
 	}
 
 	// 创建临时文件
 	tmpFile, err := os.CreateTemp(dir, "tmp-")
 	if err != nil {
-		return fmt.Errorf("创建临时文件失败: %w", err)
+		return fmt.Errorf("%s", t("CreateTempFileFailed", map[string]any{"Error": err}))
 	}
 	tmpFileName := tmpFile.Name()
 	defer func() {
@@ -175,7 +243,7 @@ func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, st
 			if cacheErr == nil {
 				if _, err := tmpFile.Write(buf[:n]); err != nil {
 					cacheErr = err
-					log.Printf("写入缓存失败: %v", err)
+					log.Println(t("WriteCacheFailed", map[string]any{"Error": err}))
 				}
 			}
 
@@ -183,7 +251,7 @@ func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, st
 			if clientErr == nil {
 				if _, err := w.Write(buf[:n]); err != nil {
 					clientErr = err
-					log.Printf("写入客户端失败(可能客户端已断开): %v", err)
+					log.Println(t("WriteClientFailed", map[string]any{"Error": err}))
 				}
 			}
 		}
@@ -191,7 +259,7 @@ func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, st
 		// 检查读取错误
 		if readErr != nil {
 			if readErr != io.EOF {
-				return fmt.Errorf("读取上游响应失败: %w", readErr)
+				return fmt.Errorf("%s", t("ReadUpstreamFailed", map[string]any{"Error": readErr}))
 			}
 			break // EOF，正常结束
 		}
@@ -199,16 +267,16 @@ func updateCacheFile(cacheFile string, body io.Reader, w http.ResponseWriter, st
 
 	// 关闭临时文件
 	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("关闭临时文件失败: %w", err)
+		return fmt.Errorf("%s", t("CloseTempFileFailed", map[string]any{"Error": err}))
 	}
 
 	// 只有缓存写入成功才重命名
 	if cacheErr != nil {
-		return fmt.Errorf("缓存写入失败: %w", cacheErr)
+		return fmt.Errorf("%s", t("CacheWriteFailed", map[string]any{"Error": cacheErr}))
 	}
 
 	if err := os.Rename(tmpFileName, cacheFile); err != nil {
-		return fmt.Errorf("重命名缓存文件失败: %w", err)
+		return fmt.Errorf("%s", t("RenameCacheFileFailed", map[string]any{"Error": err}))
 	}
 
 	return nil
@@ -221,7 +289,7 @@ func createHTTPClient() *http.Client {
 
 	proxyURL, err := url.Parse(*socks5Proxy)
 	if err != nil {
-		log.Fatalf("解析代理地址失败: %v", err)
+		log.Fatalln(t("ParseProxyFailed", map[string]any{"Error": err}))
 	}
 
 	// 创建 SOCKS5 dialer
@@ -236,7 +304,7 @@ func createHTTPClient() *http.Client {
 
 	dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
 	if err != nil {
-		log.Fatalf("创建 SOCKS5 dialer 失败: %v", err)
+		log.Fatalln(t("CreateDialerFailed", map[string]any{"Error": err}))
 	}
 
 	// 创建带代理的 HTTP Transport
