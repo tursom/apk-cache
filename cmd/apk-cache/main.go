@@ -142,13 +142,13 @@ func main() {
 	if *configFile != "" {
 		config, err := LoadConfig(*configFile)
 		if err != nil {
-			log.Fatalf("Failed to load config file: %v\n", err)
+			log.Fatalln(t("FailedToLoadConfigFile", map[string]any{"Error": err}))
 		}
 		if config != nil {
 			if err := ApplyConfig(config); err != nil {
-				log.Fatalf("Failed to apply config: %v\n", err)
+				log.Fatalln(t("FailedToApplyConfig", map[string]any{"Error": err}))
 			}
-			log.Printf("Loaded config from: %s\n", *configFile)
+			log.Println(t("LoadedConfigFrom", map[string]any{"Path": *configFile}))
 		}
 	}
 
@@ -178,7 +178,7 @@ func main() {
 	// 启动自动清理
 	if *cleanupInterval > 0 && *pkgCacheDuration != 0 {
 		go startAutoCleanup()
-		log.Printf("自动清理已启用，间隔：%v\n", *cleanupInterval)
+		log.Println(t("AutoCleanupEnabled", map[string]any{"Interval": *cleanupInterval}))
 	}
 
 	// 使用自定义 Registry

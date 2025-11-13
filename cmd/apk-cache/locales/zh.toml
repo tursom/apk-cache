@@ -111,3 +111,33 @@ other = "无效的 cleanup_interval: {{.Error}}"
 
 [UpstreamReturnedStatusCode]
 other = "上游服务器返回状态码: {{.Status}}"
+
+[FailedToLoadConfigFile]
+other = "加载配置文件失败: {{.Error}}"
+
+[FailedToApplyConfig]
+other = "应用配置失败: {{.Error}}"
+
+[LoadedConfigFrom]
+other = "从配置文件加载: {{.Path}}"
+
+[AutoCleanupEnabled]
+other = "自动清理已启用，间隔: {{.Interval}}"
+
+[StartCleanupExpiredCache]
+other = "开始清理过期缓存..."
+
+[DeleteExpiredFileFailed]
+other = "删除过期文件失败 {{.Path}}: {{.Error}}"
+
+[DeletedExpiredFile]
+other = "已删除过期文件: {{.Path}} ({{.Size}} MB)"
+
+[CleanupError]
+other = "清理过程出错: {{.Error}}"
+
+[CleanupComplete]
+other = "清理完成: 删除 {{.Count}} 个文件，释放 {{.Size}} MB，耗时 {{.Duration}}"
+
+[ActiveFileLockCount]
+other = "当前活跃文件锁数量: {{.Count}}"

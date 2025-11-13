@@ -111,3 +111,33 @@ other = "Invalid cleanup_interval: {{.Error}}"
 
 [UpstreamReturnedStatusCode]
 other = "Upstream returned status code: {{.Status}}"
+
+[FailedToLoadConfigFile]
+other = "Failed to load config file: {{.Error}}"
+
+[FailedToApplyConfig]
+other = "Failed to apply config: {{.Error}}"
+
+[LoadedConfigFrom]
+other = "Loaded config from: {{.Path}}"
+
+[AutoCleanupEnabled]
+other = "Auto cleanup enabled, interval: {{.Interval}}"
+
+[StartCleanupExpiredCache]
+other = "Starting cleanup of expired cache..."
+
+[DeleteExpiredFileFailed]
+other = "Failed to delete expired file {{.Path}}: {{.Error}}"
+
+[DeletedExpiredFile]
+other = "Deleted expired file: {{.Path}} ({{.Size}} MB)"
+
+[CleanupError]
+other = "Cleanup error: {{.Error}}"
+
+[CleanupComplete]
+other = "Cleanup complete: deleted {{.Count}} files, freed {{.Size}} MB, took {{.Duration}}"
+
+[ActiveFileLockCount]
+other = "Active file locks: {{.Count}}"

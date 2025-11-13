@@ -19,7 +19,7 @@ func startAutoCleanup() {
 
 // cleanupExpiredCache 清理过期缓存
 func cleanupExpiredCache() {
-	log.Println("开始清理过期缓存...")
+	log.Println(t("StartCleanupExpiredCache", nil))
 	startTime := time.Now()
 
 	var deletedCount int64
@@ -52,13 +52,16 @@ func cleanupExpiredCache() {
 		if expired {
 			size := info.Size()
 			if err := os.Remove(path); err != nil {
-				log.Printf("删除过期文件失败 %s: %v\n", path, err)
+				log.Println(t("DeleteExpiredFileFailed", map[string]any{"Path": path, "Error": err}))
 			} else {
 				deletedCount++
 				deletedSize += size
 				// 从内存中移除访问时间记录
 				accessTimeTracker.Remove(path)
-				log.Printf("已删除过期文件: %s (%.2f MB)\n", path, float64(size)/(1024*1024))
+				log.Println(t("DeletedExpiredFile", map[string]any{
+					"Path": path,
+					"Size": float64(size) / (1024 * 1024),
+				}))
 			}
 		}
 
@@ -66,10 +69,13 @@ func cleanupExpiredCache() {
 	})
 
 	if err != nil {
-		log.Printf("清理过程出错: %v\n", err)
+		log.Println(t("CleanupError", map[string]any{"Error": err}))
 	}
 
 	duration := time.Since(startTime)
-	log.Printf("清理完成: 删除 %d 个文件，释放 %.2f MB，耗时 %v\n",
-		deletedCount, float64(deletedSize)/(1024*1024), duration)
+	log.Println(t("CleanupComplete", map[string]any{
+		"Count":    deletedCount,
+		"Size":     float64(deletedSize) / (1024 * 1024),
+		"Duration": duration,
+	}))
 }

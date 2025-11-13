@@ -90,7 +90,7 @@ func (m *FileLockManager) StartMonitor(interval time.Duration) {
 		for range ticker.C {
 			size := m.Size()
 			if size > 0 {
-				log.Printf("当前活跃文件锁数量: %d", size)
+				log.Println(t("ActiveFileLockCount", map[string]any{"Count": size}))
 			}
 		}
 	}()
