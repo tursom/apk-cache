@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>APK Cache - Admin Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        header {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stat-card h3 {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #333;
+        }
+        .stat-card .label {
+            color: #999;
+            font-size: 12px;
+            margin-top: 5px;
+        }
+        .actions {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button.danger {
+            background: #dc3545;
+        }
+        button.danger:hover {
+            background: #c82333;
+        }
+        .info {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            color: #666;
+            font-weight: 500;
+        }
+        .info-value {
+            color: #333;
+        }
+        #loading {
+            display: none;
+            color: #666;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 APK Cache - Admin Dashboard</h1>
+            <p>Alpine Linux Package Cache Management</p>
+        </header>
+
+        <div class="stats" id="stats">
+            <div class="stat-card">
+                <h3>Cache Hits</h3>
+                <div class="value" id="cache-hits">-</div>
+                <div class="label">Total hits</div>
+            </div>
+            <div class="stat-card">
+                <h3>Cache Misses</h3>
+                <div class="value" id="cache-misses">-</div>
+                <div class="label">Total misses</div>
+            </div>
+            <div class="stat-card">
+                <h3>Hit Rate</h3>
+                <div class="value" id="hit-rate">-</div>
+                <div class="label">Percentage</div>
+            </div>
+            <div class="stat-card">
+                <h3>Downloaded</h3>
+                <div class="value" id="download-bytes">-</div>
+                <div class="label">From upstream</div>
+            </div>
+            <div class="stat-card">
+                <h3>Active Locks</h3>
+                <div class="value" id="active-locks">-</div>
+                <div class="label">Current downloads</div>
+            </div>
+            <div class="stat-card">
+                <h3>Cache Size</h3>
+                <div class="value" id="cache-size">-</div>
+                <div class="label">Disk usage</div>
+            </div>
+        </div>
+
+        <div class="actions">
+            <h2 style="margin-bottom: 15px;">Actions</h2>
+            <button onclick="refreshStats()">🔄 Refresh Stats</button>
+            <button onclick="openMetrics()">📊 View Metrics</button>
+            <button class="danger" onclick="confirmClearCache()">🗑️ Clear Cache</button>
+            <div id="loading" style="margin-top: 10px;">Loading...</div>
+        </div>
+
+        <div class="info">
+            <h2 style="margin-bottom: 15px;">Server Information</h2>
+            <div class="info-row">
+                <span class="info-label">Listen Address:</span>
+                <span class="info-value" id="listen-addr">-</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Cache Directory:</span>
+                <span class="info-value" id="cache-dir">-</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Upstream Server:</span>
+                <span class="info-value" id="upstream">-</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Index Cache Duration:</span>
+                <span class="info-value" id="index-cache">-</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">SOCKS5 Proxy:</span>
+                <span class="info-value" id="proxy">-</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function refreshStats() {
+            document.getElementById('loading').style.display = 'block';
+            
+            fetch('/_admin/stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('cache-hits').textContent = data.cache_hits.toLocaleString();
+                    document.getElementById('cache-misses').textContent = data.cache_misses.toLocaleString();
+                    
+                    const total = data.cache_hits + data.cache_misses;
+                    const hitRate = total > 0 ? ((data.cache_hits / total) * 100).toFixed(2) : 0;
+                    document.getElementById('hit-rate').textContent = hitRate + '%';
+                    
+                    document.getElementById('download-bytes').textContent = formatBytes(data.download_bytes);
+                    document.getElementById('active-locks').textContent = data.active_locks;
+                    document.getElementById('cache-size').textContent = formatBytes(data.cache_size);
+                    
+                    document.getElementById('listen-addr').textContent = data.listen_addr;
+                    document.getElementById('cache-dir').textContent = data.cache_dir;
+                    document.getElementById('upstream').textContent = data.upstream;
+                    document.getElementById('index-cache').textContent = data.index_cache_duration;
+                    document.getElementById('proxy').textContent = data.proxy || 'None';
+                    
+                    document.getElementById('loading').style.display = 'none';
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('loading').style.display = 'none';
+                    alert('Failed to fetch stats');
+                });
+        }
+
+        function openMetrics() {
+            window.open('/metrics', '_blank');
+        }
+
+        function confirmClearCache() {
+            if (confirm('Are you sure you want to clear the cache? This cannot be undone.')) {
+                clearCache();
+            }
+        }
+
+        function clearCache() {
+            document.getElementById('loading').style.display = 'block';
+            
+            fetch('/_admin/clear', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    refreshStats();
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    document.getElementById('loading').style.display = 'none';
+                    alert('Failed to clear cache');
+                });
+        }
+
+        // 自动刷新统计
+        refreshStats();
+        setInterval(refreshStats, 5000); // 每5秒刷新一次
+    </script>
+</body>
+</html>
