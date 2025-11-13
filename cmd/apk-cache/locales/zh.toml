@@ -75,3 +75,36 @@ other = "解析代理地址失败: {{.Error}}"
 
 [CreateDialerFailed]
 other = "创建 SOCKS5 dialer 失败: {{.Error}}"
+
+[FallbackUpstream]
+other = "使用备用上游服务器 #{{.Index}}: {{.Name}}"
+
+[UpstreamFailed]
+other = "上游服务器 {{.URL}} 失败: {{.Error}}"
+
+[UpstreamStatusError]
+other = "上游服务器 {{.URL}} 返回错误状态码: {{.Status}}"
+
+[InvalidProxy]
+other = "无效的代理地址 {{.Proxy}}: {{.Error}}"
+
+[CreateProxyFailed]
+other = "创建代理失败: {{.Error}}"
+
+[NoAvailableUpstream]
+other = "没有可用的上游服务器"
+
+[ParseConfigFailed]
+other = "解析配置文件失败: {{.Error}}"
+
+[InvalidIndexDuration]
+other = "无效的 index_duration: {{.Error}}"
+
+[InvalidPkgDuration]
+other = "无效的 pkg_duration: {{.Error}}"
+
+[InvalidCleanupInterval]
+other = "无效的 cleanup_interval: {{.Error}}"
+
+[UpstreamReturnedStatusCode]
+other = "上游服务器返回状态码: {{.Status}}"

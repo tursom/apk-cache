@@ -1,8 +1,8 @@
 package main
 
 import (
+	"errors"
 	"flag"
-	"fmt"
 	"os"
 	"time"
 
@@ -11,10 +11,10 @@ import (
 
 // Config 配置文件结构
 type Config struct {
-	Server   ServerConfig   `toml:"server"`
-	Upstream UpstreamConfig `toml:"upstream"`
-	Cache    CacheConfig    `toml:"cache"`
-	Security SecurityConfig `toml:"security"`
+	Server    ServerConfig     `toml:"server"`
+	Upstreams []UpstreamConfig `toml:"upstreams"`
+	Cache     CacheConfig      `toml:"cache"`
+	Security  SecurityConfig   `toml:"security"`
 }
 
 type ServerConfig struct {
@@ -25,6 +25,7 @@ type ServerConfig struct {
 type UpstreamConfig struct {
 	URL   string `toml:"url"`
 	Proxy string `toml:"proxy"`
+	Name  string `toml:"name"` // 可选的服务器名称
 }
 
 type CacheConfig struct {
@@ -47,7 +48,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	var config Config
 	if _, err := toml.DecodeFile(path, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, errors.New(t("ParseConfigFailed", map[string]any{"Error": err}))
 	}
 
 	return &config, nil
@@ -67,12 +68,20 @@ func ApplyConfig(config *Config) error {
 		*locale = config.Server.Locale
 	}
 
-	// Upstream 配置
-	if config.Upstream.URL != "" && !isFlagSet("upstream") {
-		*upstreamURL = config.Upstream.URL
-	}
-	if config.Upstream.Proxy != "" && !isFlagSet("proxy") {
-		*socks5Proxy = config.Upstream.Proxy
+	// Upstreams 配置
+	if len(config.Upstreams) > 0 {
+		// 从配置文件加载上游服务器列表
+		upstreamServers = make([]UpstreamServer, len(config.Upstreams))
+		for i, upstream := range config.Upstreams {
+			upstreamServers[i] = UpstreamServer{
+				URL:   upstream.URL,
+				Proxy: upstream.Proxy,
+				Name:  upstream.Name,
+			}
+		}
+	} else if !isFlagSet("upstream") {
+		// 如果配置文件中没有 upstreams，但有旧的 upstream 字段（向后兼容）
+		// 使用默认的命令行参数值
 	}
 
 	// Cache 配置
@@ -82,21 +91,21 @@ func ApplyConfig(config *Config) error {
 	if config.Cache.IndexDuration != "" && !isFlagSet("index-cache") {
 		duration, err := time.ParseDuration(config.Cache.IndexDuration)
 		if err != nil {
-			return fmt.Errorf("invalid index_duration: %w", err)
+			return errors.New(t("InvalidIndexDuration", map[string]any{"Error": err}))
 		}
 		*indexCacheDuration = duration
 	}
 	if config.Cache.PkgDuration != "" && !isFlagSet("pkg-cache") {
 		duration, err := time.ParseDuration(config.Cache.PkgDuration)
 		if err != nil {
-			return fmt.Errorf("invalid pkg_duration: %w", err)
+			return errors.New(t("InvalidPkgDuration", map[string]any{"Error": err}))
 		}
 		*pkgCacheDuration = duration
 	}
 	if config.Cache.CleanupInterval != "" && !isFlagSet("cleanup-interval") {
 		duration, err := time.ParseDuration(config.Cache.CleanupInterval)
 		if err != nil {
-			return fmt.Errorf("invalid cleanup_interval: %w", err)
+			return errors.New(t("InvalidCleanupInterval", map[string]any{"Error": err}))
 		}
 		*cleanupInterval = duration
 	}

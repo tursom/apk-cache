@@ -211,6 +211,40 @@ Use config file:
 # Finally listens on :8080
 ```
 
+### Multiple Upstream Servers and Failover
+
+Configure multiple upstream servers with automatic failover:
+
+```toml
+# config.toml
+[[upstreams]]
+name = "Official CDN"
+url = "https://dl-cdn.alpinelinux.org"
+
+[[upstreams]]
+name = "Tsinghua Mirror"
+url = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
+proxy = "socks5://127.0.0.1:1080"  # Optional proxy
+
+[[upstreams]]
+name = "USTC Mirror"
+url = "https://mirrors.ustc.edu.cn/alpine"
+proxy = "http://proxy.example.com:8080"  # Supports HTTP proxy
+```
+
+**Features**:
+- ✅ Try all upstream servers in order
+- ✅ Automatically switch to next server on failure
+- ✅ Each server can have its own proxy configuration
+- ✅ Supports both SOCKS5 and HTTP proxies
+- ✅ Automatically logs which server responded successfully
+
+**Workflow**:
+1. Try first upstream server
+2. If fails (network error or non-200 status), try next one
+3. Continue until success or all servers exhausted
+4. Log when using fallback servers
+
 ### Multilingual Support
 
 The program automatically detects system language (via `LC_ALL`, `LC_MESSAGES`, or `LANG` environment variables):

@@ -56,7 +56,7 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 		"index_cache_duration": indexCacheDuration.String(),
 		"pkg_cache_duration":   pkgCacheDuration.String(),
 		"cleanup_interval":     cleanupInterval.String(),
-		"proxy":                *socks5Proxy,
+		"proxy":                *proxyURL,
 	}
 
 	json.NewEncoder(w).Encode(stats)

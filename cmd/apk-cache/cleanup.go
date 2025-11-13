@@ -4,7 +4,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -37,7 +36,7 @@ func cleanupExpiredCache() {
 		}
 
 		// 检查文件是否过期
-		isIndex := strings.HasSuffix(path, "/APKINDEX.tar.gz")
+		isIndex := isIndexFile(path)
 
 		var expired bool
 		if isIndex {

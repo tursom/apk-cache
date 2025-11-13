@@ -49,17 +49,19 @@ var (
 	listenAddr         = flag.String("addr", ":3142", "Listen address")
 	cachePath          = flag.String("cache", "./cache", "Cache directory path")
 	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "Upstream server URL")
-	socks5Proxy        = flag.String("proxy", "", "SOCKS5 proxy address (e.g. socks5://127.0.0.1:1080)")
+	proxyURL           = flag.String("proxy", "", "Proxy address (e.g. socks5://127.0.0.1:1080 or http://127.0.0.1:8080)")
 	indexCacheDuration = flag.Duration("index-cache", 24*time.Hour, "APKINDEX.tar.gz cache duration")
 	pkgCacheDuration   = flag.Duration("pkg-cache", 0, "Package cache duration (0 = never expire)")
 	cleanupInterval    = flag.Duration("cleanup-interval", time.Hour, "Automatic cleanup interval (0 = disabled)")
 	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
 	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
 	configFile         = flag.String("config", "", "Config file path (optional)")
-	httpClient         *http.Client
 
 	// 进程启动时间
 	processStartTime = time.Now()
+
+	// 上游服务器列表（支持故障转移）
+	upstreamServers []UpstreamServer
 
 	// 文件锁管理器
 	lockManager = NewFileLockManager()
@@ -67,6 +69,13 @@ var (
 	accessTimeTracker = NewAccessTimeTracker()
 	localizer         *i18n.Localizer
 )
+
+// UpstreamServer 上游服务器配置
+type UpstreamServer struct {
+	URL   string
+	Proxy string
+	Name  string
+}
 
 // detectLocale 自动检测系统语言
 func detectLocale() string {
@@ -143,6 +152,17 @@ func main() {
 		}
 	}
 
+	// 如果没有从配置文件加载上游服务器，使用命令行参数
+	if len(upstreamServers) == 0 {
+		upstreamServers = []UpstreamServer{
+			{
+				URL:   *upstreamURL,
+				Proxy: *proxyURL,
+				Name:  "default",
+			},
+		}
+	}
+
 	initI18n()
 
 	// 注册 Prometheus 指标到自定义 Registry
@@ -154,9 +174,6 @@ func main() {
 	if err := os.MkdirAll(*cachePath, 0755); err != nil {
 		log.Fatalln(t("CreateCacheDirFailed", map[string]any{"Error": err}))
 	}
-
-	// 配置 HTTP 客户端
-	httpClient = createHTTPClient()
 
 	// 启动自动清理
 	if *cleanupInterval > 0 && *pkgCacheDuration != 0 {
@@ -172,8 +189,8 @@ func main() {
 	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
 	log.Println(t("UpstreamServer", map[string]any{"URL": *upstreamURL}))
 	log.Println(t("CacheDirectory", map[string]any{"Path": *cachePath}))
-	if *socks5Proxy != "" {
-		log.Println(t("SOCKS5Proxy", map[string]any{"Proxy": *socks5Proxy}))
+	if *proxyURL != "" {
+		log.Println(t("ProxyServer", map[string]any{"Proxy": *proxyURL}))
 	}
 
 	if err := http.ListenAndServe(*listenAddr, nil); err != nil {

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -64,7 +64,7 @@ func cacheValid(path string) bool {
 	}
 
 	// 检查是否是索引文件
-	isIndex := strings.HasSuffix(path, "/APKINDEX.tar.gz")
+	isIndex := isIndexFile(path)
 	if isIndex {
 		// index 文件按修改时间过期
 		if isCacheExpiredByModTime(path, *indexCacheDuration) {
@@ -91,7 +91,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	defer file.Close()
 
 	// 记录访问时间（只记录非索引文件）
-	if !strings.HasSuffix(cacheFile, "/APKINDEX.tar.gz") {
+	if !isIndexFile(cacheFile) {
 		accessTimeTracker.RecordAccess(cacheFile)
 	}
 
@@ -101,12 +101,93 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 }
 
 func fetchFromUpstream(urlPath string) (*http.Response, error) {
-	url := *upstreamURL + urlPath
-	resp, err := httpClient.Get(url)
-	if err != nil {
-		return nil, err
+	var lastErr error
+
+	// 尝试所有上游服务器，直到成功或全部失败
+	for i, upstream := range upstreamServers {
+		client := createHTTPClientForUpstream(upstream.Proxy)
+		url := upstream.URL + urlPath
+
+		resp, err := client.Get(url)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			if i > 0 {
+				serverName := upstream.Name
+				if serverName == "" {
+					serverName = upstream.URL
+				}
+				log.Println(t("FallbackUpstream", map[string]any{
+					"Index": i + 1,
+					"Name":  serverName,
+				}))
+			}
+			return resp, nil
+		}
+
+		// 记录错误并尝试下一个服务器
+		if err != nil {
+			lastErr = err
+			log.Println(t("UpstreamFailed", map[string]any{
+				"URL":   upstream.URL,
+				"Error": err,
+			}))
+		} else {
+			lastErr = errors.New(t("UpstreamReturnedStatusCode", map[string]any{"Status": resp.StatusCode}))
+			log.Println(t("UpstreamStatusError", map[string]any{
+				"URL":    upstream.URL,
+				"Status": resp.StatusCode,
+			}))
+			resp.Body.Close()
+		}
 	}
-	return resp, nil
+
+	if lastErr == nil {
+		lastErr = errors.New(t("NoAvailableUpstream", nil))
+	}
+	return nil, lastErr
+}
+
+// createHTTPClientForUpstream 为指定的代理创建 HTTP 客户端
+func createHTTPClientForUpstream(proxyAddr string) *http.Client {
+	if proxyAddr == "" {
+		return &http.Client{
+			Timeout: 30 * time.Second,
+		}
+	}
+
+	proxyURL, err := url.Parse(proxyAddr)
+	if err != nil {
+		log.Println(t("InvalidProxy", map[string]any{
+			"Proxy": proxyAddr,
+			"Error": err,
+		}))
+		return &http.Client{Timeout: 30 * time.Second}
+	}
+
+	var transport *http.Transport
+
+	if proxyURL.Scheme == "socks5" {
+		// SOCKS5 代理
+		dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, nil, proxy.Direct)
+		if err != nil {
+			log.Println(t("CreateProxyFailed", map[string]any{
+				"Error": err,
+			}))
+			return &http.Client{Timeout: 30 * time.Second}
+		}
+		transport = &http.Transport{
+			Dial: dialer.Dial,
+		}
+	} else {
+		// HTTP/HTTPS 代理
+		transport = &http.Transport{
+			Proxy: http.ProxyURL(proxyURL),
+		}
+	}
+
+	return &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
 }
 
 func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.ResponseWriter, statusCode int, headers http.Header) error {
@@ -125,13 +206,13 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 	// 创建缓存文件的目录
 	dir := filepath.Dir(cacheFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("%s", t("CreateCacheDirFailed", map[string]any{"Error": err}))
+		return errors.New(t("CreateCacheDirFailed", map[string]any{"Error": err}))
 	}
 
 	// 创建临时文件
 	tmpFile, err := os.CreateTemp(dir, "tmp-")
 	if err != nil {
-		return fmt.Errorf("%s", t("CreateTempFileFailed", map[string]any{"Error": err}))
+		return errors.New(t("CreateTempFileFailed", map[string]any{"Error": err}))
 	}
 	tmpFileName := tmpFile.Name()
 	defer func() {
@@ -177,7 +258,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		// 检查读取错误
 		if readErr != nil {
 			if readErr != io.EOF {
-				return fmt.Errorf("%s", t("ReadUpstreamFailed", map[string]any{"Error": readErr}))
+				return errors.New(t("ReadUpstreamFailed", map[string]any{"Error": readErr}))
 			}
 			break // EOF，正常结束
 		}
@@ -185,54 +266,19 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 
 	// 关闭临时文件
 	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("%s", t("CloseTempFileFailed", map[string]any{"Error": err}))
+		return errors.New(t("CloseTempFileFailed", map[string]any{"Error": err}))
 	}
 
 	// 只有缓存写入成功才重命名
 	if cacheErr != nil {
-		return fmt.Errorf("%s", t("CacheWriteFailed", map[string]any{"Error": cacheErr}))
+		return errors.New(t("CacheWriteFailed", map[string]any{"Error": cacheErr}))
 	}
 
 	if err := os.Rename(tmpFileName, cacheFile); err != nil {
-		return fmt.Errorf("%s", t("RenameCacheFileFailed", map[string]any{"Error": err}))
+		return errors.New(t("RenameCacheFileFailed", map[string]any{"Error": err}))
 	}
 
 	return nil
-}
-
-func createHTTPClient() *http.Client {
-	if *socks5Proxy == "" {
-		return http.DefaultClient
-	}
-
-	proxyURL, err := url.Parse(*socks5Proxy)
-	if err != nil {
-		log.Fatalln(t("ParseProxyFailed", map[string]any{"Error": err}))
-	}
-
-	// 创建 SOCKS5 dialer
-	var auth *proxy.Auth
-	if proxyURL.User != nil {
-		password, _ := proxyURL.User.Password()
-		auth = &proxy.Auth{
-			User:     proxyURL.User.Username(),
-			Password: password,
-		}
-	}
-
-	dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, auth, proxy.Direct)
-	if err != nil {
-		log.Fatalln(t("CreateDialerFailed", map[string]any{"Error": err}))
-	}
-
-	// 创建带代理的 HTTP Transport
-	transport := &http.Transport{
-		Dial: dialer.Dial,
-	}
-
-	return &http.Client{
-		Transport: transport,
-	}
 }
 
 // isCacheExpiredByModTime 检查文件是否按修改时间过期（用于 index 文件）
@@ -274,4 +320,8 @@ func isCacheExpiredByAccessTime(path string, duration time.Duration) bool {
 	}
 
 	return time.Since(atime) > duration
+}
+
+func isIndexFile(path string) bool {
+	return strings.HasSuffix(path, "/APKINDEX.tar.gz")
 }

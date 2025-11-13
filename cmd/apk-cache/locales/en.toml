@@ -75,3 +75,36 @@ other = "Failed to parse proxy address: {{.Error}}"
 
 [CreateDialerFailed]
 other = "Failed to create SOCKS5 dialer: {{.Error}}"
+
+[FallbackUpstream]
+other = "Using fallback upstream server #{{.Index}}: {{.Name}}"
+
+[UpstreamFailed]
+other = "Upstream server {{.URL}} failed: {{.Error}}"
+
+[UpstreamStatusError]
+other = "Upstream server {{.URL}} returned error status code: {{.Status}}"
+
+[InvalidProxy]
+other = "Invalid proxy address {{.Proxy}}: {{.Error}}"
+
+[CreateProxyFailed]
+other = "Failed to create proxy: {{.Error}}"
+
+[NoAvailableUpstream]
+other = "No available upstream servers"
+
+[ParseConfigFailed]
+other = "Failed to parse config file: {{.Error}}"
+
+[InvalidIndexDuration]
+other = "Invalid index_duration: {{.Error}}"
+
+[InvalidPkgDuration]
+other = "Invalid pkg_duration: {{.Error}}"
+
+[InvalidCleanupInterval]
+other = "Invalid cleanup_interval: {{.Error}}"
+
+[UpstreamReturnedStatusCode]
+other = "Upstream returned status code: {{.Status}}"

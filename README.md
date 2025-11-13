@@ -211,6 +211,40 @@ admin_password = "your-secret-password"
 # 最终监听在 :8080
 ```
 
+### 多上游服务器和故障转移
+
+配置多个上游服务器，自动故障转移：
+
+```toml
+# config.toml
+[[upstreams]]
+name = "Official CDN"
+url = "https://dl-cdn.alpinelinux.org"
+
+[[upstreams]]
+name = "Tsinghua Mirror"
+url = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
+proxy = "socks5://127.0.0.1:1080"  # 可选的代理
+
+[[upstreams]]
+name = "USTC Mirror"
+url = "https://mirrors.ustc.edu.cn/alpine"
+proxy = "http://proxy.example.com:8080"  # 支持 HTTP 代理
+```
+
+**特性**：
+- ✅ 按顺序尝试所有上游服务器
+- ✅ 第一个服务器失败时自动切换到下一个
+- ✅ 每个服务器可以单独配置代理
+- ✅ 支持 SOCKS5 和 HTTP 代理
+- ✅ 自动记录哪个服务器成功响应
+
+**工作流程**：
+1. 尝试第一个上游服务器
+2. 如果失败（网络错误或非 200 状态码），尝试下一个
+3. 直到找到成功的服务器或全部失败
+4. 使用备用服务器时会在日志中记录
+
 ### 多语言支持
 
 程序会自动检测系统语言（通过 `LC_ALL`、`LC_MESSAGES` 或 `LANG` 环境变量）：
