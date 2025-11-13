@@ -34,7 +34,7 @@ go build -o apk-cache cmd/apk-cache/main.go
 ./apk-cache
 
 # Run with custom configuration
-./apk-cache -addr :8080 -cache ./cache -proxy socks5://127.0.0.1:1080
+./apk-cache -addr :3142 -cache ./cache -proxy socks5://127.0.0.1:1080
 
 # Specify language
 ./apk-cache -locale zh  # Chinese
@@ -45,7 +45,7 @@ go build -o apk-cache cmd/apk-cache/main.go
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `-addr` | `:8080` | Listen address |
+| `-addr` | `:3142` | Listen address |
 | `-cache` | `./cache` | Cache directory path |
 | `-upstream` | `https://dl-cdn.alpinelinux.org` | Upstream server URL |
 | `-proxy` | (empty) | SOCKS5 proxy address, format: `socks5://[username:password@]host:port` |
@@ -60,14 +60,14 @@ Edit `/etc/apk/repositories`:
 
 ```bash
 # Replace default mirror address with cache server address
-sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:8080/g' /etc/apk/repositories
+sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
 ```
 
 Or use command line directly:
 
 ```bash
 # Specify cache server when installing packages
-apk add --repositories-file /dev/null --repository http://your-cache-server:8080/alpine/v3.22/main <package-name>
+apk add --repositories-file /dev/null --repository http://your-cache-server:3142/alpine/v3.22/main <package-name>
 ```
 
 ## How It Works

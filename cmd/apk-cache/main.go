@@ -26,6 +26,12 @@ import (
 //go:embed admin.html
 var adminHTML string
 
+//go:embed locales/en.toml
+var enToml []byte
+
+//go:embed locales/zh.toml
+var zhToml []byte
+
 var (
 	cacheHits = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_hits_total",
@@ -93,9 +99,9 @@ func initI18n() {
 	bundle := i18n.NewBundle(language.English)
 	bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
 
-	// 加载翻译文件
-	bundle.MustLoadMessageFile("locales/en.toml")
-	bundle.MustLoadMessageFile("locales/zh.toml")
+	// 加载嵌入的翻译文件
+	bundle.MustParseMessageFileBytes(enToml, "en.toml")
+	bundle.MustParseMessageFileBytes(zhToml, "zh.toml")
 	// 自动检测语言
 	detectedLocale := detectLocale()
 

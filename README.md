@@ -34,7 +34,7 @@ go build -o apk-cache cmd/apk-cache/main.go
 ./apk-cache
 
 # 自定义配置
-./apk-cache -addr :8080 -cache ./cache -proxy socks5://127.0.0.1:1080
+./apk-cache -addr :3142 -cache ./cache -proxy socks5://127.0.0.1:1080
 
 # 指定语言
 ./apk-cache -locale zh  # 中文
@@ -45,7 +45,7 @@ go build -o apk-cache cmd/apk-cache/main.go
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `-addr` | `:8080` | 监听地址 |
+| `-addr` | `:3142` | 监听地址 |
 | `-cache` | `./cache` | 缓存目录路径 |
 | `-upstream` | `https://dl-cdn.alpinelinux.org` | 上游服务器地址 |
 | `-proxy` | (空) | SOCKS5 代理地址，格式: `socks5://[username:password@]host:port` |
@@ -60,14 +60,14 @@ go build -o apk-cache cmd/apk-cache/main.go
 
 ```bash
 # 将默认的镜像地址替换为缓存服务器地址
-sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:8080/g' /etc/apk/repositories
+sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
 ```
 
 或者直接使用命令行:
 
 ```bash
 # 安装软件包时指定缓存服务器
-apk add --repositories-file /dev/null --repository http://your-cache-server:8080/alpine/v3.22/main <package-name>
+apk add --repositories-file /dev/null --repository http://your-cache-server:3142/alpine/v3.22/main <package-name>
 ```
 
 ## 工作原理
