@@ -26,13 +26,57 @@
 
 ## 快速开始
 
-### 安装
+### 使用 Docker（推荐）
+
+最快的方式是使用 Docker Hub 上的官方镜像：
 
 ```bash
-git clone git@github.com:tursom/apk-cache.git
-cd apk-cache
-go build -o apk-cache cmd/apk-cache/main.go
+# 拉取并运行
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  tursom/apk-cache:latest
 ```
+
+访问 http://localhost:3142/_admin/ 查看管理界面。
+
+### 安装
+
+#### 从源码构建
+
+```bash
+git clone https://github.com/tursom/apk-cache.git
+cd apk-cache
+go build -o apk-cache ./cmd/apk-cache
+```
+
+#### 使用 Docker
+
+```bash
+# 拉取官方镜像
+docker pull tursom/apk-cache:latest
+
+# 运行容器
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  -e ADDR=:80 \
+  -e CACHE_DIR=/app/cache \
+  -e INDEX_CACHE=24h \
+  tursom/apk-cache:latest
+
+# 使用代理
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  -e PROXY=socks5://127.0.0.1:1080 \
+  tursom/apk-cache:latest
+```
+
+**Docker Hub**: https://hub.docker.com/r/tursom/apk-cache
 
 ### 运行
 
@@ -85,6 +129,65 @@ sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /e
 ```bash
 # 安装软件包时指定缓存服务器
 apk add --repositories-file /dev/null --repository http://your-cache-server:3142/alpine/v3.22/main <package-name>
+```
+
+### 实际使用示例
+
+#### 1. 在 Dockerfile 中使用
+
+```dockerfile
+FROM alpine:3.22
+
+# 配置使用 APK 缓存服务器
+RUN sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
+
+# 安装软件包（将使用缓存）
+RUN apk update && apk add --no-cache \
+    curl \
+    wget \
+    git \
+    build-base
+
+# 其他构建步骤...
+```
+
+#### 2. 在 Alpine 虚拟机中使用
+
+```bash
+# 备份原有配置
+cp /etc/apk/repositories /etc/apk/repositories.bak
+
+# 配置缓存服务器
+cat > /etc/apk/repositories << EOF
+http://your-cache-server:3142/alpine/v3.22/main
+http://your-cache-server:3142/alpine/v3.22/community
+EOF
+
+# 更新索引并安装软件
+apk update
+apk add docker python3 nodejs
+```
+
+#### 3. 临时使用（不修改配置文件）
+
+```bash
+# 单次使用缓存服务器
+apk add --repositories-file /dev/null \
+  --repository http://your-cache-server:3142/alpine/v3.22/main \
+  --repository http://your-cache-server:3142/alpine/v3.22/community \
+  nginx
+```
+
+#### 4. 验证缓存是否工作
+
+```bash
+# 第一次请求（缓存未命中）
+curl -I http://your-cache-server:3142/alpine/v3.22/main/x86_64/APKINDEX.tar.gz
+# 响应头应包含: X-Cache: MISS
+
+# 第二次请求（缓存命中）
+curl -I http://your-cache-server:3142/alpine/v3.22/main/x86_64/APKINDEX.tar.gz
+# 响应头应包含: X-Cache: HIT
 ```
 
 ## 工作原理
@@ -209,6 +312,92 @@ admin_password = "your-secret-password"
 # 但命令行参数会覆盖它
 ./apk-cache -config config.toml -addr :8080
 # 最终监听在 :8080
+```
+
+### Docker 部署
+
+#### 使用环境变量
+
+```bash
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v $(pwd)/cache:/app/cache \
+  -e ADDR=:80 \
+  -e CACHE_DIR=/app/cache \
+  -e INDEX_CACHE=24h \
+  -e PROXY=socks5://127.0.0.1:1080 \
+  -e UPSTREAM=https://dl-cdn.alpinelinux.org \
+  tursom/apk-cache:latest
+```
+
+**支持的环境变量**：
+- `ADDR` - 监听地址（默认 `:80`）
+- `CACHE_DIR` - 缓存目录（默认 `./cache`）
+- `INDEX_CACHE` - 索引缓存时间（默认 `24h`）
+- `PROXY` - 代理地址（可选）
+- `UPSTREAM` - 上游服务器（可选）
+
+#### 使用配置文件
+
+```bash
+# 创建配置文件
+cat > config.toml << EOF
+[server]
+addr = ":80"
+
+[[upstreams]]
+name = "Official CDN"
+url = "https://dl-cdn.alpinelinux.org"
+
+[cache]
+dir = "/app/cache"
+index_duration = "24h"
+EOF
+
+# 挂载配置文件运行
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v $(pwd)/cache:/app/cache \
+  -v $(pwd)/config.toml:/app/config.toml \
+  tursom/apk-cache:latest -config /app/config.toml
+```
+
+#### Docker Compose
+
+```yaml
+version: '3.8'
+
+services:
+  apk-cache:
+    image: tursom/apk-cache:latest
+    container_name: apk-cache
+    ports:
+      - "3142:80"
+    volumes:
+      - ./cache:/app/cache
+      - ./config.toml:/app/config.toml  # 可选
+    environment:
+      - ADDR=:80
+      - CACHE_DIR=/app/cache
+      - INDEX_CACHE=24h
+      # - PROXY=socks5://host.docker.internal:1080
+    restart: unless-stopped
+```
+
+**从源码构建镜像**（可选）:
+
+```bash
+# 克隆仓库
+git clone https://github.com/tursom/apk-cache.git
+cd apk-cache
+
+# 构建镜像
+docker build -t apk-cache:local .
+
+# 使用本地构建的镜像
+docker run -d -p 3142:80 -v ./cache:/app/cache apk-cache:local
 ```
 
 ### 多上游服务器和故障转移
@@ -372,6 +561,7 @@ apk-cache/
 ├── cmd/
 │   └── apk-cache/
 │       ├── main.go            # 主程序入口
+│       ├── config.go          # 配置文件处理
 │       ├── cache.go           # 缓存处理逻辑
 │       ├── web.go             # Web 管理界面
 │       ├── cleanup.go         # 自动清理功能
@@ -383,11 +573,15 @@ apk-cache/
 │           ├── en.toml        # 英文翻译（嵌入）
 │           └── zh.toml        # 中文翻译（嵌入）
 ├── cache/                     # 缓存目录（运行时生成）
+├── Dockerfile                 # Docker 镜像构建文件
+├── entrypoint.sh              # Docker 容器启动脚本
+├── config.example.toml        # 配置文件示例
 ├── go.mod
 ├── go.sum
 ├── README.md                  # 中文文档
 ├── README_EN.md               # 英文文档
-└── ADMIN.md                   # 管理界面文档
+├── ADMIN.md                   # 管理界面文档
+└── LICENSE                    # GPLv3 许可证
 ```
 
 ## 依赖
@@ -398,6 +592,187 @@ apk-cache/
 - `github.com/prometheus/client_golang` - Prometheus 监控指标
 - `golang.org/x/text/language` - 语言检测和处理
 
+## 故障排除
+
+### 1. 无法连接到上游服务器
+
+**问题**: 日志显示 "dial tcp: lookup dl-cdn.alpinelinux.org: no such host"
+
+**解决方案**:
+```bash
+# 检查 DNS 解析
+nslookup dl-cdn.alpinelinux.org
+
+# 如果 DNS 有问题，使用镜像站
+./apk-cache -upstream https://mirrors.tuna.tsinghua.edu.cn/alpine
+
+# 或配置多个上游服务器实现故障转移
+```
+
+### 2. 代理连接失败
+
+**问题**: 使用 SOCKS5 代理时连接超时
+
+**解决方案**:
+```bash
+# 验证代理是否可用
+curl -x socks5://127.0.0.1:1080 https://dl-cdn.alpinelinux.org
+
+# 检查代理格式是否正确
+./apk-cache -proxy socks5://username:password@host:port
+
+# 尝试 HTTP 代理
+./apk-cache -proxy http://127.0.0.1:8080
+```
+
+### 3. 缓存未命中
+
+**问题**: 总是显示 `X-Cache: MISS`，缓存不生效
+
+**解决方案**:
+```bash
+# 检查缓存目录权限
+ls -la ./cache
+
+# 确保有写入权限
+chmod 755 ./cache
+
+# 检查磁盘空间
+df -h
+
+# 查看日志了解详细错误
+./apk-cache -addr :3142 2>&1 | tee apk-cache.log
+```
+
+### 4. 管理界面无法访问
+
+**问题**: 访问 `/_admin/` 返回 404 或认证失败
+
+**解决方案**:
+```bash
+# 检查是否正确访问管理界面（注意末尾的斜杠）
+curl http://localhost:3142/_admin/
+
+# 如果设置了密码，使用 Basic Auth
+curl -u admin:your-password http://localhost:3142/_admin/
+
+# 在浏览器中访问时，使用正确的凭据：
+# 用户名: admin
+# 密码: (你设置的密码)
+```
+
+### 5. 自动清理不工作
+
+**问题**: 旧文件没有被自动删除
+
+**解决方案**:
+```bash
+# 确保同时设置了 pkg-cache 和 cleanup-interval
+./apk-cache -pkg-cache 168h -cleanup-interval 1h
+
+# 检查日志中是否有清理记录
+# 如果 pkg-cache 为 0，自动清理会被禁用
+
+# 手动清理（通过管理界面）
+curl -u admin:password -X POST http://localhost:3142/_admin/clear
+```
+
+### 6. 多个客户端并发下载时速度慢
+
+**问题**: 多个请求同时下载同一文件时性能下降
+
+**这是正常的**: 文件锁机制确保只下载一次，其他请求会等待第一个请求完成。这是为了避免重复下载和缓存冲突。
+
+**优化建议**:
+- 使用更快的上游服务器或镜像
+- 配置 SOCKS5/HTTP 代理优化网络路径
+- 增加带宽或使用 CDN
+
+### 7. Docker 容器中代理不工作
+
+**问题**: 容器内无法通过 `127.0.0.1` 访问主机代理
+
+**解决方案**:
+```bash
+# 使用 host.docker.internal（Mac/Windows）
+docker run -e PROXY=socks5://host.docker.internal:1080 apk-cache
+
+# 使用主机网络模式（Linux）
+docker run --network host -e PROXY=socks5://127.0.0.1:1080 apk-cache
+
+# 或使用宿主机 IP 地址
+docker run -e PROXY=socks5://192.168.1.100:1080 apk-cache
+```
+
+## 性能优化建议
+
+### 1. 缓存目录使用 SSD
+
+```bash
+# 将缓存目录放在 SSD 上可显著提升性能
+./apk-cache -cache /mnt/ssd/apk-cache
+```
+
+### 2. 调整缓存过期时间
+
+```bash
+# 生产环境：延长索引缓存时间减少上游请求
+./apk-cache -index-cache 24h -pkg-cache 720h  # 30 天
+
+# 开发环境：缩短缓存时间获取最新包
+./apk-cache -index-cache 2h -pkg-cache 168h   # 7 天
+```
+
+### 3. 使用本地镜像站
+
+```bash
+# 选择地理位置最近的镜像站
+./apk-cache -upstream https://mirrors.tuna.tsinghua.edu.cn/alpine
+```
+
+### 4. 配置多个上游服务器
+
+提高可用性和下载速度：
+
+```toml
+[[upstreams]]
+name = "Primary CDN"
+url = "https://dl-cdn.alpinelinux.org"
+
+[[upstreams]]
+name = "Backup Mirror 1"
+url = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
+
+[[upstreams]]
+name = "Backup Mirror 2"
+url = "https://mirrors.ustc.edu.cn/alpine"
+```
+
+## 常见问题 (FAQ)
+
+**Q: 缓存会占用多少磁盘空间？**
+
+A: 取决于使用情况。一个完整的 Alpine 版本所有包约 2-3 GB，但实际使用中通常只会缓存需要的包，一般占用几百 MB。
+
+**Q: 可以同时为多个 Alpine 版本提供缓存吗？**
+
+A: 可以。缓存目录会按路径自动组织（如 `cache/alpine/v3.22/main/x86_64/`），不同版本互不影响。
+
+**Q: 缓存命中率低怎么办？**
+
+A: 
+- 检查索引缓存时间是否太短
+- 确保客户端请求的 URL 一致（不要混用 HTTP/HTTPS 或不同域名）
+- 查看管理界面了解具体统计信息
+
+**Q: 支持 HTTPS 吗？**
+
+A: 程序本身不支持 HTTPS，建议在前面放置 Nginx 等反向代理来提供 HTTPS 支持。
+
+**Q: 可以限制缓存大小吗？**
+
+A: 目前没有内置的缓存大小限制，建议通过文件系统配额（quota）或定期清理来管理磁盘空间。
+
 ## 许可证
 
 GPLv3 License
@@ -405,3 +780,14 @@ GPLv3 License
 ## 贡献
 
 欢迎提交 Issue 和 Pull Request！
+
+## 作者
+
+[tursom](https://github.com/tursom)
+
+## 链接
+
+- GitHub: https://github.com/tursom/apk-cache
+- Docker Hub: https://hub.docker.com/r/tursom/apk-cache
+- Issue Tracker: https://github.com/tursom/apk-cache/issues
+- Alpine Linux: https://alpinelinux.org/

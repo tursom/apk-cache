@@ -26,13 +26,57 @@ A caching proxy server for Alpine Linux APK packages with SOCKS5 proxy support a
 
 ## Quick Start
 
-### Installation
+### Using Docker (Recommended)
+
+The fastest way is to use the official image from Docker Hub:
 
 ```bash
-git clone git@github.com:tursom/apk-cache.git
-cd apk-cache
-go build -o apk-cache cmd/apk-cache/main.go
+# Pull and run
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  tursom/apk-cache:latest
 ```
+
+Visit http://localhost:3142/_admin/ to access the admin dashboard.
+
+### Installation
+
+#### Build from Source
+
+```bash
+git clone https://github.com/tursom/apk-cache.git
+cd apk-cache
+go build -o apk-cache ./cmd/apk-cache
+```
+
+#### Using Docker
+
+```bash
+# Pull official image
+docker pull tursom/apk-cache:latest
+
+# Run container
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  -e ADDR=:80 \
+  -e CACHE_DIR=/app/cache \
+  -e INDEX_CACHE=24h \
+  tursom/apk-cache:latest
+
+# With proxy
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  -e PROXY=socks5://127.0.0.1:1080 \
+  tursom/apk-cache:latest
+```
+
+**Docker Hub**: https://hub.docker.com/r/tursom/apk-cache
 
 ### Running
 
@@ -85,6 +129,65 @@ Or use command line directly:
 ```bash
 # Specify cache server when installing packages
 apk add --repositories-file /dev/null --repository http://your-cache-server:3142/alpine/v3.22/main <package-name>
+```
+
+### Real-World Usage Examples
+
+#### 1. Use in Dockerfile
+
+```dockerfile
+FROM alpine:3.22
+
+# Configure to use APK cache server
+RUN sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
+
+# Install packages (will use cache)
+RUN apk update && apk add --no-cache \
+    curl \
+    wget \
+    git \
+    build-base
+
+# Other build steps...
+```
+
+#### 2. Use in Alpine VM
+
+```bash
+# Backup original configuration
+cp /etc/apk/repositories /etc/apk/repositories.bak
+
+# Configure cache server
+cat > /etc/apk/repositories << EOF
+http://your-cache-server:3142/alpine/v3.22/main
+http://your-cache-server:3142/alpine/v3.22/community
+EOF
+
+# Update index and install packages
+apk update
+apk add docker python3 nodejs
+```
+
+#### 3. Temporary Use (without modifying config file)
+
+```bash
+# Use cache server for a single command
+apk add --repositories-file /dev/null \
+  --repository http://your-cache-server:3142/alpine/v3.22/main \
+  --repository http://your-cache-server:3142/alpine/v3.22/community \
+  nginx
+```
+
+#### 4. Verify Cache is Working
+
+```bash
+# First request (cache miss)
+curl -I http://your-cache-server:3142/alpine/v3.22/main/x86_64/APKINDEX.tar.gz
+# Response header should contain: X-Cache: MISS
+
+# Second request (cache hit)
+curl -I http://your-cache-server:3142/alpine/v3.22/main/x86_64/APKINDEX.tar.gz
+# Response header should contain: X-Cache: HIT
 ```
 
 ## How It Works
@@ -209,6 +312,92 @@ Use config file:
 # But command line argument overrides it
 ./apk-cache -config config.toml -addr :8080
 # Finally listens on :8080
+```
+
+### Docker Deployment
+
+#### Using Environment Variables
+
+```bash
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v $(pwd)/cache:/app/cache \
+  -e ADDR=:80 \
+  -e CACHE_DIR=/app/cache \
+  -e INDEX_CACHE=24h \
+  -e PROXY=socks5://127.0.0.1:1080 \
+  -e UPSTREAM=https://dl-cdn.alpinelinux.org \
+  tursom/apk-cache:latest
+```
+
+**Supported Environment Variables**:
+- `ADDR` - Listen address (default `:80`)
+- `CACHE_DIR` - Cache directory (default `./cache`)
+- `INDEX_CACHE` - Index cache duration (default `24h`)
+- `PROXY` - Proxy address (optional)
+- `UPSTREAM` - Upstream server (optional)
+
+#### Using Configuration File
+
+```bash
+# Create config file
+cat > config.toml << EOF
+[server]
+addr = ":80"
+
+[[upstreams]]
+name = "Official CDN"
+url = "https://dl-cdn.alpinelinux.org"
+
+[cache]
+dir = "/app/cache"
+index_duration = "24h"
+EOF
+
+# Run with mounted config file
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v $(pwd)/cache:/app/cache \
+  -v $(pwd)/config.toml:/app/config.toml \
+  tursom/apk-cache:latest -config /app/config.toml
+```
+
+#### Docker Compose
+
+```yaml
+version: '3.8'
+
+services:
+  apk-cache:
+    image: tursom/apk-cache:latest
+    container_name: apk-cache
+    ports:
+      - "3142:80"
+    volumes:
+      - ./cache:/app/cache
+      - ./config.toml:/app/config.toml  # Optional
+    environment:
+      - ADDR=:80
+      - CACHE_DIR=/app/cache
+      - INDEX_CACHE=24h
+      # - PROXY=socks5://host.docker.internal:1080
+    restart: unless-stopped
+```
+
+**Build from Source** (Optional):
+
+```bash
+# Clone repository
+git clone https://github.com/tursom/apk-cache.git
+cd apk-cache
+
+# Build image
+docker build -t apk-cache:local .
+
+# Use locally built image
+docker run -d -p 3142:80 -v ./cache:/app/cache apk-cache:local
 ```
 
 ### Multiple Upstream Servers and Failover
@@ -372,6 +561,7 @@ apk-cache/
 ├── cmd/
 │   └── apk-cache/
 │       ├── main.go            # Main program entry
+│       ├── config.go          # Configuration file handling
 │       ├── cache.go           # Cache handling logic
 │       ├── web.go             # Web admin dashboard
 │       ├── cleanup.go         # Auto cleanup functionality
@@ -383,11 +573,15 @@ apk-cache/
 │           ├── en.toml        # English translations (embedded)
 │           └── zh.toml        # Chinese translations (embedded)
 ├── cache/                     # Cache directory (generated at runtime)
+├── Dockerfile                 # Docker image build file
+├── entrypoint.sh              # Docker container startup script
+├── config.example.toml        # Configuration file example
 ├── go.mod
 ├── go.sum
 ├── README.md                  # Chinese documentation
 ├── README_EN.md               # English documentation
-└── ADMIN.md                   # Admin dashboard documentation
+├── ADMIN.md                   # Admin dashboard documentation
+└── LICENSE                    # GPLv3 License
 ```
 
 ## Dependencies
@@ -398,6 +592,187 @@ apk-cache/
 - `github.com/prometheus/client_golang` - Prometheus monitoring metrics
 - `golang.org/x/text/language` - Language detection and handling
 
+## Troubleshooting
+
+### 1. Cannot Connect to Upstream Server
+
+**Problem**: Logs show "dial tcp: lookup dl-cdn.alpinelinux.org: no such host"
+
+**Solution**:
+```bash
+# Check DNS resolution
+nslookup dl-cdn.alpinelinux.org
+
+# If DNS has issues, use mirror site
+./apk-cache -upstream https://mirrors.tuna.tsinghua.edu.cn/alpine
+
+# Or configure multiple upstream servers for failover
+```
+
+### 2. Proxy Connection Failed
+
+**Problem**: Connection timeout when using SOCKS5 proxy
+
+**Solution**:
+```bash
+# Verify proxy is available
+curl -x socks5://127.0.0.1:1080 https://dl-cdn.alpinelinux.org
+
+# Check if proxy format is correct
+./apk-cache -proxy socks5://username:password@host:port
+
+# Try HTTP proxy
+./apk-cache -proxy http://127.0.0.1:8080
+```
+
+### 3. Cache Miss
+
+**Problem**: Always shows `X-Cache: MISS`, cache not working
+
+**Solution**:
+```bash
+# Check cache directory permissions
+ls -la ./cache
+
+# Ensure write permission
+chmod 755 ./cache
+
+# Check disk space
+df -h
+
+# View logs for detailed errors
+./apk-cache -addr :3142 2>&1 | tee apk-cache.log
+```
+
+### 4. Admin Dashboard Not Accessible
+
+**Problem**: Accessing `/_admin/` returns 404 or authentication fails
+
+**Solution**:
+```bash
+# Check if accessing correctly (note the trailing slash)
+curl http://localhost:3142/_admin/
+
+# If password is set, use Basic Auth
+curl -u admin:your-password http://localhost:3142/_admin/
+
+# When accessing in browser, use correct credentials:
+# Username: admin
+# Password: (your set password)
+```
+
+### 5. Auto Cleanup Not Working
+
+**Problem**: Old files are not being automatically deleted
+
+**Solution**:
+```bash
+# Ensure both pkg-cache and cleanup-interval are set
+./apk-cache -pkg-cache 168h -cleanup-interval 1h
+
+# Check logs for cleanup records
+# If pkg-cache is 0, auto cleanup is disabled
+
+# Manual cleanup (via admin dashboard)
+curl -u admin:password -X POST http://localhost:3142/_admin/clear
+```
+
+### 6. Slow Speed with Concurrent Downloads
+
+**Problem**: Performance degrades when multiple requests download the same file
+
+**This is normal**: File lock mechanism ensures only one download, other requests wait for the first to complete. This prevents duplicate downloads and cache conflicts.
+
+**Optimization suggestions**:
+- Use faster upstream server or mirror
+- Configure SOCKS5/HTTP proxy to optimize network path
+- Increase bandwidth or use CDN
+
+### 7. Proxy Not Working in Docker Container
+
+**Problem**: Cannot access host proxy via `127.0.0.1` inside container
+
+**Solution**:
+```bash
+# Use host.docker.internal (Mac/Windows)
+docker run -e PROXY=socks5://host.docker.internal:1080 apk-cache
+
+# Use host network mode (Linux)
+docker run --network host -e PROXY=socks5://127.0.0.1:1080 apk-cache
+
+# Or use host IP address
+docker run -e PROXY=socks5://192.168.1.100:1080 apk-cache
+```
+
+## Performance Optimization Tips
+
+### 1. Use SSD for Cache Directory
+
+```bash
+# Placing cache directory on SSD significantly improves performance
+./apk-cache -cache /mnt/ssd/apk-cache
+```
+
+### 2. Adjust Cache Expiration Times
+
+```bash
+# Production: Extend index cache time to reduce upstream requests
+./apk-cache -index-cache 24h -pkg-cache 720h  # 30 days
+
+# Development: Shorten cache time to get latest packages
+./apk-cache -index-cache 2h -pkg-cache 168h   # 7 days
+```
+
+### 3. Use Local Mirror Sites
+
+```bash
+# Choose the geographically closest mirror
+./apk-cache -upstream https://mirrors.tuna.tsinghua.edu.cn/alpine
+```
+
+### 4. Configure Multiple Upstream Servers
+
+Improve availability and download speed:
+
+```toml
+[[upstreams]]
+name = "Primary CDN"
+url = "https://dl-cdn.alpinelinux.org"
+
+[[upstreams]]
+name = "Backup Mirror 1"
+url = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
+
+[[upstreams]]
+name = "Backup Mirror 2"
+url = "https://mirrors.ustc.edu.cn/alpine"
+```
+
+## Frequently Asked Questions (FAQ)
+
+**Q: How much disk space will the cache use?**
+
+A: Depends on usage. A complete Alpine version with all packages is about 2-3 GB, but in practice you'll usually only cache needed packages, typically a few hundred MB.
+
+**Q: Can I serve cache for multiple Alpine versions simultaneously?**
+
+A: Yes. The cache directory automatically organizes by path (e.g., `cache/alpine/v3.22/main/x86_64/`), different versions don't interfere with each other.
+
+**Q: What if cache hit rate is low?**
+
+A: 
+- Check if index cache time is too short
+- Ensure client requests use consistent URLs (don't mix HTTP/HTTPS or different domains)
+- View admin dashboard for detailed statistics
+
+**Q: Does it support HTTPS?**
+
+A: The program itself doesn't support HTTPS. It's recommended to place a reverse proxy like Nginx in front to provide HTTPS support.
+
+**Q: Can I limit cache size?**
+
+A: There's currently no built-in cache size limit. It's recommended to manage disk space through filesystem quotas or periodic cleanup.
+
 ## License
 
 GPLv3 License
@@ -405,3 +780,14 @@ GPLv3 License
 ## Contributing
 
 Issues and Pull Requests are welcome!
+
+## Author
+
+[tursom](https://github.com/tursom)
+
+## Links
+
+- GitHub: https://github.com/tursom/apk-cache
+- Docker Hub: https://hub.docker.com/r/tursom/apk-cache
+- Issue Tracker: https://github.com/tursom/apk-cache/issues
+- Alpine Linux: https://alpinelinux.org/

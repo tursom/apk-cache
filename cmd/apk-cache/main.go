@@ -54,6 +54,7 @@ var (
 	pkgCacheDuration   = flag.Duration("pkg-cache", 0, "Package cache duration (0 = never expire)")
 	cleanupInterval    = flag.Duration("cleanup-interval", time.Hour, "Automatic cleanup interval (0 = disabled)")
 	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
+	adminUser          = flag.String("admin-user", "admin", "Admin dashboard username")
 	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
 	configFile         = flag.String("config", "", "Config file path (optional)")
 
@@ -208,7 +209,7 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// Basic Auth
 		username, password, ok := r.BasicAuth()
-		if !ok || username != "admin" || password != *adminPassword {
+		if !ok || username != *adminUser || password != *adminPassword {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Admin"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
