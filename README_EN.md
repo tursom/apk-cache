@@ -165,6 +165,10 @@ Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 
 GPLv3 License
 
+## Development Roadmap
+
+See [ROADMAP.md](ROADMAP.md) for future development directions and improvement plans.
+
 ## Links
 
 - GitHub: https://github.com/tursom/apk-cache

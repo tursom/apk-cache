@@ -165,6 +165,10 @@ services:
 
 GPLv3 License
 
+## 开发路线图
+
+查看 [ROADMAP.md](ROADMAP.md) 了解项目的未来发展方向和改进计划。
+
 ## 链接
 
 - GitHub: https://github.com/tursom/apk-cache
