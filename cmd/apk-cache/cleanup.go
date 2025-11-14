@@ -58,6 +58,13 @@ func cleanupExpiredCache() {
 				deletedSize += size
 				// 从内存中移除访问时间记录
 				accessTimeTracker.Remove(path)
+				// 从数据完整性管理器中移除哈希记录
+				if dataIntegrityManager != nil {
+					dataIntegrityManager.mu.Lock()
+					delete(dataIntegrityManager.fileHashes, path)
+					delete(dataIntegrityManager.corruptedFiles, path)
+					dataIntegrityManager.mu.Unlock()
+				}
 				// 更新缓存配额统计
 				if cacheQuota != nil {
 					cacheQuota.RemoveFile(size)

@@ -76,3 +76,12 @@ rate = 100.0
 burst = 200.0
 # 豁免限流的路径（逗号分隔）
 exempt_paths = "/_health,/metrics"
+
+# 数据完整性校验配置
+[data_integrity]
+# 数据完整性检查间隔（0 = 禁用数据完整性检查）
+# check_interval = "1h"
+# 是否启用自动修复损坏的文件
+# auto_repair = true
+# 是否启用定期完整性检查
+# periodic_check = true

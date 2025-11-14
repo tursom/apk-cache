@@ -12,12 +12,13 @@ import (
 
 // Config 配置文件结构
 type Config struct {
-	Server      ServerConfig      `toml:"server"`
-	Upstreams   []UpstreamConfig  `toml:"upstreams"`
-	Cache       CacheConfig       `toml:"cache"`
-	Security    SecurityConfig    `toml:"security"`
-	HealthCheck HealthCheckConfig `toml:"health_check"`
-	RateLimit   RateLimitConfig   `toml:"rate_limit"`
+	Server        ServerConfig        `toml:"server"`
+	Upstreams     []UpstreamConfig    `toml:"upstreams"`
+	Cache         CacheConfig         `toml:"cache"`
+	Security      SecurityConfig      `toml:"security"`
+	HealthCheck   HealthCheckConfig   `toml:"health_check"`
+	RateLimit     RateLimitConfig     `toml:"rate_limit"`
+	DataIntegrity DataIntegrityConfig `toml:"data_integrity"`
 }
 
 type ServerConfig struct {
@@ -64,6 +65,13 @@ type RateLimitConfig struct {
 	Rate        float64 `toml:"rate"`
 	Burst       float64 `toml:"burst"`
 	ExemptPaths string  `toml:"exempt_paths"`
+}
+
+// DataIntegrityConfig 数据完整性校验配置
+type DataIntegrityConfig struct {
+	CheckInterval string `toml:"check_interval"`
+	AutoRepair    bool   `toml:"auto_repair"`
+	PeriodicCheck bool   `toml:"periodic_check"`
 }
 
 // LoadConfig 加载配置文件
@@ -206,6 +214,21 @@ func ApplyConfig(config *Config) error {
 	}
 	if config.RateLimit.ExemptPaths != "" && !isFlagSet("rate-limit-exempt-paths") {
 		*rateLimitExemptPaths = config.RateLimit.ExemptPaths
+	}
+
+	// DataIntegrity 配置
+	if config.DataIntegrity.CheckInterval != "" && !isFlagSet("data-integrity-check-interval") {
+		duration, err := time.ParseDuration(config.DataIntegrity.CheckInterval)
+		if err != nil {
+			return errors.New(t("InvalidDataIntegrityCheckInterval", map[string]any{"Error": err}))
+		}
+		*dataIntegrityCheckInterval = duration
+	}
+	if !isFlagSet("data-integrity-auto-repair") {
+		*dataIntegrityAutoRepair = config.DataIntegrity.AutoRepair
+	}
+	if !isFlagSet("data-integrity-periodic-check") {
+		*dataIntegrityPeriodicCheck = config.DataIntegrity.PeriodicCheck
 	}
 
 	return nil

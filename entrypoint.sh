@@ -34,6 +34,11 @@ RATE_LIMIT_RATE=${RATE_LIMIT_RATE:-100}
 RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-200}
 RATE_LIMIT_EXEMPT_PATHS=${RATE_LIMIT_EXEMPT_PATHS:-/_health}
 
+# 新增：数据完整性校验相关环境变量
+DATA_INTEGRITY_CHECK_INTERVAL=${DATA_INTEGRITY_CHECK_INTERVAL:-1h}
+DATA_INTEGRITY_AUTO_REPAIR=${DATA_INTEGRITY_AUTO_REPAIR:-true}
+DATA_INTEGRITY_PERIODIC_CHECK=${DATA_INTEGRITY_PERIODIC_CHECK:-true}
+
 # 构建参数
 ARGS="-addr $ADDR -cache $CACHE_DIR -index-cache $INDEX_CACHE -pkg-cache $PKG_CACHE -cleanup-interval $CLEANUP_INTERVAL"
 
@@ -135,6 +140,22 @@ fi
 # 如果 RATE_LIMIT_EXEMPT_PATHS 不为空，添加 -rate-limit-exempt-paths 参数
 if [ -n "$RATE_LIMIT_EXEMPT_PATHS" ]; then
     ARGS="$ARGS -rate-limit-exempt-paths $RATE_LIMIT_EXEMPT_PATHS"
+fi
+
+# 新增：数据完整性校验相关参数
+# 如果 DATA_INTEGRITY_CHECK_INTERVAL 不为空，添加 -data-integrity-check-interval 参数
+if [ -n "$DATA_INTEGRITY_CHECK_INTERVAL" ]; then
+    ARGS="$ARGS -data-integrity-check-interval $DATA_INTEGRITY_CHECK_INTERVAL"
+fi
+
+# 如果 DATA_INTEGRITY_AUTO_REPAIR 不为空，添加 -data-integrity-auto-repair 参数
+if [ -n "$DATA_INTEGRITY_AUTO_REPAIR" ]; then
+    ARGS="$ARGS -data-integrity-auto-repair $DATA_INTEGRITY_AUTO_REPAIR"
+fi
+
+# 如果 DATA_INTEGRITY_PERIODIC_CHECK 不为空，添加 -data-integrity-periodic-check 参数
+if [ -n "$DATA_INTEGRITY_PERIODIC_CHECK" ]; then
+    ARGS="$ARGS -data-integrity-periodic-check $DATA_INTEGRITY_PERIODIC_CHECK"
 fi
 
 # 启动应用

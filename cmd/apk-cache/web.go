@@ -22,6 +22,10 @@ func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 		serveAdminStats(w, r)
 	case path == "/_admin/clear":
 		handleCacheClear(w, r)
+	case path == "/_admin/data-integrity/check":
+		handleDataIntegrityCheck(w, r)
+	case path == "/_admin/data-integrity/repair":
+		handleDataIntegrityRepair(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -97,6 +101,17 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 		stats["upstream_health"] = upstreamHealth
 	}
 
+	// 添加数据完整性信息
+	if dataIntegrityManager != nil {
+		totalFiles, corruptedFiles, lastCheck := dataIntegrityManager.GetStats()
+		stats["data_integrity"] = map[string]any{
+			"total_files":     totalFiles,
+			"corrupted_files": corruptedFiles,
+			"last_check":      lastCheck,
+			"corrupted_list":  dataIntegrityManager.GetCorruptedFiles(),
+		}
+	}
+
 	json.NewEncoder(w).Encode(stats)
 }
 
@@ -161,4 +176,77 @@ func getDirSize(path string) (int64, error) {
 		return nil
 	})
 	return size, err
+}
+
+// handleDataIntegrityCheck 处理数据完整性检查请求
+func handleDataIntegrityCheck(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if dataIntegrityManager == nil {
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": "Data integrity manager is not enabled",
+		})
+		return
+	}
+
+	checked, corrupted, err := dataIntegrityManager.CheckAllFilesIntegrity()
+	if err != nil {
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":  "error",
+			"message": fmt.Sprintf("Data integrity check failed: %v", err),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":          "success",
+		"message":         "Data integrity check completed",
+		"checked_files":   checked,
+		"corrupted_files": corrupted,
+		"corrupted_list":  dataIntegrityManager.GetCorruptedFiles(),
+	})
+}
+
+// handleDataIntegrityRepair 处理数据完整性修复请求
+func handleDataIntegrityRepair(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if dataIntegrityManager == nil {
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":  "error",
+			"message": "Data integrity manager is not enabled",
+		})
+		return
+	}
+
+	corruptedFiles := dataIntegrityManager.GetCorruptedFiles()
+	repairedCount := 0
+	failedRepairs := make([]string, 0)
+
+	for _, file := range corruptedFiles {
+		if err := dataIntegrityManager.RepairCorruptedFile(file); err != nil {
+			failedRepairs = append(failedRepairs, fmt.Sprintf("%s: %v", file, err))
+		} else {
+			repairedCount++
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":          "success",
+		"message":         "Data integrity repair completed",
+		"repaired_files":  repairedCount,
+		"failed_repairs":  failedRepairs,
+		"total_corrupted": len(corruptedFiles),
+	})
 }

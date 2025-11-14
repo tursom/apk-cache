@@ -35,10 +35,33 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 检查文件缓存是否存在
 	if cacheValid(cacheFile) {
-		log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-		cacheHits.Add(1)
-		serveFromCache(w, r, cacheFile)
-		return
+		// 如果数据完整性校验启用，验证文件完整性
+		if dataIntegrityManager != nil {
+			valid, err := dataIntegrityManager.VerifyFileIntegrity(cacheFile)
+			if err != nil {
+				log.Println(t("FileIntegrityCheckError", map[string]any{
+					"File":  cacheFile,
+					"Error": err,
+				}))
+			} else if !valid {
+				log.Println(t("CacheFileCorrupted", map[string]any{"Path": r.URL.Path}))
+				// 文件损坏，视为缓存未命中
+				cacheMisses.Add(1)
+				// 继续从上游获取
+			} else {
+				// 文件完整，从缓存提供
+				log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
+				cacheHits.Add(1)
+				serveFromCache(w, r, cacheFile)
+				return
+			}
+		} else {
+			// 数据完整性校验未启用，直接从缓存提供
+			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
+			cacheHits.Add(1)
+			serveFromCache(w, r, cacheFile)
+			return
+		}
 	}
 
 	cacheMisses.Add(1)
@@ -323,6 +346,16 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 			}))
 		} else {
 			memoryCache.CacheToMemory(r.URL.Path, responseData, headers, statusCode)
+		}
+	}
+
+	// 记录文件哈希（如果数据完整性校验启用）
+	if dataIntegrityManager != nil && len(responseData) > 0 {
+		if err := dataIntegrityManager.RecordFileHash(cacheFile, responseData); err != nil {
+			log.Println(t("RecordFileHashFailed", map[string]any{
+				"File":  cacheFile,
+				"Error": err,
+			}))
 		}
 	}
 

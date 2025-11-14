@@ -21,6 +21,7 @@
 - 🚀 **内存缓存层**：三级缓存架构（内存 → 文件 → 上游）
 - 🩺 **健康检查**：上游服务器状态监控和自愈机制
 - 🚦 **请求限流**：基于令牌桶算法的请求频率限制
+- 🔍 **数据完整性校验**：文件校验和验证和自动修复
 
 ## 快速开始
 
@@ -102,6 +103,9 @@ RUN apk update && apk add --no-cache curl wget git
 | `-rate-limit-rate` | `100` | 限流速率（每秒请求数） |
 | `-rate-limit-burst` | `200` | 限流突发容量 |
 | `-rate-limit-exempt-paths` | `/_health` | 豁免限流的路径（逗号分隔） |
+| `-data-integrity-check-interval` | `1h` | 数据完整性检查间隔（0 = 禁用） |
+| `-data-integrity-auto-repair` | `true` | 启用损坏文件自动修复 |
+| `-data-integrity-periodic-check` | `true` | 启用定期数据完整性检查 |
 
 ## 配置文件示例
 
@@ -147,6 +151,12 @@ rate = 100             # 限流速率（每秒请求数）
 burst = 200            # 限流突发容量
 exempt_paths = ["/_health"]  # 豁免限流的路径
 
+# 数据完整性校验配置
+[data_integrity]
+check_interval = "1h"        # 数据完整性检查间隔（0 = 禁用）
+auto_repair = true           # 启用损坏文件自动修复
+periodic_check = true        # 启用定期数据完整性检查
+
 [security]
 # admin_user = "admin" # 管理界面用户名（默认：admin）
 # admin_password = "your-secret-password"  # 管理界面密码
@@ -175,6 +185,9 @@ services:
       - RATE_LIMIT_RATE=100
       - RATE_LIMIT_BURST=200
       - RATE_LIMIT_EXEMPT_PATHS=/_health
+      - DATA_INTEGRITY_CHECK_INTERVAL=1h
+      - DATA_INTEGRITY_AUTO_REPAIR=true
+      - DATA_INTEGRITY_PERIODIC_CHECK=true
     restart: unless-stopped
 ```
 
@@ -230,6 +243,12 @@ services:
 - `apk_cache_rate_limit_rejected_total` - 被拒绝的请求数量
 - `apk_cache_rate_limit_tokens_current` - 当前令牌数量
 
+### 数据完整性校验指标
+- `apk_cache_data_integrity_checks_total` - 数据完整性检查次数
+- `apk_cache_data_integrity_corrupted_files_total` - 损坏文件数量
+- `apk_cache_data_integrity_repaired_files_total` - 数据完整性修复次数
+- `apk_cache_data_integrity_check_duration_seconds` - 数据完整性检查耗时
+
 ## 健康检查和自愈机制
 
 ### 工作原理
@@ -258,6 +277,11 @@ APK Cache 实现了完整的健康检查和自愈机制，确保服务的高可�
 - 监控磁盘缓存使用情况
 - 预警缓存配额接近上限
 
+**数据完整性健康检查**：
+- 定期验证缓存文件的完整性
+- 检测损坏或篡改的文件
+- 监控校验和验证状态
+
 #### 2. 自愈机制
 
 当检测到问题时，系统会自动尝试修复：
@@ -276,6 +300,11 @@ APK Cache 实现了完整的健康检查和自愈机制，确保服务的高可�
 - 自动清理过期缓存项
 - 重置内存缓存统计信息
 
+**数据完整性自愈**：
+- 自动修复损坏的缓存文件
+- 重新下载校验和验证失败的文件
+- 清理无法修复的损坏文件
+
 ## 故障排除
 
 ### 常见问题
@@ -287,6 +316,8 @@ APK Cache 实现了完整的健康检查和自愈机制，确保服务的高可�
 **管理界面无法访问**：确保正确访问 `/_admin/` 路径
 
 **健康检查失败**：检查上游服务器可达性和网络连接
+
+**数据完整性错误**：检查磁盘空间和文件系统完整性
 
 ## 许可证
 

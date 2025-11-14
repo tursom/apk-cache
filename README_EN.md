@@ -21,6 +21,7 @@ A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP pro
 - 🚀 **Memory Cache Layer**: Three-tier caching architecture (memory → file → upstream)
 - 🩺 **Health Check**: Upstream server status monitoring and self-healing mechanisms
 - 🚦 **Request Rate Limiting**: Token bucket algorithm for request frequency limiting
+- 🔍 **Data Integrity Verification**: File checksum validation and automatic repair
 
 ## Quick Start
 
@@ -102,6 +103,9 @@ RUN apk update && apk add --no-cache curl wget git
 | `-rate-limit-rate` | `100` | Rate limit (requests per second) |
 | `-rate-limit-burst` | `200` | Rate limit burst capacity |
 | `-rate-limit-exempt-paths` | `/_health` | Paths exempt from rate limiting (comma-separated) |
+| `-data-integrity-check-interval` | `1h` | Data integrity check interval (0 = disabled) |
+| `-data-integrity-auto-repair` | `true` | Enable automatic repair of corrupted files |
+| `-data-integrity-periodic-check` | `true` | Enable periodic data integrity checks |
 
 ## Configuration File Example
 
@@ -147,6 +151,12 @@ rate = 100             # Rate limit (requests per second)
 burst = 200            # Rate limit burst capacity
 exempt_paths = ["/_health"]  # Paths exempt from rate limiting
 
+# Data integrity verification configuration
+[data_integrity]
+check_interval = "1h"        # Data integrity check interval (0 = disabled)
+auto_repair = true           # Enable automatic repair of corrupted files
+periodic_check = true        # Enable periodic data integrity checks
+
 [security]
 # admin_user = "admin" # Management interface username (default: admin)
 # admin_password = "your-secret-password"  # Management interface password
@@ -175,6 +185,9 @@ services:
       - RATE_LIMIT_RATE=100
       - RATE_LIMIT_BURST=200
       - RATE_LIMIT_EXEMPT_PATHS=/_health
+      - DATA_INTEGRITY_CHECK_INTERVAL=1h
+      - DATA_INTEGRITY_AUTO_REPAIR=true
+      - DATA_INTEGRITY_PERIODIC_CHECK=true
     restart: unless-stopped
 ```
 
@@ -230,6 +243,12 @@ Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 - `apk_cache_rate_limit_rejected_total` - Number of rejected requests
 - `apk_cache_rate_limit_tokens_current` - Current token count
 
+### Data Integrity Verification Metrics
+- `apk_cache_data_integrity_checks_total` - Number of data integrity checks
+- `apk_cache_data_integrity_corrupted_files_total` - Number of corrupted files
+- `apk_cache_data_integrity_repaired_files_total` - Number of data integrity repairs
+- `apk_cache_data_integrity_check_duration_seconds` - Data integrity check duration
+
 ## Health Check and Self-Healing Mechanism
 
 ### How It Works
@@ -258,6 +277,11 @@ APK Cache implements a comprehensive health check and self-healing mechanism to 
 - Monitors disk cache usage
 - Alerts when cache quota approaches limits
 
+**Data Integrity Health Check**:
+- Periodically verifies cache file integrity
+- Detects corrupted or tampered files
+- Monitors checksum verification status
+
 #### 2. Self-Healing Mechanism
 
 When issues are detected, the system automatically attempts repairs:
@@ -276,6 +300,11 @@ When issues are detected, the system automatically attempts repairs:
 - Automatically cleans up expired cache items
 - Resets memory cache statistics
 
+**Data Integrity Self-Healing**:
+- Automatically repairs corrupted cache files
+- Re-downloads files with failed checksum verification
+- Cleans up files that cannot be repaired
+
 ## Troubleshooting
 
 ### Common Issues
@@ -287,6 +316,8 @@ When issues are detected, the system automatically attempts repairs:
 **Management Interface Unreachable**: Ensure correct access to `/_admin/` path
 
 **Health Check Failed**: Check upstream server reachability and network connectivity
+
+**Data Integrity Errors**: Check disk space and filesystem integrity
 
 ## License
 

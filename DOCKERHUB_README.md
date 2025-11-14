@@ -49,6 +49,7 @@ services:
 - 💾 **Cache Quota** - Configurable cache size limits
 - 🔒 **File Locking** - Prevent concurrent download conflicts
 - 🚦 **Rate Limiting** - Token bucket algorithm for request limiting
+- 🔍 **Data Integrity** - File checksum validation and automatic repair
 
 ## ⚙️ Configuration
 
@@ -72,6 +73,9 @@ services:
 | `RATE_LIMIT_RATE` | `100` | Rate limit (requests per second) |
 | `RATE_LIMIT_BURST` | `200` | Rate limit burst capacity |
 | `RATE_LIMIT_EXEMPT_PATHS` | `/_health` | Paths exempt from rate limiting |
+| `DATA_INTEGRITY_CHECK_INTERVAL` | `1h` | Data integrity check interval (0 = disabled) |
+| `DATA_INTEGRITY_AUTO_REPAIR` | `true` | Enable automatic repair of corrupted files |
+| `DATA_INTEGRITY_PERIODIC_CHECK` | `true` | Enable periodic data integrity checks |
 
 ### Configure Alpine Linux
 
@@ -116,6 +120,9 @@ Key metrics include:
 - `apk_cache_memory_hits_total` - Memory cache hit count
 - `apk_cache_rate_limit_allowed_total` - Allowed requests count
 - `apk_cache_rate_limit_rejected_total` - Rejected requests count
+- `apk_cache_data_integrity_checks_total` - Data integrity check count
+- `apk_cache_data_integrity_corrupted_files_total` - Corrupted files count
+- `apk_cache_data_integrity_repaired_files_total` - Data integrity repair count
 
 ## 🔧 Advanced Configuration
 
@@ -155,6 +162,11 @@ enabled = true
 rate = 100
 burst = 200
 exempt_paths = ["/_health", "/metrics"]
+
+[data_integrity]
+check_interval = "1h"
+auto_repair = true
+periodic_check = true
 ```
 
 Mount and use the configuration file:
@@ -176,15 +188,18 @@ The container includes comprehensive health monitoring:
 - **Upstream Health Checks**: Automatically detects and avoids unhealthy upstream servers
 - **Filesystem Monitoring**: Verifies cache directory permissions and disk space
 - **Memory Cache Health**: Monitors memory usage and automatically cleans expired items
-- **Self-Healing**: Automatically repairs common issues like directory permissions
+- **Data Integrity Monitoring**: Validates file checksums and detects corruption
+- **Self-Healing**: Automatically repairs common issues like directory permissions and corrupted files
 - **Rate Limiting**: Token bucket algorithm prevents abuse and ensures service stability
 
-## 📈 Performance
+## 📈 Performance & Reliability
 
 - **Memory Cache**: Reduces disk I/O for frequently accessed small files
 - **Concurrent Safety**: File-level locking prevents download conflicts
 - **Smart Caching**: Configurable cache durations and cleanup strategies
 - **Failover Support**: Automatic switch to healthy upstream servers
+- **Data Integrity**: SHA-256 checksum validation ensures file reliability
+- **Self-Healing**: Automatic repair of corrupted files and system issues
 
 ## 🔗 Links
 

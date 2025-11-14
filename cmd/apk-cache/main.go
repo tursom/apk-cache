@@ -96,6 +96,11 @@ var (
 	healthCheckTimeout  = flag.Duration("health-check-timeout", 10*time.Second, "Health check timeout")
 	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
 
+	// 数据完整性校验相关参数
+	dataIntegrityCheckInterval = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
+	dataIntegrityAutoRepair    = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
+	dataIntegrityPeriodicCheck = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
+
 	// 进程启动时间
 	processStartTime = time.Now()
 
@@ -119,6 +124,9 @@ var (
 
 	// 请求限流器
 	rateLimiter *RateLimiter
+
+	// 数据完整性管理器
+	dataIntegrityManager *DataIntegrityManager
 )
 
 // detectLocale 自动检测系统语言
@@ -338,6 +346,31 @@ func main() {
 	// 启动限流指标更新循环
 	if *rateLimitEnabled {
 		go updateRateLimitMetrics()
+	}
+
+	// 初始化数据完整性管理器
+	if *dataIntegrityCheckInterval > 0 {
+		dataIntegrityManager = NewDataIntegrityManager(
+			*dataIntegrityCheckInterval,
+			*dataIntegrityAutoRepair,
+			*dataIntegrityPeriodicCheck,
+		)
+
+		// 初始化现有文件的哈希记录
+		if err := dataIntegrityManager.InitializeExistingFiles(); err != nil {
+			log.Println(t("DataIntegrityInitFailed", map[string]any{"Error": err}))
+		} else {
+			log.Println(t("DataIntegrityEnabled", map[string]any{
+				"Interval": *dataIntegrityCheckInterval,
+				"AutoRepair": *dataIntegrityAutoRepair,
+				"PeriodicCheck": *dataIntegrityPeriodicCheck,
+			}))
+		}
+
+		// 启动定期检查
+		dataIntegrityManager.StartPeriodicCheck()
+	} else {
+		log.Println(t("DataIntegrityDisabled", nil))
 	}
 
 	// 使用自定义 Registry
