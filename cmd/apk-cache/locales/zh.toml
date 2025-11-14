@@ -307,3 +307,13 @@ other = "无效的健康检查超时: {{.Error}}"
 
 [HealthCheckPrometheusEnabled]
 other = "健康检查的 Prometheus 指标已启用"
+
+# 请求限流相关翻译
+[RateLimitEnabled]
+other = "请求限流已启用: {{.Rate}} 请求/秒，突发容量: {{.Burst}}"
+
+[RateLimitDisabled]
+other = "请求限流已禁用"
+
+[RateLimitExceeded]
+other = "请求频率超过限制"

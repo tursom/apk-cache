@@ -65,3 +65,14 @@ max_file_size = "10MB" # 单个文件最大缓存大小
 # timeout = "10s"
 # 是否启用自愈机制
 # enable_self_healing = true
+
+# 请求限流配置
+[rate_limit]
+# 是否启用请求限流
+enabled = false
+# 每秒允许的请求数
+rate = 100.0
+# 突发请求容量
+burst = 200.0
+# 豁免限流的路径（逗号分隔）
+exempt_paths = "/_health,/metrics"

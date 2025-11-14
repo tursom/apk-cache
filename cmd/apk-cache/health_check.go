@@ -292,7 +292,7 @@ func (h *HealthCheckManager) HealthCheckHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"status":     "healthy",
 		"timestamp":  time.Now(),
 		"components": allStatus,

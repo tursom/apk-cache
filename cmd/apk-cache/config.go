@@ -17,6 +17,7 @@ type Config struct {
 	Cache       CacheConfig       `toml:"cache"`
 	Security    SecurityConfig    `toml:"security"`
 	HealthCheck HealthCheckConfig `toml:"health_check"`
+	RateLimit   RateLimitConfig   `toml:"rate_limit"`
 }
 
 type ServerConfig struct {
@@ -55,6 +56,14 @@ type HealthCheckConfig struct {
 	Interval          string `toml:"interval"`
 	Timeout           string `toml:"timeout"`
 	EnableSelfHealing bool   `toml:"enable_self_healing"`
+}
+
+// RateLimitConfig 请求限流配置
+type RateLimitConfig struct {
+	Enabled     bool    `toml:"enabled"`
+	Rate        float64 `toml:"rate"`
+	Burst       float64 `toml:"burst"`
+	ExemptPaths string  `toml:"exempt_paths"`
 }
 
 // LoadConfig 加载配置文件
@@ -183,6 +192,20 @@ func ApplyConfig(config *Config) error {
 	}
 	if !isFlagSet("enable-self-healing") {
 		*enableSelfHealing = config.HealthCheck.EnableSelfHealing
+	}
+
+	// RateLimit 配置
+	if !isFlagSet("rate-limit") {
+		*rateLimitEnabled = config.RateLimit.Enabled
+	}
+	if config.RateLimit.Rate > 0 && !isFlagSet("rate-limit-rate") {
+		*rateLimitRate = config.RateLimit.Rate
+	}
+	if config.RateLimit.Burst > 0 && !isFlagSet("rate-limit-burst") {
+		*rateLimitBurst = config.RateLimit.Burst
+	}
+	if config.RateLimit.ExemptPaths != "" && !isFlagSet("rate-limit-exempt-paths") {
+		*rateLimitExemptPaths = config.RateLimit.ExemptPaths
 	}
 
 	return nil

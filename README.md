@@ -20,6 +20,7 @@
 - 💰 缓存配额管理（支持 LRU/LFU/FIFO 清理策略）
 - 🚀 **内存缓存层**：三级缓存架构（内存 → 文件 → 上游）
 - 🩺 **健康检查**：上游服务器状态监控和自愈机制
+- 🚦 **请求限流**：基于令牌桶算法的请求频率限制
 
 ## 快速开始
 
@@ -97,6 +98,10 @@ RUN apk update && apk add --no-cache curl wget git
 | `-health-check-interval` | `30s` | 健康检查间隔 |
 | `-health-check-timeout` | `10s` | 健康检查超时时间 |
 | `-enable-self-healing` | `true` | 启用自愈机制 |
+| `-rate-limit` | `false` | 启用请求限流 |
+| `-rate-limit-rate` | `100` | 限流速率（每秒请求数） |
+| `-rate-limit-burst` | `200` | 限流突发容量 |
+| `-rate-limit-exempt-paths` | `/_health` | 豁免限流的路径（逗号分隔） |
 
 ## 配置文件示例
 
@@ -135,6 +140,13 @@ interval = "30s"       # 健康检查间隔
 timeout = "10s"        # 健康检查超时时间
 enable_self_healing = true  # 启用自愈机制
 
+# 请求限流配置
+[rate_limit]
+enabled = false        # 启用请求限流
+rate = 100             # 限流速率（每秒请求数）
+burst = 200            # 限流突发容量
+exempt_paths = ["/_health"]  # 豁免限流的路径
+
 [security]
 # admin_user = "admin" # 管理界面用户名（默认：admin）
 # admin_password = "your-secret-password"  # 管理界面密码
@@ -159,6 +171,10 @@ services:
       - MEMORY_CACHE_SIZE=100MB
       - HEALTH_CHECK_INTERVAL=30s
       - ENABLE_SELF_HEALING=true
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_RATE=100
+      - RATE_LIMIT_BURST=200
+      - RATE_LIMIT_EXEMPT_PATHS=/_health
     restart: unless-stopped
 ```
 
@@ -208,6 +224,11 @@ services:
 - `apk_cache_upstream_healthy_count` - 健康上游服务器数量
 - `apk_cache_upstream_total_count` - 总上游服务器数量
 - `apk_cache_upstream_failover_count` - 故障转移次数
+
+### 请求限流指标
+- `apk_cache_rate_limit_allowed_total` - 允许通过的请求数量
+- `apk_cache_rate_limit_rejected_total` - 被拒绝的请求数量
+- `apk_cache_rate_limit_tokens_current` - 当前令牌数量
 
 ## 健康检查和自愈机制
 

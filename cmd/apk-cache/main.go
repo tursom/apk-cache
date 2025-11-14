@@ -44,6 +44,22 @@ var (
 		Name: "apk_cache_download_bytes_total",
 		Help: "Total bytes downloaded from upstream",
 	})
+
+	// 限流相关指标
+	rateLimitAllowed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_rate_limit_allowed_total",
+		Help: "Total number of requests allowed by rate limiter",
+	})
+
+	rateLimitRejected = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_rate_limit_rejected_total",
+		Help: "Total number of requests rejected by rate limiter",
+	})
+
+	rateLimitCurrentTokens = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "apk_cache_rate_limit_current_tokens",
+		Help: "Current number of tokens in the rate limiter bucket",
+	})
 )
 
 var (
@@ -58,16 +74,27 @@ var (
 	adminUser          = flag.String("admin-user", "admin", "Admin dashboard username")
 	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
 	configFile         = flag.String("config", "", "Config file path (optional)")
-	// 新增：缓存配额相关参数
+	// 缓存配额相关参数
 	cacheMaxSize       = flag.String("cache-max-size", "", "Maximum cache size (e.g. 10GB, 1TB, 0 = unlimited)")
 	cacheCleanStrategy = flag.String("cache-clean-strategy", "LRU", "Cache cleanup strategy (LRU, LFU, FIFO)")
 
-	// 新增：内存缓存相关参数
+	// 内存缓存相关参数
 	memoryCacheEnabled     = flag.Bool("memory-cache", false, "Enable memory cache")
 	memoryCacheSize        = flag.String("memory-cache-size", "100MB", "Memory cache size (e.g. 100MB, 1GB)")
 	memoryCacheMaxItems    = flag.Int("memory-cache-max-items", 1000, "Maximum number of items in memory cache")
 	memoryCacheTTL         = flag.Duration("memory-cache-ttl", 30*time.Minute, "Memory cache TTL duration")
 	memoryCacheMaxFileSize = flag.String("memory-cache-max-file-size", "10MB", "Maximum file size to cache in memory (e.g. 1MB, 10MB)")
+
+	// 请求限流相关参数
+	rateLimitEnabled     = flag.Bool("rate-limit", false, "Enable request rate limiting")
+	rateLimitRate        = flag.Float64("rate-limit-rate", 100, "Rate limit requests per second")
+	rateLimitBurst       = flag.Float64("rate-limit-burst", 200, "Rate limit burst capacity")
+	rateLimitExemptPaths = flag.String("rate-limit-exempt-paths", "/_health", "Comma-separated list of paths exempt from rate limiting")
+
+	// 健康检查相关变量
+	healthCheckInterval = flag.Duration("health-check-interval", 30*time.Second, "Health check interval")
+	healthCheckTimeout  = flag.Duration("health-check-timeout", 10*time.Second, "Health check timeout")
+	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
 
 	// 进程启动时间
 	processStartTime = time.Now()
@@ -87,13 +114,11 @@ var (
 	memoryCacheMaxFileSizeBytes int64
 	localizer                   *i18n.Localizer
 
-	// 健康检查相关变量
-	healthCheckInterval = flag.Duration("health-check-interval", 30*time.Second, "Health check interval")
-	healthCheckTimeout  = flag.Duration("health-check-timeout", 10*time.Second, "Health check timeout")
-	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
-
 	// 健康检查管理器
 	healthCheckManager = NewHealthCheckManager()
+
+	// 请求限流器
+	rateLimiter *RateLimiter
 )
 
 // detectLocale 自动检测系统语言
@@ -281,6 +306,20 @@ func main() {
 	registry.MustRegister(cacheHits)
 	registry.MustRegister(cacheMisses)
 	registry.MustRegister(downloadBytes)
+	registry.MustRegister(rateLimitAllowed)
+	registry.MustRegister(rateLimitRejected)
+	registry.MustRegister(rateLimitCurrentTokens)
+
+	// 初始化请求限流器
+	if *rateLimitEnabled {
+		rateLimiter = NewRateLimiter(*rateLimitRate, *rateLimitBurst)
+		log.Println(t("RateLimitEnabled", map[string]any{
+			"Rate":  *rateLimitRate,
+			"Burst": *rateLimitBurst,
+		}))
+	} else {
+		log.Println(t("RateLimitDisabled", nil))
+	}
 
 	// 创建缓存目录
 	if err := os.MkdirAll(*cachePath, 0755); err != nil {
@@ -296,11 +335,18 @@ func main() {
 	// 启动健康检查循环
 	go healthCheckManager.StartHealthCheckLoop()
 
+	// 启动限流指标更新循环
+	if *rateLimitEnabled {
+		go updateRateLimitMetrics()
+	}
+
 	// 使用自定义 Registry
-	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
-	http.HandleFunc("/_admin/", authMiddleware(adminDashboardHandler))
-	http.HandleFunc("/_health", healthCheckManager.HealthCheckHandler)
-	http.HandleFunc("/", proxyHandler)
+	http.HandleFunc("/metrics", rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
+	}))
+	http.HandleFunc("/_admin/", authMiddleware(rateLimitAdminMiddleware(adminDashboardHandler)))
+	http.HandleFunc("/_health", authMiddleware(healthCheckManager.HealthCheckHandler))
+	http.HandleFunc("/", rateLimitMiddleware(proxyHandler))
 
 	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
 	log.Println(t("UpstreamServer", map[string]any{"URL": *upstreamURL}))

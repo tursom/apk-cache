@@ -307,3 +307,13 @@ other = "Invalid health check timeout: {{.Error}}"
 
 [HealthCheckPrometheusEnabled]
 other = "Prometheus metrics enabled for health checks"
+
+# Rate limiting related translations
+[RateLimitEnabled]
+other = "Rate limiting enabled: {{.Rate}} req/s, burst: {{.Burst}}"
+
+[RateLimitDisabled]
+other = "Rate limiting disabled"
+
+[RateLimitExceeded]
+other = "Rate limit exceeded"

@@ -20,6 +20,7 @@ A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP pro
 - 💰 Cache quota management (supports LRU/LFU/FIFO cleanup strategies)
 - 🚀 **Memory Cache Layer**: Three-tier caching architecture (memory → file → upstream)
 - 🩺 **Health Check**: Upstream server status monitoring and self-healing mechanisms
+- 🚦 **Request Rate Limiting**: Token bucket algorithm for request frequency limiting
 
 ## Quick Start
 
@@ -97,6 +98,10 @@ RUN apk update && apk add --no-cache curl wget git
 | `-health-check-interval` | `30s` | Health check interval |
 | `-health-check-timeout` | `10s` | Health check timeout |
 | `-enable-self-healing` | `true` | Enable self-healing mechanisms |
+| `-rate-limit` | `false` | Enable request rate limiting |
+| `-rate-limit-rate` | `100` | Rate limit (requests per second) |
+| `-rate-limit-burst` | `200` | Rate limit burst capacity |
+| `-rate-limit-exempt-paths` | `/_health` | Paths exempt from rate limiting (comma-separated) |
 
 ## Configuration File Example
 
@@ -135,6 +140,13 @@ interval = "30s"       # Health check interval
 timeout = "10s"        # Health check timeout
 enable_self_healing = true  # Enable self-healing mechanisms
 
+# Request rate limiting configuration
+[rate_limit]
+enabled = false        # Enable request rate limiting
+rate = 100             # Rate limit (requests per second)
+burst = 200            # Rate limit burst capacity
+exempt_paths = ["/_health"]  # Paths exempt from rate limiting
+
 [security]
 # admin_user = "admin" # Management interface username (default: admin)
 # admin_password = "your-secret-password"  # Management interface password
@@ -159,6 +171,10 @@ services:
       - MEMORY_CACHE_SIZE=100MB
       - HEALTH_CHECK_INTERVAL=30s
       - ENABLE_SELF_HEALING=true
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_RATE=100
+      - RATE_LIMIT_BURST=200
+      - RATE_LIMIT_EXEMPT_PATHS=/_health
     restart: unless-stopped
 ```
 
@@ -208,6 +224,11 @@ Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 - `apk_cache_upstream_healthy_count` - Number of healthy upstream servers
 - `apk_cache_upstream_total_count` - Total number of upstream servers
 - `apk_cache_upstream_failover_count` - Number of failover events
+
+### Request Rate Limiting Metrics
+- `apk_cache_rate_limit_allowed_total` - Number of allowed requests
+- `apk_cache_rate_limit_rejected_total` - Number of rejected requests
+- `apk_cache_rate_limit_tokens_current` - Current token count
 
 ## Health Check and Self-Healing Mechanism
 

@@ -28,6 +28,12 @@ HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30s}
 HEALTH_CHECK_TIMEOUT=${HEALTH_CHECK_TIMEOUT:-10s}
 ENABLE_SELF_HEALING=${ENABLE_SELF_HEALING:-true}
 
+# 新增：请求限流相关环境变量
+RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-false}
+RATE_LIMIT_RATE=${RATE_LIMIT_RATE:-100}
+RATE_LIMIT_BURST=${RATE_LIMIT_BURST:-200}
+RATE_LIMIT_EXEMPT_PATHS=${RATE_LIMIT_EXEMPT_PATHS:-/_health}
+
 # 构建参数
 ARGS="-addr $ADDR -cache $CACHE_DIR -index-cache $INDEX_CACHE -pkg-cache $PKG_CACHE -cleanup-interval $CLEANUP_INTERVAL"
 
@@ -108,6 +114,27 @@ fi
 # 如果 ENABLE_SELF_HEALING 不为空，添加 -enable-self-healing 参数
 if [ -n "$ENABLE_SELF_HEALING" ]; then
     ARGS="$ARGS -enable-self-healing $ENABLE_SELF_HEALING"
+fi
+
+# 新增：请求限流相关参数
+# 如果 RATE_LIMIT_ENABLED 为 true，添加 -rate-limit 参数
+if [ "$RATE_LIMIT_ENABLED" = "true" ]; then
+    ARGS="$ARGS -rate-limit"
+fi
+
+# 如果 RATE_LIMIT_RATE 不为空，添加 -rate-limit-rate 参数
+if [ -n "$RATE_LIMIT_RATE" ]; then
+    ARGS="$ARGS -rate-limit-rate $RATE_LIMIT_RATE"
+fi
+
+# 如果 RATE_LIMIT_BURST 不为空，添加 -rate-limit-burst 参数
+if [ -n "$RATE_LIMIT_BURST" ]; then
+    ARGS="$ARGS -rate-limit-burst $RATE_LIMIT_BURST"
+fi
+
+# 如果 RATE_LIMIT_EXEMPT_PATHS 不为空，添加 -rate-limit-exempt-paths 参数
+if [ -n "$RATE_LIMIT_EXEMPT_PATHS" ]; then
+    ARGS="$ARGS -rate-limit-exempt-paths $RATE_LIMIT_EXEMPT_PATHS"
 fi
 
 # 启动应用

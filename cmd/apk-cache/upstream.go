@@ -82,11 +82,11 @@ func (u *UpstreamServer) IsHealthy() bool {
 }
 
 // GetHealthStatus 获取详细的健康状态信息
-func (u *UpstreamServer) GetHealthStatus() map[string]interface{} {
+func (u *UpstreamServer) GetHealthStatus() map[string]any {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 
-	return map[string]interface{}{
+	return map[string]any{
 		"healthy":       u.isHealthy,
 		"last_check":    u.lastHealthCheck,
 		"last_error":    u.lastError,

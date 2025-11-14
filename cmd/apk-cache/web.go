@@ -43,7 +43,7 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 	// 计算缓存大小
 	cacheSize, _ := getDirSize(*cachePath)
 
-	stats := map[string]interface{}{
+	stats := map[string]any{
 		"cache_hits":           int64(cacheHitsVal),
 		"cache_misses":         int64(cacheMissesVal),
 		"download_bytes":       int64(downloadBytesVal),
@@ -84,10 +84,10 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 		stats["overall_health"] = overallHealthy
 
 		// 添加上游服务器健康状态
-		upstreamHealth := make(map[string]interface{})
+		upstreamHealth := make(map[string]any)
 		servers := upstreamManager.GetAllServers()
 		for i, server := range servers {
-			upstreamHealth[fmt.Sprintf("upstream_%d", i)] = map[string]interface{}{
+			upstreamHealth[fmt.Sprintf("upstream_%d", i)] = map[string]any{
 				"url":    server.GetURL(),
 				"proxy":  server.GetProxy(),
 				"name":   server.GetName(),

@@ -48,6 +48,7 @@ services:
 - 📊 **Monitoring** - Prometheus metrics and web dashboard
 - 💾 **Cache Quota** - Configurable cache size limits
 - 🔒 **File Locking** - Prevent concurrent download conflicts
+- 🚦 **Rate Limiting** - Token bucket algorithm for request limiting
 
 ## ⚙️ Configuration
 
@@ -67,6 +68,10 @@ services:
 | `MEMORY_CACHE_MAX_ITEMS` | `1000` | Maximum items in memory cache |
 | `HEALTH_CHECK_INTERVAL` | `30s` | Health check interval |
 | `ENABLE_SELF_HEALING` | `true` | Enable self-healing mechanisms |
+| `RATE_LIMIT_ENABLED` | `false` | Enable request rate limiting |
+| `RATE_LIMIT_RATE` | `100` | Rate limit (requests per second) |
+| `RATE_LIMIT_BURST` | `200` | Rate limit burst capacity |
+| `RATE_LIMIT_EXEMPT_PATHS` | `/_health` | Paths exempt from rate limiting |
 
 ### Configure Alpine Linux
 
@@ -109,6 +114,8 @@ Key metrics include:
 - `apk_cache_misses_total` - Cache miss count
 - `apk_cache_health_status` - Component health status
 - `apk_cache_memory_hits_total` - Memory cache hit count
+- `apk_cache_rate_limit_allowed_total` - Allowed requests count
+- `apk_cache_rate_limit_rejected_total` - Rejected requests count
 
 ## 🔧 Advanced Configuration
 
@@ -142,6 +149,12 @@ max_file_size = "10MB"
 interval = "30s"
 timeout = "10s"
 enable_self_healing = true
+
+[rate_limit]
+enabled = true
+rate = 100
+burst = 200
+exempt_paths = ["/_health", "/metrics"]
 ```
 
 Mount and use the configuration file:
@@ -164,6 +177,7 @@ The container includes comprehensive health monitoring:
 - **Filesystem Monitoring**: Verifies cache directory permissions and disk space
 - **Memory Cache Health**: Monitors memory usage and automatically cleans expired items
 - **Self-Healing**: Automatically repairs common issues like directory permissions
+- **Rate Limiting**: Token bucket algorithm prevents abuse and ensures service stability
 
 ## 📈 Performance
 
