@@ -181,3 +181,22 @@ other = "Cache quota insufficient, rejected caching file: {{.File}} ({{.Size}} b
 
 [GetFileSizeFailed]
 other = "Failed to get file size: {{.Error}}"
+
+# New config validation translations
+[InvalidServerAddr]
+other = "Invalid server address {{.Addr}}: must contain port"
+
+[UnsupportedLocale]
+other = "Unsupported locale: {{.Locale}}"
+
+[UpstreamURLRequired]
+other = "Upstream URL is required for upstream server #{{.Index}}"
+
+[InvalidUpstreamURL]
+other = "Invalid upstream URL {{.URL}}: must start with http:// or https://"
+
+[InvalidCacheDir]
+other = "Invalid cache directory {{.Dir}}: cannot contain '..'"
+
+[UnsupportedCleanStrategy]
+other = "Unsupported cache cleanup strategy: {{.Strategy}}"

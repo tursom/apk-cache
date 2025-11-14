@@ -181,3 +181,22 @@ other = "缓存配额不足，拒绝缓存文件: {{.File}} ({{.Size}} 字节)"
 
 [GetFileSizeFailed]
 other = "获取文件大小失败: {{.Error}}"
+
+# 新增配置验证相关翻译
+[InvalidServerAddr]
+other = "无效的服务器地址 {{.Addr}}: 必须包含端口"
+
+[UnsupportedLocale]
+other = "不支持的语言设置: {{.Locale}}"
+
+[UpstreamURLRequired]
+other = "上游服务器 #{{.Index}} 必须提供 URL"
+
+[InvalidUpstreamURL]
+other = "无效的上游服务器 URL {{.URL}}: 必须以 http:// 或 https:// 开头"
+
+[InvalidCacheDir]
+other = "无效的缓存目录 {{.Dir}}: 不能包含 '..'"
+
+[UnsupportedCleanStrategy]
+other = "不支持的缓存清理策略: {{.Strategy}}"

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -38,6 +39,7 @@ type CacheConfig struct {
 }
 
 type SecurityConfig struct {
+	AdminUser     string `toml:"admin_user"`
 	AdminPassword string `toml:"admin_password"`
 }
 
@@ -51,6 +53,11 @@ func LoadConfig(path string) (*Config, error) {
 	var config Config
 	if _, err := toml.DecodeFile(path, &config); err != nil {
 		return nil, errors.New(t("ParseConfigFailed", map[string]any{"Error": err}))
+	}
+
+	// 验证配置
+	if err := validateConfig(&config); err != nil {
+		return nil, err
 	}
 
 	return &config, nil
@@ -71,8 +78,8 @@ func ApplyConfig(config *Config) error {
 	}
 
 	// Upstreams 配置
-	if len(config.Upstreams) > 0 {
-		// 从配置文件加载上游服务器列表
+	if len(config.Upstreams) > 0 && !isFlagSet("upstream") {
+		// 从配置文件加载上游服务器列表（仅在命令行未指定时）
 		upstreamServers = make([]UpstreamServer, len(config.Upstreams))
 		for i, upstream := range config.Upstreams {
 			upstreamServers[i] = UpstreamServer{
@@ -81,9 +88,15 @@ func ApplyConfig(config *Config) error {
 				Name:  upstream.Name,
 			}
 		}
-	} else if !isFlagSet("upstream") {
-		// 如果配置文件中没有 upstreams，但有旧的 upstream 字段（向后兼容）
-		// 使用默认的命令行参数值
+	} else if len(upstreamServers) == 0 && !isFlagSet("upstream") {
+		// 如果配置文件中没有 upstreams，也没有命令行参数，使用默认值
+		upstreamServers = []UpstreamServer{
+			{
+				URL:   *upstreamURL,
+				Proxy: *proxyURL,
+				Name:  "default",
+			},
+		}
 	}
 
 	// Cache 配置
@@ -120,6 +133,9 @@ func ApplyConfig(config *Config) error {
 	}
 
 	// Security 配置
+	if config.Security.AdminUser != "" && !isFlagSet("admin-user") {
+		*adminUser = config.Security.AdminUser
+	}
 	if config.Security.AdminPassword != "" && !isFlagSet("admin-password") {
 		*adminPassword = config.Security.AdminPassword
 	}
@@ -136,4 +152,75 @@ func isFlagSet(name string) bool {
 		}
 	})
 	return found
+}
+
+// validateConfig 验证配置的有效性
+func validateConfig(config *Config) error {
+	// 验证服务器配置
+	if config.Server.Addr != "" {
+		if !strings.Contains(config.Server.Addr, ":") {
+			return errors.New(t("InvalidServerAddr", map[string]any{"Addr": config.Server.Addr}))
+		}
+	}
+
+	// 验证语言设置
+	if config.Server.Locale != "" {
+		supportedLocales := map[string]bool{
+			"en": true,
+			"zh": true,
+			"":   true,
+		}
+		if !supportedLocales[config.Server.Locale] {
+			return errors.New(t("UnsupportedLocale", map[string]any{"Locale": config.Server.Locale}))
+		}
+	}
+
+	// 验证上游服务器配置
+	for i, upstream := range config.Upstreams {
+		if upstream.URL == "" {
+			return errors.New(t("UpstreamURLRequired", map[string]any{"Index": i}))
+		}
+		if !strings.HasPrefix(upstream.URL, "http://") && !strings.HasPrefix(upstream.URL, "https://") {
+			return errors.New(t("InvalidUpstreamURL", map[string]any{"URL": upstream.URL}))
+		}
+	}
+
+	// 验证缓存配置
+	if config.Cache.Dir != "" {
+		if strings.Contains(config.Cache.Dir, "..") {
+			return errors.New(t("InvalidCacheDir", map[string]any{"Dir": config.Cache.Dir}))
+		}
+	}
+
+	// 验证缓存持续时间
+	if config.Cache.IndexDuration != "" {
+		if _, err := time.ParseDuration(config.Cache.IndexDuration); err != nil {
+			return errors.New(t("InvalidIndexDuration", map[string]any{"Error": err}))
+		}
+	}
+	if config.Cache.PkgDuration != "" {
+		if _, err := time.ParseDuration(config.Cache.PkgDuration); err != nil {
+			return errors.New(t("InvalidPkgDuration", map[string]any{"Error": err}))
+		}
+	}
+	if config.Cache.CleanupInterval != "" {
+		if _, err := time.ParseDuration(config.Cache.CleanupInterval); err != nil {
+			return errors.New(t("InvalidCleanupInterval", map[string]any{"Error": err}))
+		}
+	}
+
+	// 验证缓存清理策略
+	if config.Cache.CleanStrategy != "" {
+		supportedStrategies := map[string]bool{
+			"LRU":  true,
+			"LFU":  true,
+			"FIFO": true,
+			"":     true,
+		}
+		if !supportedStrategies[strings.ToUpper(config.Cache.CleanStrategy)] {
+			return errors.New(t("UnsupportedCleanStrategy", map[string]any{"Strategy": config.Cache.CleanStrategy}))
+		}
+	}
+
+	return nil
 }

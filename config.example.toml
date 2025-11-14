@@ -39,7 +39,13 @@ index_duration = "24h"
 pkg_duration = "0"
 # 自动清理间隔（0 = 禁用自动清理）
 cleanup_interval = "1h"
+# 最大缓存大小（如 "10GB", "1TB", "0" = 无限制）
+max_size = "0"
+# 缓存清理策略（LRU = 最近最少使用, LFU = 最不经常使用, FIFO = 先进先出）
+clean_strategy = "LRU"
 
 [security]
+# 管理界面用户名（默认：admin）
+# admin_user = "admin"
 # 管理界面密码（留空则无需认证）
 # admin_password = "your-secret-password"
