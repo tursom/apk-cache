@@ -19,6 +19,7 @@ A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP pro
 - 🎛️ Web management interface
 - 💰 Cache quota management (supports LRU/LFU/FIFO cleanup strategies)
 - 🚀 **Memory Cache Layer**: Three-tier caching architecture (memory → file → upstream)
+- 🩺 **Health Check**: Upstream server status monitoring and self-healing mechanisms
 
 ## Quick Start
 
@@ -88,10 +89,14 @@ RUN apk update && apk add --no-cache curl wget git
 | `-pkg-cache` | `0` | Package file cache duration (0 = never expire) |
 | `-cache-max-size` | (empty) | Maximum cache size (e.g., `10GB`, `1TB`) |
 | `-cache-clean-strategy` | `LRU` | Cache cleanup strategy (`LRU`/`LFU`/`FIFO`) |
-| `-memory-cache-enabled` | `true` | Enable memory cache |
-| `-memory-cache-max-size` | `100MB` | Maximum memory cache size |
-| `-memory-cache-ttl` | `1h` | Memory cache item expiration time |
+| `-memory-cache` | `false` | Enable memory cache |
+| `-memory-cache-size` | `100MB` | Memory cache size |
+| `-memory-cache-max-items` | `1000` | Maximum number of items in memory cache |
+| `-memory-cache-ttl` | `30m` | Memory cache item expiration time |
 | `-memory-cache-max-file-size` | `10MB` | Maximum file size for memory caching |
+| `-health-check-interval` | `30s` | Health check interval |
+| `-health-check-timeout` | `10s` | Health check timeout |
+| `-enable-self-healing` | `true` | Enable self-healing mechanisms |
 
 ## Configuration File Example
 
@@ -120,8 +125,15 @@ clean_strategy = "LRU" # Cleanup strategy (`LRU`/`LFU`/`FIFO`)
 [memory_cache]
 enabled = true
 max_size = "100MB"     # Maximum memory cache size
-ttl = "1h"             # Memory cache item expiration time
+max_items = 1000       # Maximum number of items in memory cache
+ttl = "30m"            # Memory cache item expiration time
 max_file_size = "10MB" # Maximum file size for memory caching
+
+# Health check configuration
+[health_check]
+interval = "30s"       # Health check interval
+timeout = "10s"        # Health check timeout
+enable_self_healing = true  # Enable self-healing mechanisms
 
 [security]
 # admin_user = "admin" # Management interface username (default: admin)
@@ -143,6 +155,10 @@ services:
       - ADDR=:3142
       - CACHE_DIR=/app/cache
       - INDEX_CACHE=24h
+      - MEMORY_CACHE_ENABLED=true
+      - MEMORY_CACHE_SIZE=100MB
+      - HEALTH_CHECK_INTERVAL=30s
+      - ENABLE_SELF_HEALING=true
     restart: unless-stopped
 ```
 
@@ -159,14 +175,85 @@ Visit `http://your-server:3142/_admin/` to view:
 
 Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 
+### Cache Performance Metrics
 - `apk_cache_hits_total` - Cache hit count
 - `apk_cache_misses_total` - Cache miss count
 - `apk_cache_download_bytes_total` - Total download bytes
+
+### Memory Cache Metrics
 - `apk_cache_memory_hits_total` - Memory cache hit count
 - `apk_cache_memory_misses_total` - Memory cache miss count
 - `apk_cache_memory_size_bytes` - Current memory cache size
 - `apk_cache_memory_items_total` - Memory cache item count
 - `apk_cache_memory_evictions_total` - Memory cache eviction count
+
+### Health Check Metrics
+- `apk_cache_health_status` - Component health status (1=healthy, 0=unhealthy)
+  - `component="upstream"` - Upstream server health status
+  - `component="filesystem"` - Filesystem health status
+  - `component="memory_cache"` - Memory cache health status
+  - `component="cache_quota"` - Cache quota health status
+- `apk_cache_health_check_duration_seconds` - Health check duration
+  - `component="upstream"` - Upstream server check duration
+  - `component="filesystem"` - Filesystem check duration
+  - `component="memory_cache"` - Memory cache check duration
+  - `component="cache_quota"` - Cache quota check duration
+- `apk_cache_health_check_errors_total` - Health check error count
+  - `component="upstream"` - Upstream server check errors
+  - `component="filesystem"` - Filesystem check errors
+  - `component="memory_cache"` - Memory cache check errors
+  - `component="cache_quota"` - Cache quota check errors
+
+### Upstream Server Metrics
+- `apk_cache_upstream_healthy_count` - Number of healthy upstream servers
+- `apk_cache_upstream_total_count` - Total number of upstream servers
+- `apk_cache_upstream_failover_count` - Number of failover events
+
+## Health Check and Self-Healing Mechanism
+
+### How It Works
+
+APK Cache implements a comprehensive health check and self-healing mechanism to ensure high service availability:
+
+#### 1. Health Check Components
+
+**Upstream Server Health Check**:
+- Periodically checks availability of all upstream servers
+- Tests multiple paths using HEAD requests (root directory, Alpine mirror directories, index files, etc.)
+- Supports failover, automatically switching to healthy upstream servers
+- Configurable check interval and timeout
+
+**Filesystem Health Check**:
+- Verifies cache directory existence and writability
+- Monitors disk space usage
+- Automatically repairs directory permission issues
+
+**Memory Cache Health Check**:
+- Monitors memory usage and cache item count
+- Detects when memory cache approaches capacity limits
+- Automatically cleans up expired cache items
+
+**Cache Quota Health Check**:
+- Monitors disk cache usage
+- Alerts when cache quota approaches limits
+
+#### 2. Self-Healing Mechanism
+
+When issues are detected, the system automatically attempts repairs:
+
+**Upstream Server Self-Healing**:
+- Automatically retries connections to failed upstream servers
+- Resets health status counters
+- Supports automatic recovery of failed servers
+
+**Filesystem Self-Healing**:
+- Automatically repairs cache directory permissions
+- Recreates necessary subdirectory structures
+- Cleans up corrupted temporary files
+
+**Memory Cache Self-Healing**:
+- Automatically cleans up expired cache items
+- Resets memory cache statistics
 
 ## Troubleshooting
 
@@ -177,6 +264,8 @@ Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 **Proxy Connection Failed**: Verify proxy address format and availability (supports SOCKS5/HTTP protocols)
 
 **Management Interface Unreachable**: Ensure correct access to `/_admin/` path
+
+**Health Check Failed**: Check upstream server reachability and network connectivity
 
 ## License
 

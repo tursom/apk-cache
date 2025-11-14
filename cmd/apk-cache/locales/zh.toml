@@ -240,3 +240,70 @@ other = "无效的内存缓存最大文件大小: {{.Error}}"
 
 [MemoryCacheFileTooLarge]
 other = "文件过大，无法缓存到内存: {{.Path}} ({{.Size}} 字节，最大 {{.Max}} 字节)"
+
+# 健康检查相关翻译
+[HealthCheckEnabled]
+other = "健康检查已启用: 间隔 {{.Interval}}, 超时 {{.Timeout}}"
+
+[HealthCheckDisabled]
+other = "健康检查已禁用"
+
+[HealthCheckStarted]
+other = "健康检查已启动"
+
+[HealthCheckStopped]
+other = "健康检查已停止"
+
+[HealthCheckComponentHealthy]
+other = "组件 {{.Component}} 健康"
+
+[HealthCheckComponentUnhealthy]
+other = "组件 {{.Component}} 不健康: {{.Error}}"
+
+[HealthCheckUpstreamHealthy]
+other = "上游服务器 {{.URL}} 健康"
+
+[HealthCheckUpstreamUnhealthy]
+other = "上游服务器 {{.URL}} 不健康: {{.Error}}"
+
+[HealthCheckFileSystemHealthy]
+other = "文件系统健康: {{.Free}} 可用，{{.Used}} 已用"
+
+[HealthCheckFileSystemUnhealthy]
+other = "文件系统不健康: {{.Error}}"
+
+[HealthCheckMemoryCacheHealthy]
+other = "内存缓存健康: {{.Items}} 个项目，{{.Size}} 字节"
+
+[HealthCheckMemoryCacheUnhealthy]
+other = "内存缓存不健康: {{.Error}}"
+
+[HealthCheckCacheQuotaHealthy]
+other = "缓存配额健康: {{.Used}}/{{.Max}} 字节"
+
+[HealthCheckCacheQuotaUnhealthy]
+other = "缓存配额不健康: {{.Error}}"
+
+[HealthCheckSelfHealingTriggered]
+other = "组件 {{.Component}} 触发自愈机制: {{.Action}}"
+
+[HealthCheckSelfHealingCompleted]
+other = "组件 {{.Component}} 自愈完成"
+
+[HealthCheckSelfHealingFailed]
+other = "组件 {{.Component}} 自愈失败: {{.Error}}"
+
+[HealthCheckSystemHealthy]
+other = "系统健康"
+
+[HealthCheckSystemUnhealthy]
+other = "系统不健康: {{.Error}}"
+
+[HealthCheckInvalidInterval]
+other = "无效的健康检查间隔: {{.Error}}"
+
+[HealthCheckInvalidTimeout]
+other = "无效的健康检查超时: {{.Error}}"
+
+[HealthCheckPrometheusEnabled]
+other = "健康检查的 Prometheus 指标已启用"

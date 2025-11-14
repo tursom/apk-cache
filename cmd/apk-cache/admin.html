@@ -117,6 +117,12 @@
         </header>
 
         <div class="stats" id="stats">
+            <!-- 健康状态卡片 -->
+            <div class="stat-card" id="health-status-card">
+                <h3>System Health</h3>
+                <div class="value" id="health-status">-</div>
+                <div class="label" id="health-label">Overall status</div>
+            </div>
             <div class="stat-card">
                 <h3>Cache Hits</h3>
                 <div class="value" id="cache-hits">-</div>
@@ -193,6 +199,14 @@
                 <span class="info-value" id="proxy">-</span>
             </div>
         </div>
+
+        <!-- 上游服务器健康状态 -->
+        <div class="info" id="upstream-health-section" style="display: none;">
+            <h2 style="margin-bottom: 15px;">Upstream Server Health</h2>
+            <div id="upstream-health-list">
+                <!-- 上游服务器健康状态将在这里动态生成 -->
+            </div>
+        </div>
     </div>
 
     <script>
@@ -210,6 +224,9 @@
             fetch('/_admin/stats')
                 .then(response => response.json())
                 .then(data => {
+                    // 更新健康状态
+                    updateHealthStatus(data);
+                    
                     document.getElementById('cache-hits').textContent = data.cache_hits.toLocaleString();
                     document.getElementById('cache-misses').textContent = data.cache_misses.toLocaleString();
                     
@@ -230,6 +247,9 @@
                     document.getElementById('cleanup-interval').textContent = data.cleanup_interval === '0s' ? 'Disabled' : data.cleanup_interval;
                     document.getElementById('proxy').textContent = data.proxy || 'None';
                     
+                    // 更新上游服务器健康状态
+                    updateUpstreamHealth(data);
+                    
                     document.getElementById('loading').style.display = 'none';
                 })
                 .catch(error => {
@@ -237,6 +257,91 @@
                     document.getElementById('loading').style.display = 'none';
                     alert('Failed to fetch stats');
                 });
+        }
+
+        function updateUpstreamHealth(data) {
+            const upstreamHealthSection = document.getElementById('upstream-health-section');
+            const upstreamHealthList = document.getElementById('upstream-health-list');
+            
+            if (data.upstream_health && Object.keys(data.upstream_health).length > 0) {
+                upstreamHealthSection.style.display = 'block';
+                upstreamHealthList.innerHTML = '';
+                
+                for (const [key, upstream] of Object.entries(data.upstream_health)) {
+                    const healthRow = document.createElement('div');
+                    healthRow.className = 'info-row';
+                    
+                    const healthEmoji = upstream.health ? '✅' : '❌';
+                    const healthText = upstream.health ? 'Healthy' : 'Unhealthy';
+                    const healthColor = upstream.health ? '#28a745' : '#dc3545';
+                    
+                    healthRow.innerHTML = `
+                        <span class="info-label">
+                            ${healthEmoji} ${upstream.name || upstream.url}
+                        </span>
+                        <span class="info-value" style="color: ${healthColor};">
+                            ${healthText}
+                        </span>
+                    `;
+                    
+                    // 添加悬停提示显示详细信息
+                    healthRow.title = `URL: ${upstream.url}\nProxy: ${upstream.proxy || 'None'}`;
+                    
+                    upstreamHealthList.appendChild(healthRow);
+                }
+            } else {
+                upstreamHealthSection.style.display = 'none';
+            }
+        }
+
+        function updateHealthStatus(data) {
+            const healthCard = document.getElementById('health-status-card');
+            const healthStatus = document.getElementById('health-status');
+            const healthLabel = document.getElementById('health-label');
+            
+            if (data.health_status) {
+                const overallHealthy = data.overall_health;
+                const healthData = data.health_status;
+                
+                if (overallHealthy) {
+                    healthStatus.textContent = '✅ Healthy';
+                    healthStatus.style.color = '#28a745';
+                    healthLabel.textContent = 'All systems operational';
+                    healthCard.style.borderLeft = '4px solid #28a745';
+                } else {
+                    healthStatus.textContent = '❌ Unhealthy';
+                    healthStatus.style.color = '#dc3545';
+                    healthLabel.textContent = 'Some components have issues';
+                    healthCard.style.borderLeft = '4px solid #dc3545';
+                }
+                
+                // 添加悬停显示详细健康信息
+                healthCard.title = getHealthDetails(healthData);
+            } else {
+                healthStatus.textContent = '❓ Unknown';
+                healthStatus.style.color = '#6c757d';
+                healthLabel.textContent = 'Health check not available';
+                healthCard.style.borderLeft = '4px solid #6c757d';
+            }
+        }
+
+        function getHealthDetails(healthData) {
+            let details = 'Component Health Status:\n\n';
+            for (const [component, status] of Object.entries(healthData)) {
+                let emoji = '❓';
+                if (status.status === 'healthy') emoji = '✅';
+                else if (status.status === 'degraded') emoji = '⚠️';
+                else if (status.status === 'unhealthy') emoji = '❌';
+                else if (status.status === 'disabled') emoji = '⚫';
+                
+                const lastCheck = new Date(status.last_check).toLocaleString();
+                details += `${emoji} ${component}: ${status.status}\n`;
+                if (status.error) {
+                    details += `   Error: ${status.error}\n`;
+                }
+                details += `   Last check: ${lastCheck}\n\n`;
+            }
+            return details;
         }
 
         function openMetrics() {

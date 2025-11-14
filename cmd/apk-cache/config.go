@@ -12,10 +12,11 @@ import (
 
 // Config 配置文件结构
 type Config struct {
-	Server    ServerConfig     `toml:"server"`
-	Upstreams []UpstreamConfig `toml:"upstreams"`
-	Cache     CacheConfig      `toml:"cache"`
-	Security  SecurityConfig   `toml:"security"`
+	Server      ServerConfig      `toml:"server"`
+	Upstreams   []UpstreamConfig  `toml:"upstreams"`
+	Cache       CacheConfig       `toml:"cache"`
+	Security    SecurityConfig    `toml:"security"`
+	HealthCheck HealthCheckConfig `toml:"health_check"`
 }
 
 type ServerConfig struct {
@@ -37,16 +38,23 @@ type CacheConfig struct {
 	MaxSize         string `toml:"max_size"`       // 新增：最大缓存大小（如 "10GB", "1TB"）
 	CleanStrategy   string `toml:"clean_strategy"` // 新增：清理策略（"LRU", "LFU", "FIFO"）
 	// 新增：内存缓存配置
-	MemoryCacheEnabled      bool   `toml:"memory_cache_enabled"`
-	MemoryCacheSize         string `toml:"memory_cache_size"`
-	MemoryCacheMaxItems     int    `toml:"memory_cache_max_items"`
-	MemoryCacheTTL          string `toml:"memory_cache_ttl"`
-	MemoryCacheMaxFileSize  string `toml:"memory_cache_max_file_size"`
+	MemoryCacheEnabled     bool   `toml:"memory_cache_enabled"`
+	MemoryCacheSize        string `toml:"memory_cache_size"`
+	MemoryCacheMaxItems    int    `toml:"memory_cache_max_items"`
+	MemoryCacheTTL         string `toml:"memory_cache_ttl"`
+	MemoryCacheMaxFileSize string `toml:"memory_cache_max_file_size"`
 }
 
 type SecurityConfig struct {
 	AdminUser     string `toml:"admin_user"`
 	AdminPassword string `toml:"admin_password"`
+}
+
+// HealthCheckConfig 健康检查配置
+type HealthCheckConfig struct {
+	Interval          string `toml:"interval"`
+	Timeout           string `toml:"timeout"`
+	EnableSelfHealing bool   `toml:"enable_self_healing"`
 }
 
 // LoadConfig 加载配置文件
@@ -86,23 +94,14 @@ func ApplyConfig(config *Config) error {
 	// Upstreams 配置
 	if len(config.Upstreams) > 0 && !isFlagSet("upstream") {
 		// 从配置文件加载上游服务器列表（仅在命令行未指定时）
-		upstreamServers = make([]UpstreamServer, len(config.Upstreams))
-		for i, upstream := range config.Upstreams {
-			upstreamServers[i] = UpstreamServer{
-				URL:   upstream.URL,
-				Proxy: upstream.Proxy,
-				Name:  upstream.Name,
-			}
+		for _, upstream := range config.Upstreams {
+			server := NewUpstreamServer(upstream.URL, upstream.Proxy, upstream.Name)
+			upstreamManager.AddServer(server)
 		}
-	} else if len(upstreamServers) == 0 && !isFlagSet("upstream") {
+	} else if upstreamManager.GetServerCount() == 0 && !isFlagSet("upstream") {
 		// 如果配置文件中没有 upstreams，也没有命令行参数，使用默认值
-		upstreamServers = []UpstreamServer{
-			{
-				URL:   *upstreamURL,
-				Proxy: *proxyURL,
-				Name:  "default",
-			},
-		}
+		server := NewUpstreamServer(*upstreamURL, *proxyURL, "default")
+		upstreamManager.AddServer(server)
 	}
 
 	// Cache 配置
@@ -165,6 +164,25 @@ func ApplyConfig(config *Config) error {
 	}
 	if config.Security.AdminPassword != "" && !isFlagSet("admin-password") {
 		*adminPassword = config.Security.AdminPassword
+	}
+
+	// HealthCheck 配置
+	if config.HealthCheck.Interval != "" && !isFlagSet("health-check-interval") {
+		duration, err := time.ParseDuration(config.HealthCheck.Interval)
+		if err != nil {
+			return errors.New(t("InvalidHealthCheckInterval", map[string]any{"Error": err}))
+		}
+		*healthCheckInterval = duration
+	}
+	if config.HealthCheck.Timeout != "" && !isFlagSet("health-check-timeout") {
+		duration, err := time.ParseDuration(config.HealthCheck.Timeout)
+		if err != nil {
+			return errors.New(t("InvalidHealthCheckTimeout", map[string]any{"Error": err}))
+		}
+		*healthCheckTimeout = duration
+	}
+	if !isFlagSet("enable-self-healing") {
+		*enableSelfHealing = config.HealthCheck.EnableSelfHealing
 	}
 
 	return nil

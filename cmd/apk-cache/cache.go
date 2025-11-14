@@ -144,49 +144,12 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 }
 
 func fetchFromUpstream(urlPath string) (*http.Response, error) {
-	var lastErr error
-
-	// 尝试所有上游服务器，直到成功或全部失败
-	for i, upstream := range upstreamServers {
-		client := createHTTPClientForUpstream(upstream.Proxy)
-		url := upstream.URL + urlPath
-
-		resp, err := client.Get(url)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			if i > 0 {
-				serverName := upstream.Name
-				if serverName == "" {
-					serverName = upstream.URL
-				}
-				log.Println(t("FallbackUpstream", map[string]any{
-					"Index": i + 1,
-					"Name":  serverName,
-				}))
-			}
-			return resp, nil
-		}
-
-		// 记录错误并尝试下一个服务器
-		if err != nil {
-			lastErr = err
-			log.Println(t("UpstreamFailed", map[string]any{
-				"URL":   upstream.URL,
-				"Error": err,
-			}))
-		} else {
-			lastErr = errors.New(t("UpstreamReturnedStatusCode", map[string]any{"Status": resp.StatusCode}))
-			log.Println(t("UpstreamStatusError", map[string]any{
-				"URL":    upstream.URL,
-				"Status": resp.StatusCode,
-			}))
-			resp.Body.Close()
-		}
+	// 使用上游管理器获取响应
+	resp, err := upstreamManager.FetchFromUpstream(urlPath)
+	if err != nil {
+		return nil, err
 	}
-
-	if lastErr == nil {
-		lastErr = errors.New(t("NoAvailableUpstream", nil))
-	}
-	return nil, lastErr
+	return resp, nil
 }
 
 // createHTTPClientForUpstream 为指定的代理创建 HTTP 客户端
@@ -350,7 +313,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 	}
 
 	// 将数据存入内存缓存（仅在成功写入文件缓存且内存缓存启用时）
-	if memoryCache != nil && cacheErr == nil && clientErr == nil && len(responseData) > 0 {
+	if memoryCache != nil && len(responseData) > 0 {
 		// 检查文件大小是否超过内存缓存限制
 		if memoryCacheMaxFileSizeBytes > 0 && int64(len(responseData)) > memoryCacheMaxFileSizeBytes {
 			log.Println(t("MemoryCacheFileTooLarge", map[string]any{

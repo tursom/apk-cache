@@ -68,6 +68,35 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 		stats["quota_clean_strategy"] = cacheQuota.Strategy.String()
 	}
 
+	// 添加健康检查信息
+	if healthCheckManager != nil {
+		healthStatus := healthCheckManager.GetSystemStatus().GetAllStatus()
+		stats["health_status"] = healthStatus
+
+		// 计算整体健康状态
+		overallHealthy := true
+		for _, status := range healthStatus {
+			if status.Status == "unhealthy" {
+				overallHealthy = false
+				break
+			}
+		}
+		stats["overall_health"] = overallHealthy
+
+		// 添加上游服务器健康状态
+		upstreamHealth := make(map[string]interface{})
+		servers := upstreamManager.GetAllServers()
+		for i, server := range servers {
+			upstreamHealth[fmt.Sprintf("upstream_%d", i)] = map[string]interface{}{
+				"url":    server.GetURL(),
+				"proxy":  server.GetProxy(),
+				"name":   server.GetName(),
+				"health": server.IsHealthy(),
+			}
+		}
+		stats["upstream_health"] = upstreamHealth
+	}
+
 	json.NewEncoder(w).Encode(stats)
 }
 

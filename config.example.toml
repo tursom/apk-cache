@@ -56,3 +56,12 @@ max_file_size = "10MB" # 单个文件最大缓存大小
 # admin_user = "admin"
 # 管理界面密码（留空则无需认证）
 # admin_password = "your-secret-password"
+
+# 健康检查配置
+[health_check]
+# 健康检查间隔（0 = 禁用健康检查）
+# interval = "30s"
+# 健康检查超时时间
+# timeout = "10s"
+# 是否启用自愈机制
+# enable_self_healing = true

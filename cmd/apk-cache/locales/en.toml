@@ -240,3 +240,70 @@ other = "Invalid memory cache max file size: {{.Error}}"
 
 [MemoryCacheFileTooLarge]
 other = "File too large for memory cache: {{.Path}} ({{.Size}} bytes, max {{.Max}} bytes)"
+
+# Health check related translations
+[HealthCheckEnabled]
+other = "Health check enabled: interval {{.Interval}}, timeout {{.Timeout}}"
+
+[HealthCheckDisabled]
+other = "Health check disabled"
+
+[HealthCheckStarted]
+other = "Health check started"
+
+[HealthCheckStopped]
+other = "Health check stopped"
+
+[HealthCheckComponentHealthy]
+other = "Component {{.Component}} is healthy"
+
+[HealthCheckComponentUnhealthy]
+other = "Component {{.Component}} is unhealthy: {{.Error}}"
+
+[HealthCheckUpstreamHealthy]
+other = "Upstream server {{.URL}} is healthy"
+
+[HealthCheckUpstreamUnhealthy]
+other = "Upstream server {{.URL}} is unhealthy: {{.Error}}"
+
+[HealthCheckFileSystemHealthy]
+other = "File system is healthy: {{.Free}} free, {{.Used}} used"
+
+[HealthCheckFileSystemUnhealthy]
+other = "File system is unhealthy: {{.Error}}"
+
+[HealthCheckMemoryCacheHealthy]
+other = "Memory cache is healthy: {{.Items}} items, {{.Size}} bytes"
+
+[HealthCheckMemoryCacheUnhealthy]
+other = "Memory cache is unhealthy: {{.Error}}"
+
+[HealthCheckCacheQuotaHealthy]
+other = "Cache quota is healthy: {{.Used}}/{{.Max}} bytes"
+
+[HealthCheckCacheQuotaUnhealthy]
+other = "Cache quota is unhealthy: {{.Error}}"
+
+[HealthCheckSelfHealingTriggered]
+other = "Self-healing triggered for component {{.Component}}: {{.Action}}"
+
+[HealthCheckSelfHealingCompleted]
+other = "Self-healing completed for component {{.Component}}"
+
+[HealthCheckSelfHealingFailed]
+other = "Self-healing failed for component {{.Component}}: {{.Error}}"
+
+[HealthCheckSystemHealthy]
+other = "System is healthy"
+
+[HealthCheckSystemUnhealthy]
+other = "System is unhealthy: {{.Error}}"
+
+[HealthCheckInvalidInterval]
+other = "Invalid health check interval: {{.Error}}"
+
+[HealthCheckInvalidTimeout]
+other = "Invalid health check timeout: {{.Error}}"
+
+[HealthCheckPrometheusEnabled]
+other = "Prometheus metrics enabled for health checks"

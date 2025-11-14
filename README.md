@@ -19,6 +19,7 @@
 - 🎛️ Web 管理界面
 - 💰 缓存配额管理（支持 LRU/LFU/FIFO 清理策略）
 - 🚀 **内存缓存层**：三级缓存架构（内存 → 文件 → 上游）
+- 🩺 **健康检查**：上游服务器状态监控和自愈机制
 
 ## 快速开始
 
@@ -88,10 +89,14 @@ RUN apk update && apk add --no-cache curl wget git
 | `-pkg-cache` | `0` | 包文件缓存时间（0 = 永不过期） |
 | `-cache-max-size` | (空) | 最大缓存大小（如 `10GB`, `1TB`） |
 | `-cache-clean-strategy` | `LRU` | 缓存清理策略 (`LRU`/`LFU`/`FIFO`) |
-| `-memory-cache-enabled` | `true` | 启用内存缓存 |
-| `-memory-cache-max-size` | `100MB` | 内存缓存最大大小 |
-| `-memory-cache-ttl` | `1h` | 内存缓存项过期时间 |
+| `-memory-cache` | `false` | 启用内存缓存 |
+| `-memory-cache-size` | `100MB` | 内存缓存大小 |
+| `-memory-cache-max-items` | `1000` | 内存缓存最大项目数 |
+| `-memory-cache-ttl` | `30m` | 内存缓存项过期时间 |
 | `-memory-cache-max-file-size` | `10MB` | 单个文件最大缓存大小 |
+| `-health-check-interval` | `30s` | 健康检查间隔 |
+| `-health-check-timeout` | `10s` | 健康检查超时时间 |
+| `-enable-self-healing` | `true` | 启用自愈机制 |
 
 ## 配置文件示例
 
@@ -120,8 +125,15 @@ clean_strategy = "LRU" # 清理策略 (`LRU`/`LFU`/`FIFO`)
 [memory_cache]
 enabled = true
 max_size = "100MB"     # 内存缓存最大大小
-ttl = "1h"             # 内存缓存项过期时间
+max_items = 1000       # 内存缓存最大项目数
+ttl = "30m"            # 内存缓存项过期时间
 max_file_size = "10MB" # 单个文件最大缓存大小
+
+# 健康检查配置
+[health_check]
+interval = "30s"       # 健康检查间隔
+timeout = "10s"        # 健康检查超时时间
+enable_self_healing = true  # 启用自愈机制
 
 [security]
 # admin_user = "admin" # 管理界面用户名（默认：admin）
@@ -143,6 +155,10 @@ services:
       - ADDR=:3142
       - CACHE_DIR=/app/cache
       - INDEX_CACHE=24h
+      - MEMORY_CACHE_ENABLED=true
+      - MEMORY_CACHE_SIZE=100MB
+      - HEALTH_CHECK_INTERVAL=30s
+      - ENABLE_SELF_HEALING=true
     restart: unless-stopped
 ```
 
@@ -159,14 +175,85 @@ services:
 
 访问 `http://your-server:3142/metrics` 获取 Prometheus 指标：
 
+### 缓存性能指标
 - `apk_cache_hits_total` - 缓存命中次数
 - `apk_cache_misses_total` - 缓存未命中次数
 - `apk_cache_download_bytes_total` - 下载总字节数
+
+### 内存缓存指标
 - `apk_cache_memory_hits_total` - 内存缓存命中次数
 - `apk_cache_memory_misses_total` - 内存缓存未命中次数
 - `apk_cache_memory_size_bytes` - 内存缓存当前大小
 - `apk_cache_memory_items_total` - 内存缓存项数量
 - `apk_cache_memory_evictions_total` - 内存缓存淘汰次数
+
+### 健康检查指标
+- `apk_cache_health_status` - 组件健康状态（1=健康，0=不健康）
+  - `component="upstream"` - 上游服务器健康状态
+  - `component="filesystem"` - 文件系统健康状态
+  - `component="memory_cache"` - 内存缓存健康状态
+  - `component="cache_quota"` - 缓存配额健康状态
+- `apk_cache_health_check_duration_seconds` - 健康检查耗时
+  - `component="upstream"` - 上游服务器检查耗时
+  - `component="filesystem"` - 文件系统检查耗时
+  - `component="memory_cache"` - 内存缓存检查耗时
+  - `component="cache_quota"` - 缓存配额检查耗时
+- `apk_cache_health_check_errors_total` - 健康检查错误次数
+  - `component="upstream"` - 上游服务器检查错误
+  - `component="filesystem"` - 文件系统检查错误
+  - `component="memory_cache"` - 内存缓存检查错误
+  - `component="cache_quota"` - 缓存配额检查错误
+
+### 上游服务器指标
+- `apk_cache_upstream_healthy_count` - 健康上游服务器数量
+- `apk_cache_upstream_total_count` - 总上游服务器数量
+- `apk_cache_upstream_failover_count` - 故障转移次数
+
+## 健康检查和自愈机制
+
+### 工作原理
+
+APK Cache 实现了完整的健康检查和自愈机制，确保服务的高可用性：
+
+#### 1. 健康检查组件
+
+**上游服务器健康检查**：
+- 定期检查所有上游服务器的可用性
+- 使用 HEAD 请求测试多个路径（根目录、Alpine 镜像目录、索引文件等）
+- 支持故障转移，自动切换到健康的上游服务器
+- 可配置的检查间隔和超时时间
+
+**文件系统健康检查**：
+- 检查缓存目录是否存在且可写
+- 验证磁盘空间使用情况
+- 自动修复目录权限问题
+
+**内存缓存健康检查**：
+- 监控内存使用率和缓存项数量
+- 检测内存缓存是否接近容量上限
+- 自动清理过期缓存项
+
+**缓存配额健康检查**：
+- 监控磁盘缓存使用情况
+- 预警缓存配额接近上限
+
+#### 2. 自愈机制
+
+当检测到问题时，系统会自动尝试修复：
+
+**上游服务器自愈**：
+- 自动重试连接失败的上游服务器
+- 重置健康状态计数器
+- 支持故障服务器自动恢复
+
+**文件系统自愈**：
+- 自动修复缓存目录权限
+- 重新创建必要的子目录结构
+- 清理损坏的临时文件
+
+**内存缓存自愈**：
+- 自动清理过期缓存项
+- 重置内存缓存统计信息
 
 ## 故障排除
 
@@ -177,6 +264,8 @@ services:
 **代理连接失败**：验证代理地址格式和可用性（支持 SOCKS5/HTTP 协议）
 
 **管理界面无法访问**：确保正确访问 `/_admin/` 路径
+
+**健康检查失败**：检查上游服务器可达性和网络连接
 
 ## 许可证
 

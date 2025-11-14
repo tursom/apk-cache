@@ -16,6 +16,18 @@ CONFIG=${CONFIG:-}
 CACHE_MAX_SIZE=${CACHE_MAX_SIZE:-}
 CACHE_CLEAN_STRATEGY=${CACHE_CLEAN_STRATEGY:-}
 
+# 新增：内存缓存相关环境变量
+MEMORY_CACHE_ENABLED=${MEMORY_CACHE_ENABLED:-false}
+MEMORY_CACHE_SIZE=${MEMORY_CACHE_SIZE:-100MB}
+MEMORY_CACHE_MAX_ITEMS=${MEMORY_CACHE_MAX_ITEMS:-1000}
+MEMORY_CACHE_TTL=${MEMORY_CACHE_TTL:-30m}
+MEMORY_CACHE_MAX_FILE_SIZE=${MEMORY_CACHE_MAX_FILE_SIZE:-10MB}
+
+# 新增：健康检查相关环境变量
+HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-30s}
+HEALTH_CHECK_TIMEOUT=${HEALTH_CHECK_TIMEOUT:-10s}
+ENABLE_SELF_HEALING=${ENABLE_SELF_HEALING:-true}
+
 # 构建参数
 ARGS="-addr $ADDR -cache $CACHE_DIR -index-cache $INDEX_CACHE -pkg-cache $PKG_CACHE -cleanup-interval $CLEANUP_INTERVAL"
 
@@ -55,6 +67,47 @@ fi
 # 如果 CACHE_CLEAN_STRATEGY 不为空，添加 -cache-clean-strategy 参数
 if [ -n "$CACHE_CLEAN_STRATEGY" ]; then
     ARGS="$ARGS -cache-clean-strategy $CACHE_CLEAN_STRATEGY"
+fi
+
+# 新增：内存缓存相关参数
+if [ "$MEMORY_CACHE_ENABLED" = "true" ]; then
+    ARGS="$ARGS -memory-cache"
+fi
+
+# 如果 MEMORY_CACHE_SIZE 不为空，添加 -memory-cache-size 参数
+if [ -n "$MEMORY_CACHE_SIZE" ]; then
+    ARGS="$ARGS -memory-cache-size $MEMORY_CACHE_SIZE"
+fi
+
+# 如果 MEMORY_CACHE_MAX_ITEMS 不为空，添加 -memory-cache-max-items 参数
+if [ -n "$MEMORY_CACHE_MAX_ITEMS" ]; then
+    ARGS="$ARGS -memory-cache-max-items $MEMORY_CACHE_MAX_ITEMS"
+fi
+
+# 如果 MEMORY_CACHE_TTL 不为空，添加 -memory-cache-ttl 参数
+if [ -n "$MEMORY_CACHE_TTL" ]; then
+    ARGS="$ARGS -memory-cache-ttl $MEMORY_CACHE_TTL"
+fi
+
+# 如果 MEMORY_CACHE_MAX_FILE_SIZE 不为空，添加 -memory-cache-max-file-size 参数
+if [ -n "$MEMORY_CACHE_MAX_FILE_SIZE" ]; then
+    ARGS="$ARGS -memory-cache-max-file-size $MEMORY_CACHE_MAX_FILE_SIZE"
+fi
+
+# 新增：健康检查相关参数
+# 如果 HEALTH_CHECK_INTERVAL 不为空，添加 -health-check-interval 参数
+if [ -n "$HEALTH_CHECK_INTERVAL" ]; then
+    ARGS="$ARGS -health-check-interval $HEALTH_CHECK_INTERVAL"
+fi
+
+# 如果 HEALTH_CHECK_TIMEOUT 不为空，添加 -health-check-timeout 参数
+if [ -n "$HEALTH_CHECK_TIMEOUT" ]; then
+    ARGS="$ARGS -health-check-timeout $HEALTH_CHECK_TIMEOUT"
+fi
+
+# 如果 ENABLE_SELF_HEALING 不为空，添加 -enable-self-healing 参数
+if [ -n "$ENABLE_SELF_HEALING" ]; then
+    ARGS="$ARGS -enable-self-healing $ENABLE_SELF_HEALING"
 fi
 
 # 启动应用

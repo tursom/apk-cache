@@ -63,17 +63,17 @@ var (
 	cacheCleanStrategy = flag.String("cache-clean-strategy", "LRU", "Cache cleanup strategy (LRU, LFU, FIFO)")
 
 	// 新增：内存缓存相关参数
-	memoryCacheEnabled  = flag.Bool("memory-cache", false, "Enable memory cache")
-	memoryCacheSize     = flag.String("memory-cache-size", "100MB", "Memory cache size (e.g. 100MB, 1GB)")
-	memoryCacheMaxItems = flag.Int("memory-cache-max-items", 1000, "Maximum number of items in memory cache")
-	memoryCacheTTL      = flag.Duration("memory-cache-ttl", 30*time.Minute, "Memory cache TTL duration")
+	memoryCacheEnabled     = flag.Bool("memory-cache", false, "Enable memory cache")
+	memoryCacheSize        = flag.String("memory-cache-size", "100MB", "Memory cache size (e.g. 100MB, 1GB)")
+	memoryCacheMaxItems    = flag.Int("memory-cache-max-items", 1000, "Maximum number of items in memory cache")
+	memoryCacheTTL         = flag.Duration("memory-cache-ttl", 30*time.Minute, "Memory cache TTL duration")
 	memoryCacheMaxFileSize = flag.String("memory-cache-max-file-size", "10MB", "Maximum file size to cache in memory (e.g. 1MB, 10MB)")
 
 	// 进程启动时间
 	processStartTime = time.Now()
 
-	// 上游服务器列表（支持故障转移）
-	upstreamServers []UpstreamServer
+	// 上游服务器管理器（支持故障转移和健康检查）
+	upstreamManager *UpstreamManager
 
 	// 文件锁管理器
 	lockManager = NewFileLockManager()
@@ -85,15 +85,16 @@ var (
 	memoryCache *MemoryCache
 	// 内存缓存最大文件大小
 	memoryCacheMaxFileSizeBytes int64
-	localizer   *i18n.Localizer
-)
+	localizer                   *i18n.Localizer
 
-// UpstreamServer 上游服务器配置
-type UpstreamServer struct {
-	URL   string
-	Proxy string
-	Name  string
-}
+	// 健康检查相关变量
+	healthCheckInterval = flag.Duration("health-check-interval", 30*time.Second, "Health check interval")
+	healthCheckTimeout  = flag.Duration("health-check-timeout", 10*time.Second, "Health check timeout")
+	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
+
+	// 健康检查管理器
+	healthCheckManager = NewHealthCheckManager()
+)
 
 // detectLocale 自动检测系统语言
 func detectLocale() string {
@@ -217,15 +218,13 @@ func main() {
 		}
 	}
 
+	// 初始化上游服务器管理器
+	upstreamManager = NewUpstreamManager()
+
 	// 如果没有从配置文件加载上游服务器，使用命令行参数
-	if len(upstreamServers) == 0 {
-		upstreamServers = []UpstreamServer{
-			{
-				URL:   *upstreamURL,
-				Proxy: *proxyURL,
-				Name:  "default",
-			},
-		}
+	if upstreamManager.GetServerCount() == 0 {
+		server := NewUpstreamServer(*upstreamURL, *proxyURL, "default")
+		upstreamManager.AddServer(server)
 	}
 
 	initI18n()
@@ -269,10 +268,10 @@ func main() {
 
 		memoryCache = NewMemoryCache(memoryMaxSize, *memoryCacheMaxItems, *memoryCacheTTL)
 		log.Println(t("MemoryCacheEnabled", map[string]any{
-			"MaxSize":      memoryMaxSize,
-			"MaxItems":     *memoryCacheMaxItems,
-			"TTL":          *memoryCacheTTL,
-			"MaxFileSize":  memoryCacheMaxFileSizeBytes,
+			"MaxSize":     memoryMaxSize,
+			"MaxItems":    *memoryCacheMaxItems,
+			"TTL":         *memoryCacheTTL,
+			"MaxFileSize": memoryCacheMaxFileSizeBytes,
 		}))
 	} else {
 		log.Println(t("MemoryCacheDisabled", nil))
@@ -294,9 +293,13 @@ func main() {
 		log.Println(t("AutoCleanupEnabled", map[string]any{"Interval": *cleanupInterval}))
 	}
 
+	// 启动健康检查循环
+	go healthCheckManager.StartHealthCheckLoop()
+
 	// 使用自定义 Registry
 	http.Handle("/metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	http.HandleFunc("/_admin/", authMiddleware(adminDashboardHandler))
+	http.HandleFunc("/_health", healthCheckManager.HealthCheckHandler)
 	http.HandleFunc("/", proxyHandler)
 
 	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
