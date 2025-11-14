@@ -62,6 +62,13 @@ var (
 	cacheMaxSize       = flag.String("cache-max-size", "", "Maximum cache size (e.g. 10GB, 1TB, 0 = unlimited)")
 	cacheCleanStrategy = flag.String("cache-clean-strategy", "LRU", "Cache cleanup strategy (LRU, LFU, FIFO)")
 
+	// 新增：内存缓存相关参数
+	memoryCacheEnabled  = flag.Bool("memory-cache", false, "Enable memory cache")
+	memoryCacheSize     = flag.String("memory-cache-size", "100MB", "Memory cache size (e.g. 100MB, 1GB)")
+	memoryCacheMaxItems = flag.Int("memory-cache-max-items", 1000, "Maximum number of items in memory cache")
+	memoryCacheTTL      = flag.Duration("memory-cache-ttl", 30*time.Minute, "Memory cache TTL duration")
+	memoryCacheMaxFileSize = flag.String("memory-cache-max-file-size", "10MB", "Maximum file size to cache in memory (e.g. 1MB, 10MB)")
+
 	// 进程启动时间
 	processStartTime = time.Now()
 
@@ -74,7 +81,11 @@ var (
 	accessTimeTracker = NewAccessTimeTracker()
 	// 缓存配额管理器
 	cacheQuota *CacheQuota
-	localizer  *i18n.Localizer
+	// 内存缓存管理器
+	memoryCache *MemoryCache
+	// 内存缓存最大文件大小
+	memoryCacheMaxFileSizeBytes int64
+	localizer   *i18n.Localizer
 )
 
 // UpstreamServer 上游服务器配置
@@ -242,6 +253,29 @@ func main() {
 		} else {
 			log.Println(t("CacheQuotaDisabled", nil))
 		}
+	}
+
+	// 初始化内存缓存
+	if *memoryCacheEnabled {
+		memoryMaxSize, err := parseSizeString(*memoryCacheSize)
+		if err != nil {
+			log.Fatalln(t("InvalidMemoryCacheSize", map[string]any{"Error": err}))
+		}
+
+		memoryCacheMaxFileSizeBytes, err = parseSizeString(*memoryCacheMaxFileSize)
+		if err != nil {
+			log.Fatalln(t("InvalidMemoryCacheMaxFileSize", map[string]any{"Error": err}))
+		}
+
+		memoryCache = NewMemoryCache(memoryMaxSize, *memoryCacheMaxItems, *memoryCacheTTL)
+		log.Println(t("MemoryCacheEnabled", map[string]any{
+			"MaxSize":      memoryMaxSize,
+			"MaxItems":     *memoryCacheMaxItems,
+			"TTL":          *memoryCacheTTL,
+			"MaxFileSize":  memoryCacheMaxFileSizeBytes,
+		}))
+	} else {
+		log.Println(t("MemoryCacheDisabled", nil))
 	}
 
 	// 注册 Prometheus 指标到自定义 Registry

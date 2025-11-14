@@ -36,6 +36,12 @@ type CacheConfig struct {
 	CleanupInterval string `toml:"cleanup_interval"`
 	MaxSize         string `toml:"max_size"`       // 新增：最大缓存大小（如 "10GB", "1TB"）
 	CleanStrategy   string `toml:"clean_strategy"` // 新增：清理策略（"LRU", "LFU", "FIFO"）
+	// 新增：内存缓存配置
+	MemoryCacheEnabled      bool   `toml:"memory_cache_enabled"`
+	MemoryCacheSize         string `toml:"memory_cache_size"`
+	MemoryCacheMaxItems     int    `toml:"memory_cache_max_items"`
+	MemoryCacheTTL          string `toml:"memory_cache_ttl"`
+	MemoryCacheMaxFileSize  string `toml:"memory_cache_max_file_size"`
 }
 
 type SecurityConfig struct {
@@ -130,6 +136,27 @@ func ApplyConfig(config *Config) error {
 	}
 	if config.Cache.CleanStrategy != "" && !isFlagSet("cache-clean-strategy") {
 		*cacheCleanStrategy = config.Cache.CleanStrategy
+	}
+
+	// 新增：内存缓存配置
+	if !isFlagSet("memory-cache") {
+		*memoryCacheEnabled = config.Cache.MemoryCacheEnabled
+	}
+	if config.Cache.MemoryCacheSize != "" && !isFlagSet("memory-cache-size") {
+		*memoryCacheSize = config.Cache.MemoryCacheSize
+	}
+	if config.Cache.MemoryCacheMaxItems > 0 && !isFlagSet("memory-cache-max-items") {
+		*memoryCacheMaxItems = config.Cache.MemoryCacheMaxItems
+	}
+	if config.Cache.MemoryCacheTTL != "" && !isFlagSet("memory-cache-ttl") {
+		duration, err := time.ParseDuration(config.Cache.MemoryCacheTTL)
+		if err != nil {
+			return errors.New(t("InvalidMemoryCacheTTL", map[string]any{"Error": err}))
+		}
+		*memoryCacheTTL = duration
+	}
+	if config.Cache.MemoryCacheMaxFileSize != "" && !isFlagSet("memory-cache-max-file-size") {
+		*memoryCacheMaxFileSize = config.Cache.MemoryCacheMaxFileSize
 	}
 
 	// Security 配置

@@ -18,6 +18,7 @@ A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP pro
 - 📊 Prometheus monitoring metrics
 - 🎛️ Web management interface
 - 💰 Cache quota management (supports LRU/LFU/FIFO cleanup strategies)
+- 🚀 **Memory Cache Layer**: Three-tier caching architecture (memory → file → upstream)
 
 ## Quick Start
 
@@ -87,6 +88,10 @@ RUN apk update && apk add --no-cache curl wget git
 | `-pkg-cache` | `0` | Package file cache duration (0 = never expire) |
 | `-cache-max-size` | (empty) | Maximum cache size (e.g., `10GB`, `1TB`) |
 | `-cache-clean-strategy` | `LRU` | Cache cleanup strategy (`LRU`/`LFU`/`FIFO`) |
+| `-memory-cache-enabled` | `true` | Enable memory cache |
+| `-memory-cache-max-size` | `100MB` | Maximum memory cache size |
+| `-memory-cache-ttl` | `1h` | Memory cache item expiration time |
+| `-memory-cache-max-file-size` | `10MB` | Maximum file size for memory caching |
 
 ## Configuration File Example
 
@@ -110,6 +115,13 @@ pkg_duration = "168h"  # 7 days
 cleanup_interval = "1h"
 max_size = "10GB"      # Maximum cache size
 clean_strategy = "LRU" # Cleanup strategy (`LRU`/`LFU`/`FIFO`)
+
+# Memory cache configuration
+[memory_cache]
+enabled = true
+max_size = "100MB"     # Maximum memory cache size
+ttl = "1h"             # Memory cache item expiration time
+max_file_size = "10MB" # Maximum file size for memory caching
 
 [security]
 # admin_user = "admin" # Management interface username (default: admin)
@@ -150,6 +162,11 @@ Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 - `apk_cache_hits_total` - Cache hit count
 - `apk_cache_misses_total` - Cache miss count
 - `apk_cache_download_bytes_total` - Total download bytes
+- `apk_cache_memory_hits_total` - Memory cache hit count
+- `apk_cache_memory_misses_total` - Memory cache miss count
+- `apk_cache_memory_size_bytes` - Current memory cache size
+- `apk_cache_memory_items_total` - Memory cache item count
+- `apk_cache_memory_evictions_total` - Memory cache eviction count
 
 ## Troubleshooting
 

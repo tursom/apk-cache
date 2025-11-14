@@ -44,6 +44,13 @@ max_size = "0"
 # 缓存清理策略（LRU = 最近最少使用, LFU = 最不经常使用, FIFO = 先进先出）
 clean_strategy = "LRU"
 
+# 内存缓存配置
+[memory_cache]
+enabled = true
+max_size = "100MB"     # 内存缓存最大大小
+ttl = "1h"             # 内存缓存项过期时间
+max_file_size = "10MB" # 单个文件最大缓存大小
+
 [security]
 # 管理界面用户名（默认：admin）
 # admin_user = "admin"

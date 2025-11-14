@@ -200,3 +200,43 @@ other = "无效的缓存目录 {{.Dir}}: 不能包含 '..'"
 
 [UnsupportedCleanStrategy]
 other = "不支持的缓存清理策略: {{.Strategy}}"
+
+# 内存缓存相关翻译
+[MemoryCacheEnabled]
+other = "内存缓存已启用: 最大 {{.MaxSize}} 字节，最大项目数: {{.MaxItems}}, TTL: {{.TTL}}"
+
+[MemoryCacheDisabled]
+other = "内存缓存已禁用"
+
+[MemoryCacheHit]
+other = "内存缓存命中: {{.Path}}"
+
+[MemoryCacheItemTooLarge]
+other = "内存缓存项目过大: 键 {{.Key}}, 大小 {{.Size}} 字节，最大 {{.Max}} 字节"
+
+[MemoryCacheEvicted]
+other = "内存缓存已驱逐: {{.Key}} ({{.Size}} 字节)"
+
+[MemoryCacheCleanupComplete]
+other = "内存缓存清理完成: 驱逐 {{.Evicted}} 个项目，释放 {{.Freed}} 字节"
+
+[MemoryCacheExpiredCleaned]
+other = "内存缓存过期项目已清理: {{.Count}} 个项目"
+
+[MemoryCacheWriteFailed]
+other = "内存缓存写入失败: {{.Error}}"
+
+[MemoryCacheStoreFailed]
+other = "内存缓存存储失败: {{.Key}}"
+
+[InvalidMemoryCacheSize]
+other = "无效的内存缓存大小: {{.Error}}"
+
+[InvalidMemoryCacheTTL]
+other = "无效的内存缓存 TTL: {{.Error}}"
+
+[InvalidMemoryCacheMaxFileSize]
+other = "无效的内存缓存最大文件大小: {{.Error}}"
+
+[MemoryCacheFileTooLarge]
+other = "文件过大，无法缓存到内存: {{.Path}} ({{.Size}} 字节，最大 {{.Max}} 字节)"

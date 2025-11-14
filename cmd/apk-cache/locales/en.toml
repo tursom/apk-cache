@@ -200,3 +200,43 @@ other = "Invalid cache directory {{.Dir}}: cannot contain '..'"
 
 [UnsupportedCleanStrategy]
 other = "Unsupported cache cleanup strategy: {{.Strategy}}"
+
+# Memory cache related translations
+[MemoryCacheEnabled]
+other = "Memory cache enabled: max {{.MaxSize}} bytes, max items: {{.MaxItems}}, TTL: {{.TTL}}"
+
+[MemoryCacheDisabled]
+other = "Memory cache disabled"
+
+[MemoryCacheHit]
+other = "Memory cache hit: {{.Path}}"
+
+[MemoryCacheItemTooLarge]
+other = "Memory cache item too large: key {{.Key}}, size {{.Size}} bytes, max {{.Max}} bytes"
+
+[MemoryCacheEvicted]
+other = "Memory cache evicted: {{.Key}} ({{.Size}} bytes)"
+
+[MemoryCacheCleanupComplete]
+other = "Memory cache cleanup complete: evicted {{.Evicted}} items, freed {{.Freed}} bytes"
+
+[MemoryCacheExpiredCleaned]
+other = "Memory cache expired items cleaned: {{.Count}} items"
+
+[MemoryCacheWriteFailed]
+other = "Memory cache write failed: {{.Error}}"
+
+[MemoryCacheStoreFailed]
+other = "Memory cache store failed: {{.Key}}"
+
+[InvalidMemoryCacheSize]
+other = "Invalid memory cache size: {{.Error}}"
+
+[InvalidMemoryCacheTTL]
+other = "Invalid memory cache TTL: {{.Error}}"
+
+[InvalidMemoryCacheMaxFileSize]
+other = "Invalid memory cache max file size: {{.Error}}"
+
+[MemoryCacheFileTooLarge]
+other = "File too large for memory cache: {{.Path}} ({{.Size}} bytes, max {{.Max}} bytes)"

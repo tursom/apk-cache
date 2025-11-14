@@ -18,6 +18,7 @@
 - 📊 Prometheus 监控指标
 - 🎛️ Web 管理界面
 - 💰 缓存配额管理（支持 LRU/LFU/FIFO 清理策略）
+- 🚀 **内存缓存层**：三级缓存架构（内存 → 文件 → 上游）
 
 ## 快速开始
 
@@ -87,6 +88,10 @@ RUN apk update && apk add --no-cache curl wget git
 | `-pkg-cache` | `0` | 包文件缓存时间（0 = 永不过期） |
 | `-cache-max-size` | (空) | 最大缓存大小（如 `10GB`, `1TB`） |
 | `-cache-clean-strategy` | `LRU` | 缓存清理策略 (`LRU`/`LFU`/`FIFO`) |
+| `-memory-cache-enabled` | `true` | 启用内存缓存 |
+| `-memory-cache-max-size` | `100MB` | 内存缓存最大大小 |
+| `-memory-cache-ttl` | `1h` | 内存缓存项过期时间 |
+| `-memory-cache-max-file-size` | `10MB` | 单个文件最大缓存大小 |
 
 ## 配置文件示例
 
@@ -110,6 +115,13 @@ pkg_duration = "168h"  # 7 天
 cleanup_interval = "1h"
 max_size = "10GB"      # 最大缓存大小
 clean_strategy = "LRU" # 清理策略 (`LRU`/`LFU`/`FIFO`)
+
+# 内存缓存配置
+[memory_cache]
+enabled = true
+max_size = "100MB"     # 内存缓存最大大小
+ttl = "1h"             # 内存缓存项过期时间
+max_file_size = "10MB" # 单个文件最大缓存大小
 
 [security]
 # admin_user = "admin" # 管理界面用户名（默认：admin）
@@ -150,6 +162,11 @@ services:
 - `apk_cache_hits_total` - 缓存命中次数
 - `apk_cache_misses_total` - 缓存未命中次数
 - `apk_cache_download_bytes_total` - 下载总字节数
+- `apk_cache_memory_hits_total` - 内存缓存命中次数
+- `apk_cache_memory_misses_total` - 内存缓存未命中次数
+- `apk_cache_memory_size_bytes` - 内存缓存当前大小
+- `apk_cache_memory_items_total` - 内存缓存项数量
+- `apk_cache_memory_evictions_total` - 内存缓存淘汰次数
 
 ## 故障排除
 
