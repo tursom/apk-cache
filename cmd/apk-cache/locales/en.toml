@@ -141,3 +141,43 @@ other = "Cleanup complete: deleted {{.Count}} files, freed {{.Size}} MB, took {{
 
 [ActiveFileLockCount]
 other = "Active file locks: {{.Count}}"
+
+# New cache quota related translations
+[InvalidCacheMaxSize]
+other = "Invalid cache max size: {{.Error}}"
+
+[CacheSizeInitFailed]
+other = "Failed to initialize cache size: {{.Error}}"
+
+[CacheQuotaEnabled]
+other = "Cache quota enabled: max {{.MaxSize}} bytes, strategy: {{.Strategy}}"
+
+[CacheQuotaDisabled]
+other = "Cache quota disabled"
+
+[CacheQuotaExceeded]
+other = "Cache quota exceeded: current {{.Current}} bytes, max {{.Max}} bytes, need {{.Need}} bytes"
+
+[CacheQuotaInsufficient]
+other = "Cache quota insufficient: current {{.Current}} bytes, max {{.Max}} bytes, need {{.Need}} bytes, freed {{.Freed}} bytes"
+
+[CacheQuotaCleanup]
+other = "Cache quota cleanup: need {{.NeedSize}} bytes, strategy: {{.Strategy}}"
+
+[CacheQuotaDeleteFailed]
+other = "Cache quota cleanup failed, delete file {{.File}} failed: {{.Error}}"
+
+[CacheQuotaFileDeleted]
+other = "Cache quota cleanup: deleted file {{.File}} ({{.Size}} bytes)"
+
+[CacheQuotaCleanupComplete]
+other = "Cache quota cleanup complete: freed {{.Freed}} bytes, deleted {{.FilesDeleted}} files"
+
+[CacheSizeInitialized]
+other = "Cache size initialized: {{.Size}} bytes, {{.Files}} files"
+
+[CacheQuotaRejected]
+other = "Cache quota insufficient, rejected caching file: {{.File}} ({{.Size}} bytes)"
+
+[GetFileSizeFailed]
+other = "Failed to get file size: {{.Error}}"

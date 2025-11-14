@@ -33,6 +33,8 @@ type CacheConfig struct {
 	IndexDuration   string `toml:"index_duration"`
 	PkgDuration     string `toml:"pkg_duration"`
 	CleanupInterval string `toml:"cleanup_interval"`
+	MaxSize         string `toml:"max_size"`       // 新增：最大缓存大小（如 "10GB", "1TB"）
+	CleanStrategy   string `toml:"clean_strategy"` // 新增：清理策略（"LRU", "LFU", "FIFO"）
 }
 
 type SecurityConfig struct {
@@ -108,6 +110,13 @@ func ApplyConfig(config *Config) error {
 			return errors.New(t("InvalidCleanupInterval", map[string]any{"Error": err}))
 		}
 		*cleanupInterval = duration
+	}
+	// 新增：缓存配额配置
+	if config.Cache.MaxSize != "" && !isFlagSet("cache-max-size") {
+		*cacheMaxSize = config.Cache.MaxSize
+	}
+	if config.Cache.CleanStrategy != "" && !isFlagSet("cache-clean-strategy") {
+		*cacheCleanStrategy = config.Cache.CleanStrategy
 	}
 
 	// Security 配置

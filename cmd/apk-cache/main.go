@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,9 @@ var (
 	adminUser          = flag.String("admin-user", "admin", "Admin dashboard username")
 	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
 	configFile         = flag.String("config", "", "Config file path (optional)")
+	// 新增：缓存配额相关参数
+	cacheMaxSize       = flag.String("cache-max-size", "", "Maximum cache size (e.g. 10GB, 1TB, 0 = unlimited)")
+	cacheCleanStrategy = flag.String("cache-clean-strategy", "LRU", "Cache cleanup strategy (LRU, LFU, FIFO)")
 
 	// 进程启动时间
 	processStartTime = time.Now()
@@ -68,7 +72,9 @@ var (
 	lockManager = NewFileLockManager()
 	// 访问时间跟踪器
 	accessTimeTracker = NewAccessTimeTracker()
-	localizer         *i18n.Localizer
+	// 缓存配额管理器
+	cacheQuota *CacheQuota
+	localizer  *i18n.Localizer
 )
 
 // UpstreamServer 上游服务器配置
@@ -136,6 +142,53 @@ func t(messageID string, templateData map[string]any) string {
 	return msg
 }
 
+// parseSizeString 解析大小字符串（如 "10GB", "1TB"）
+func parseSizeString(sizeStr string) (int64, error) {
+	if sizeStr == "" || sizeStr == "0" {
+		return 0, nil // 0 表示无限制
+	}
+
+	sizeStr = strings.ToUpper(sizeStr)
+	multiplier := int64(1)
+
+	// 检查单位
+	if strings.HasSuffix(sizeStr, "TB") {
+		multiplier = 1024 * 1024 * 1024 * 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "TB")
+	} else if strings.HasSuffix(sizeStr, "GB") {
+		multiplier = 1024 * 1024 * 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "GB")
+	} else if strings.HasSuffix(sizeStr, "MB") {
+		multiplier = 1024 * 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "MB")
+	} else if strings.HasSuffix(sizeStr, "KB") {
+		multiplier = 1024
+		sizeStr = strings.TrimSuffix(sizeStr, "KB")
+	} else if strings.HasSuffix(sizeStr, "B") {
+		sizeStr = strings.TrimSuffix(sizeStr, "B")
+	}
+
+	// 解析数字部分
+	value, err := strconv.ParseInt(strings.TrimSpace(sizeStr), 10, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return value * multiplier, nil
+}
+
+// parseCleanStrategy 解析清理策略字符串
+func parseCleanStrategy(strategy string) CleanStrategy {
+	switch strings.ToUpper(strategy) {
+	case "LFU":
+		return LFU
+	case "FIFO":
+		return FIFO
+	default:
+		return LRU
+	}
+}
+
 func main() {
 	flag.Parse()
 
@@ -165,6 +218,31 @@ func main() {
 	}
 
 	initI18n()
+
+	// 初始化缓存配额管理器
+	if *cacheMaxSize != "" {
+		maxSize, err := parseSizeString(*cacheMaxSize)
+		if err != nil {
+			log.Fatalln(t("InvalidCacheMaxSize", map[string]any{"Error": err}))
+		}
+
+		strategy := parseCleanStrategy(*cacheCleanStrategy)
+		cacheQuota = NewCacheQuota(maxSize, strategy)
+
+		// 初始化当前缓存大小
+		if err := cacheQuota.InitializeCacheSize(); err != nil {
+			log.Println(t("CacheSizeInitFailed", map[string]any{"Error": err}))
+		}
+
+		if maxSize > 0 {
+			log.Println(t("CacheQuotaEnabled", map[string]any{
+				"MaxSize":  maxSize,
+				"Strategy": strategy.String(),
+			}))
+		} else {
+			log.Println(t("CacheQuotaDisabled", nil))
+		}
+	}
 
 	// 注册 Prometheus 指标到自定义 Registry
 	registry.MustRegister(cacheHits)

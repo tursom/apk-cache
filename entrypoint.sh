@@ -13,6 +13,8 @@ LOCALE=${LOCALE:-}
 ADMIN_USER=${ADMIN_USER:-admin}
 ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
 CONFIG=${CONFIG:-}
+CACHE_MAX_SIZE=${CACHE_MAX_SIZE:-}
+CACHE_CLEAN_STRATEGY=${CACHE_CLEAN_STRATEGY:-}
 
 # 构建参数
 ARGS="-addr $ADDR -cache $CACHE_DIR -index-cache $INDEX_CACHE -pkg-cache $PKG_CACHE -cleanup-interval $CLEANUP_INTERVAL"
@@ -43,6 +45,16 @@ fi
 # 如果 CONFIG 不为空，添加 -config 参数
 if [ -n "$CONFIG" ]; then
     ARGS="$ARGS -config $CONFIG"
+fi
+
+# 如果 CACHE_MAX_SIZE 不为空，添加 -cache-max-size 参数
+if [ -n "$CACHE_MAX_SIZE" ]; then
+    ARGS="$ARGS -cache-max-size $CACHE_MAX_SIZE"
+fi
+
+# 如果 CACHE_CLEAN_STRATEGY 不为空，添加 -cache-clean-strategy 参数
+if [ -n "$CACHE_CLEAN_STRATEGY" ]; then
+    ARGS="$ARGS -cache-clean-strategy $CACHE_CLEAN_STRATEGY"
 fi
 
 # 启动应用

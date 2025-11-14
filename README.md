@@ -23,6 +23,8 @@
 - 📊 Prometheus 监控指标
 - 🎛️ Web 管理界面，实时查看统计信息
 - 🔑 管理界面可选 HTTP Basic Auth 认证
+- 💰 **缓存配额管理** - 限制缓存大小并自动清理（LRU/LFU/FIFO策略）
+- 📈 **智能访问时间跟踪** - 内存优先，避免频繁系统调用
 
 ## 快速开始
 
@@ -113,6 +115,8 @@ docker run -d \
 | `-locale` | (自动检测) | 界面语言 (`en`/`zh`)，留空则根据 `LANG` 环境变量自动检测 |
 | `-admin-user` | `admin` | 管理界面用户名 |
 | `-admin-password` | (空) | 管理界面密码（留空则无需认证） |
+| `-cache-max-size` | (空) | 最大缓存大小（如 `10GB`, `1TB`, `0` = 无限制） |
+| `-cache-clean-strategy` | `LRU` | 缓存清理策略 (`LRU`/`LFU`/`FIFO`) |
 
 ## 使用方法
 
@@ -295,6 +299,9 @@ dir = "./cache"
 index_duration = "24h"
 pkg_duration = "168h"  # 7 天
 cleanup_interval = "1h"
+# 新增：缓存配额配置
+max_size = "10GB"        # 最大缓存大小（如 "10GB", "1TB", "0" = 无限制）
+clean_strategy = "LRU"   # 清理策略（"LRU", "LFU", "FIFO"）
 
 [security]
 admin_password = "your-secret-password"
@@ -344,6 +351,8 @@ docker run -d \
 - `ADMIN_USER` - 管理界面用户名（默认 `admin`）
 - `ADMIN_PASSWORD` - 管理界面密码（可选，留空则无需认证）
 - `CONFIG` - 配置文件路径（可选）
+- `CACHE_MAX_SIZE` - 最大缓存大小（如 `10GB`, `1TB`, `0` = 无限制）
+- `CACHE_CLEAN_STRATEGY` - 缓存清理策略（`LRU`/`LFU`/`FIFO`，默认 `LRU`）
 
 #### 使用配置文件
 
@@ -412,6 +421,71 @@ docker build -t apk-cache:local .
 # 使用本地构建的镜像
 docker run -d -p 3142:80 -v ./cache:/app/cache apk-cache:local
 ```
+
+### 缓存配额管理
+
+新增的缓存配额管理功能可以限制缓存总大小，并在空间不足时自动清理旧文件。
+
+#### 清理策略
+
+支持三种清理策略：
+
+- **LRU** (最近最少使用) - 默认策略，删除最长时间未被访问的文件
+- **LFU** (最不经常使用) - 删除访问频率最低的文件
+- **FIFO** (先进先出) - 删除最早缓存的文件
+
+#### 使用示例
+
+```bash
+# 限制缓存大小为 10GB，使用 LRU 策略
+./apk-cache -cache-max-size 10GB -cache-clean-strategy LRU
+
+# 限制为 1TB，使用 FIFO 策略
+./apk-cache -cache-max-size 1TB -cache-clean-strategy FIFO
+
+# 禁用缓存大小限制（默认行为）
+./apk-cache -cache-max-size 0
+```
+
+#### 配置文件示例
+
+```toml
+[cache]
+dir = "./cache"
+index_duration = "24h"
+pkg_duration = "168h"
+cleanup_interval = "1h"
+max_size = "10GB"        # 最大缓存大小
+clean_strategy = "LRU"   # 清理策略
+```
+
+#### Docker 环境变量
+
+```bash
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  -e CACHE_MAX_SIZE=10GB \
+  -e CACHE_CLEAN_STRATEGY=LRU \
+  tursom/apk-cache:latest
+```
+
+#### 工作原理
+
+1. **实时监控**: 每次添加新文件时检查缓存大小
+2. **智能清理**: 当空间不足时，按选定策略清理旧文件
+3. **索引保护**: 优先保留索引文件，确保系统可用性
+4. **内存优化**: 使用内存跟踪访问时间，避免频繁系统调用
+
+#### Prometheus 指标
+
+新增的监控指标：
+- `apk_cache_quota_size_bytes{type="max"}` - 最大缓存大小
+- `apk_cache_quota_size_bytes{type="current"}` - 当前缓存大小
+- `apk_cache_quota_files_total` - 缓存文件总数
+- `apk_cache_quota_cleanups_total` - 配额清理次数
+- `apk_cache_quota_bytes_freed_total` - 释放的总字节数
 
 ### 多上游服务器和故障转移
 
@@ -784,7 +858,7 @@ A: 程序本身不支持 HTTPS，建议在前面放置 Nginx 等反向代理来�
 
 **Q: 可以限制缓存大小吗？**
 
-A: 目前没有内置的缓存大小限制，建议通过文件系统配额（quota）或定期清理来管理磁盘空间。
+A: 是的，现在支持缓存配额管理功能！可以使用 `-cache-max-size` 参数或配置文件的 `max_size` 选项来限制缓存大小，支持 LRU/LFU/FIFO 清理策略自动管理磁盘空间。
 
 ## 许可证
 

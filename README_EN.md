@@ -23,6 +23,8 @@ A caching proxy server for Alpine Linux APK packages with SOCKS5 proxy support a
 - 📊 Prometheus monitoring metrics
 - 🎛️ Web admin dashboard with real-time statistics
 - 🔑 Optional HTTP Basic Auth for admin interface
+- 💰 **Cache Quota Management** - Limit cache size and automatically cleanup (LRU/LFU/FIFO strategies)
+- 📈 **Smart Access Time Tracking** - Memory-first, avoid frequent system calls
 
 ## Quick Start
 
@@ -113,6 +115,8 @@ docker run -d \
 | `-locale` | (auto-detect) | Interface language (`en`/`zh`), auto-detect from `LANG` environment variable if empty |
 | `-admin-user` | `admin` | Admin dashboard username |
 | `-admin-password` | (empty) | Admin dashboard password (empty = no authentication) |
+| `-cache-max-size` | (empty) | Maximum cache size (e.g., `10GB`, `1TB`, `0` = no limit) |
+| `-cache-clean-strategy` | `LRU` | Cache cleanup strategy (`LRU`/`LFU`/`FIFO`) |
 
 ## Usage
 
@@ -295,6 +299,9 @@ dir = "./cache"
 index_duration = "24h"
 pkg_duration = "168h"  # 7 days
 cleanup_interval = "1h"
+# New: Cache quota configuration
+max_size = "10GB"        # Maximum cache size (e.g., "10GB", "1TB", "0" = no limit)
+clean_strategy = "LRU"   # Cleanup strategy ("LRU", "LFU", "FIFO")
 
 [security]
 admin_password = "your-secret-password"
@@ -344,6 +351,8 @@ docker run -d \
 - `ADMIN_USER` - Admin dashboard username (default `admin`)
 - `ADMIN_PASSWORD` - Admin dashboard password (optional, no auth if empty)
 - `CONFIG` - Config file path (optional)
+- `CACHE_MAX_SIZE` - Maximum cache size (e.g., `10GB`, `1TB`, `0` = no limit)
+- `CACHE_CLEAN_STRATEGY` - Cache cleanup strategy (`LRU`/`LFU`/`FIFO`, default `LRU`)
 
 #### Using Configuration File
 
@@ -412,6 +421,71 @@ docker build -t apk-cache:local .
 # Use locally built image
 docker run -d -p 3142:80 -v ./cache:/app/cache apk-cache:local
 ```
+
+### Cache Quota Management
+
+The newly added cache quota management feature can limit the total cache size and automatically cleanup old files when space is insufficient.
+
+#### Cleanup Strategies
+
+Three cleanup strategies are supported:
+
+- **LRU** (Least Recently Used) - Default strategy, delete files that haven't been accessed for the longest time
+- **LFU** (Least Frequently Used) - Delete files with the lowest access frequency
+- **FIFO** (First In First Out) - Delete the earliest cached files
+
+#### Usage Examples
+
+```bash
+# Limit cache size to 10GB, use LRU strategy
+./apk-cache -cache-max-size 10GB -cache-clean-strategy LRU
+
+# Limit to 1TB, use FIFO strategy
+./apk-cache -cache-max-size 1TB -cache-clean-strategy FIFO
+
+# Disable cache size limit (default behavior)
+./apk-cache -cache-max-size 0
+```
+
+#### Configuration File Example
+
+```toml
+[cache]
+dir = "./cache"
+index_duration = "24h"
+pkg_duration = "168h"
+cleanup_interval = "1h"
+max_size = "10GB"        # Maximum cache size
+clean_strategy = "LRU"   # Cleanup strategy
+```
+
+#### Docker Environment Variables
+
+```bash
+docker run -d \
+  --name apk-cache \
+  -p 3142:80 \
+  -v ./cache:/app/cache \
+  -e CACHE_MAX_SIZE=10GB \
+  -e CACHE_CLEAN_STRATEGY=LRU \
+  tursom/apk-cache:latest
+```
+
+#### How It Works
+
+1. **Real-time Monitoring**: Check cache size every time a new file is added
+2. **Smart Cleanup**: Clean old files according to selected strategy when space is insufficient
+3. **Index Protection**: Prioritize preserving index files to ensure system availability
+4. **Memory Optimization**: Use memory to track access time, avoid frequent system calls
+
+#### Prometheus Metrics
+
+New monitoring metrics:
+- `apk_cache_quota_size_bytes{type="max"}` - Maximum cache size
+- `apk_cache_quota_size_bytes{type="current"}` - Current cache size
+- `apk_cache_quota_files_total` - Total number of cached files
+- `apk_cache_quota_cleanups_total` - Number of quota cleanups
+- `apk_cache_quota_bytes_freed_total` - Total bytes freed
 
 ### Multiple Upstream Servers and Failover
 
@@ -784,7 +858,7 @@ A: The program itself doesn't support HTTPS. It's recommended to place a reverse
 
 **Q: Can I limit cache size?**
 
-A: There's currently no built-in cache size limit. It's recommended to manage disk space through filesystem quotas or periodic cleanup.
+A: Yes, cache quota management feature is now supported! You can use the `-cache-max-size` parameter or the `max_size` option in the configuration file to limit cache size, with LRU/LFU/FIFO cleanup strategies to automatically manage disk space.
 
 ## License
 

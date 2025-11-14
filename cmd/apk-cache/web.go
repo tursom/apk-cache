@@ -59,6 +59,15 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 		"proxy":                *proxyURL,
 	}
 
+	// 添加缓存配额信息
+	if cacheQuota != nil {
+		currentSize, maxSize, percentage := cacheQuota.GetUsage()
+		stats["quota_current_size"] = currentSize
+		stats["quota_max_size"] = maxSize
+		stats["quota_usage_percentage"] = percentage
+		stats["quota_clean_strategy"] = cacheQuota.Strategy.String()
+	}
+
 	json.NewEncoder(w).Encode(stats)
 }
 
@@ -82,6 +91,11 @@ func handleCacheClear(w http.ResponseWriter, r *http.Request) {
 
 	// 清空访问时间跟踪器
 	accessTimeTracker = NewAccessTimeTracker()
+
+	// 重置缓存配额统计
+	if cacheQuota != nil {
+		cacheQuota.RemoveFile(cacheQuota.CurrentSize)
+	}
 
 	// 重新创建缓存目录
 	err = os.MkdirAll(*cachePath, 0755)

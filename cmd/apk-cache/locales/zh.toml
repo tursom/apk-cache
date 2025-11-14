@@ -141,3 +141,43 @@ other = "清理完成: 删除 {{.Count}} 个文件，释放 {{.Size}} MB，耗�
 
 [ActiveFileLockCount]
 other = "当前活跃文件锁数量: {{.Count}}"
+
+# 新增缓存配额相关翻译
+[InvalidCacheMaxSize]
+other = "无效的缓存最大大小: {{.Error}}"
+
+[CacheSizeInitFailed]
+other = "缓存大小初始化失败: {{.Error}}"
+
+[CacheQuotaEnabled]
+other = "缓存配额已启用: 最大 {{.MaxSize}} 字节，策略: {{.Strategy}}"
+
+[CacheQuotaDisabled]
+other = "缓存配额已禁用"
+
+[CacheQuotaExceeded]
+other = "缓存配额超出: 当前 {{.Current}} 字节，最大 {{.Max}} 字节，需要 {{.Need}} 字节"
+
+[CacheQuotaInsufficient]
+other = "缓存配额不足: 当前 {{.Current}} 字节，最大 {{.Max}} 字节，需要 {{.Need}} 字节，已释放 {{.Freed}} 字节"
+
+[CacheQuotaCleanup]
+other = "缓存配额清理: 需要 {{.NeedSize}} 字节，策略: {{.Strategy}}"
+
+[CacheQuotaDeleteFailed]
+other = "缓存配额清理失败，删除文件 {{.File}} 失败: {{.Error}}"
+
+[CacheQuotaFileDeleted]
+other = "缓存配额清理: 删除文件 {{.File}} ({{.Size}} 字节)"
+
+[CacheQuotaCleanupComplete]
+other = "缓存配额清理完成: 释放 {{.Freed}} 字节，删除 {{.FilesDeleted}} 个文件"
+
+[CacheSizeInitialized]
+other = "缓存大小初始化: {{.Size}} 字节，{{.Files}} 个文件"
+
+[CacheQuotaRejected]
+other = "缓存配额不足，拒绝缓存文件: {{.File}} ({{.Size}} 字节)"
+
+[GetFileSizeFailed]
+other = "获取文件大小失败: {{.Error}}"

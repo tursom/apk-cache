@@ -231,12 +231,14 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 
 	buf := make([]byte, 32*1024)
 	var cacheErr, clientErr error
+	var totalBytes int64 = 0
 
 	for {
 		// 读取数据
 		n, readErr := body.Read(buf)
 		if n > 0 {
 			downloadBytes.Add(float64(n))
+			totalBytes += int64(n)
 
 			// 写入缓存文件（只要缓存没出错就继续写）
 			if cacheErr == nil {
@@ -267,6 +269,26 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 	// 关闭临时文件
 	if err := tmpFile.Close(); err != nil {
 		return errors.New(t("CloseTempFileFailed", map[string]any{"Error": err}))
+	}
+
+	// 检查缓存配额（仅在缓存写入成功时）
+	if cacheErr == nil && cacheQuota != nil {
+		// 获取临时文件大小
+		fileInfo, err := os.Stat(tmpFileName)
+		if err != nil {
+			return errors.New(t("GetFileSizeFailed", map[string]any{"Error": err}))
+		}
+
+		// 检查配额
+		allowed, err := cacheQuota.CheckAndUpdateQuota(fileInfo.Size())
+		if !allowed {
+			log.Println(t("CacheQuotaRejected", map[string]any{
+				"File": cacheFile,
+				"Size": fileInfo.Size(),
+			}))
+			// 配额不足，不保存缓存文件，但已成功服务客户端
+			return nil
+		}
 	}
 
 	// 只有缓存写入成功才重命名

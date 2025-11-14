@@ -58,6 +58,10 @@ func cleanupExpiredCache() {
 				deletedSize += size
 				// 从内存中移除访问时间记录
 				accessTimeTracker.Remove(path)
+				// 更新缓存配额统计
+				if cacheQuota != nil {
+					cacheQuota.RemoveFile(size)
+				}
 				log.Println(t("DeletedExpiredFile", map[string]any{
 					"Path": path,
 					"Size": float64(size) / (1024 * 1024),
