@@ -155,8 +155,7 @@ func isAPTRequest(r *http.Request) bool {
 		strings.HasSuffix(path, "/Sources") ||
 		strings.HasSuffix(path, "/Sources.gz") ||
 		// 检查APT diff索引文件（如 Packages.diff/...）
-		strings.Contains(path, "/Packages.diff/") ||
-		strings.Contains(path, "/Sources.diff/") ||
+		strings.Contains(path, ".diff/") ||
 		// 检查APT哈希查询请求（如 /by-hash/SHA256/...）
 		strings.Contains(path, "/by-hash/SHA256/") ||
 		strings.Contains(path, "/by-hash/SHA1/") ||
