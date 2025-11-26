@@ -85,3 +85,5 @@ exempt_paths = "/_health,/metrics"
 # auto_repair = true
 # 是否启用定期完整性检查
 # periodic_check = true
+# 是否在启动时初始化现有文件的哈希记录（默认为 false）
+# initialize_existing_files = false

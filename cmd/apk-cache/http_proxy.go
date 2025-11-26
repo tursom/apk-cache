@@ -154,6 +154,9 @@ func isAPTRequest(r *http.Request) bool {
 		strings.HasSuffix(path, "/InRelease") ||
 		strings.HasSuffix(path, "/Sources") ||
 		strings.HasSuffix(path, "/Sources.gz") ||
+		// 检查APT diff索引文件（如 Packages.diff/...）
+		strings.Contains(path, "/Packages.diff/") ||
+		strings.Contains(path, "/Sources.diff/") ||
 		// 检查APT哈希查询请求（如 /by-hash/SHA256/...）
 		strings.Contains(path, "/by-hash/SHA256/") ||
 		strings.Contains(path, "/by-hash/SHA1/") ||
@@ -162,6 +165,8 @@ func isAPTRequest(r *http.Request) bool {
 
 // proxyForwardHTTP 转发HTTP请求到上游服务器
 func proxyForwardHTTP(w http.ResponseWriter, r *http.Request) {
+	cacheMisses.Add(1)
+
 	// 转发请求
 	resp, err := proxyForwardRequest(r)
 	if err != nil {

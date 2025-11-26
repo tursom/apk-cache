@@ -301,8 +301,8 @@ func (d *DataIntegrityManager) InitializeExistingFiles() error {
 		}
 
 		d.mu.Lock()
+		defer d.mu.Unlock()
 		d.fileHashes[path] = hash
-		d.mu.Unlock()
 
 		initializedCount++
 

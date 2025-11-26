@@ -98,9 +98,10 @@ var (
 	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
 
 	// 数据完整性校验相关参数
-	dataIntegrityCheckInterval = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
-	dataIntegrityAutoRepair    = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
-	dataIntegrityPeriodicCheck = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
+	dataIntegrityCheckInterval           = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
+	dataIntegrityAutoRepair              = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
+	dataIntegrityPeriodicCheck           = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
+	dataIntegrityInitializeExistingFiles = flag.Bool("data-integrity-initialize-existing-files", false, "Initialize existing files hash records on startup")
 
 	// 进程启动时间
 	processStartTime = time.Now()
@@ -371,14 +372,24 @@ func main() {
 			*dataIntegrityPeriodicCheck,
 		)
 
-		// 初始化现有文件的哈希记录
-		if err := dataIntegrityManager.InitializeExistingFiles(); err != nil {
-			log.Println(t("DataIntegrityInitFailed", map[string]any{"Error": err}))
+		// 初始化现有文件的哈希记录（仅在配置启用时）
+		if *dataIntegrityInitializeExistingFiles {
+			if err := dataIntegrityManager.InitializeExistingFiles(); err != nil {
+				log.Println(t("DataIntegrityInitFailed", map[string]any{"Error": err}))
+			} else {
+				log.Println(t("DataIntegrityEnabled", map[string]any{
+					"Interval":                *dataIntegrityCheckInterval,
+					"AutoRepair":              *dataIntegrityAutoRepair,
+					"PeriodicCheck":           *dataIntegrityPeriodicCheck,
+					"InitializeExistingFiles": *dataIntegrityInitializeExistingFiles,
+				}))
+			}
 		} else {
 			log.Println(t("DataIntegrityEnabled", map[string]any{
-				"Interval":      *dataIntegrityCheckInterval,
-				"AutoRepair":    *dataIntegrityAutoRepair,
-				"PeriodicCheck": *dataIntegrityPeriodicCheck,
+				"Interval":                *dataIntegrityCheckInterval,
+				"AutoRepair":              *dataIntegrityAutoRepair,
+				"PeriodicCheck":           *dataIntegrityPeriodicCheck,
+				"InitializeExistingFiles": *dataIntegrityInitializeExistingFiles,
 			}))
 		}
 

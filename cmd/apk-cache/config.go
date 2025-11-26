@@ -69,9 +69,10 @@ type RateLimitConfig struct {
 
 // DataIntegrityConfig 数据完整性校验配置
 type DataIntegrityConfig struct {
-	CheckInterval string `toml:"check_interval"`
-	AutoRepair    bool   `toml:"auto_repair"`
-	PeriodicCheck bool   `toml:"periodic_check"`
+	CheckInterval           string `toml:"check_interval"`
+	AutoRepair              bool   `toml:"auto_repair"`
+	PeriodicCheck           bool   `toml:"periodic_check"`
+	InitializeExistingFiles bool   `toml:"initialize_existing_files"`
 }
 
 // LoadConfig 加载配置文件
@@ -229,6 +230,9 @@ func ApplyConfig(config *Config) error {
 	}
 	if !isFlagSet("data-integrity-periodic-check") {
 		*dataIntegrityPeriodicCheck = config.DataIntegrity.PeriodicCheck
+	}
+	if !isFlagSet("data-integrity-initialize-existing-files") {
+		*dataIntegrityInitializeExistingFiles = config.DataIntegrity.InitializeExistingFiles
 	}
 
 	return nil
