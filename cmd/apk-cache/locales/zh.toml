@@ -496,3 +496,10 @@ other = "删除损坏的缓存文件失败 {{.File}}: {{.Error}}"
 
 [HashVerificationPassed]
 other = "哈希验证通过: {{.Path}} (算法: {{.Algorithm}})"
+
+# 客户端缓存头相关翻译
+[ClientCacheHeaderSaved]
+other = "客户端缓存头已保存: {{.Path}} ({{.Header}})"
+
+[ClientCacheOutdated]
+other = "客户端缓存已过期: {{.Path}} (当前: {{.Current}}, 最后有效: {{.LastValid}})"

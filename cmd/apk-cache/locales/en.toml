@@ -496,3 +496,10 @@ other = "Failed to remove corrupted cache file {{.File}}: {{.Error}}"
 
 [HashVerificationPassed]
 other = "Hash verification passed: {{.Path}} (algorithm: {{.Algorithm}})"
+
+# Client cache header related translations
+[ClientCacheHeaderSaved]
+other = "Client cache header saved: {{.Path}} ({{.Header}})"
+
+[ClientCacheOutdated]
+other = "Client cache outdated: {{.Path}} (current: {{.Current}}, last valid: {{.LastValid}})"

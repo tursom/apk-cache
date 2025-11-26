@@ -325,6 +325,8 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 		return false
 	}
 
+	log.Println(t("MemoryCacheHit", map[string]any{"Path": key}))
+
 	// 复制响应头
 	for key, values := range item.Headers {
 		for _, value := range values {

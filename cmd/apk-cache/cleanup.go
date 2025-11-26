@@ -25,6 +25,9 @@ func cleanupExpiredCache() {
 	var deletedCount int64
 	var deletedSize int64
 
+	// 清理过期的客户端缓存头
+	clientCacheHeaders.CleanupExpired()
+
 	err := filepath.Walk(*cachePath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err

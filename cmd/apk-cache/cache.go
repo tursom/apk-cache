@@ -10,11 +10,110 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"golang.org/x/net/proxy"
 )
+
+// ClientCacheHeaders 存储客户端的缓存头信息
+type ClientCacheHeaders struct {
+	mu      sync.RWMutex
+	headers map[string]*cacheHeaderEntry // key: cacheFile, value: cache header entry
+}
+
+// cacheHeaderEntry 存储缓存头信息和创建时间
+type cacheHeaderEntry struct {
+	ifModifiedSince string
+	createdAt       time.Time
+}
+
+// 全局客户端缓存头管理器
+var clientCacheHeaders = NewClientCacheHeaders()
+
+// NewClientCacheHeaders 创建新的客户端缓存头管理器
+func NewClientCacheHeaders() *ClientCacheHeaders {
+	return &ClientCacheHeaders{
+		headers: make(map[string]*cacheHeaderEntry),
+	}
+}
+
+// Save 设置缓存文件的 If-Modified-Since 头，只保存更早的时间
+func (c *ClientCacheHeaders) Save(cacheFile, ifModifiedSince string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 如果新的 If-Modified-Since 为空，不保存
+	if ifModifiedSince == "" {
+		return
+	}
+
+	// 解析新的时间
+	newTime, err := time.Parse(http.TimeFormat, ifModifiedSince)
+	if err != nil {
+		// 如果解析失败，不保存
+		return
+	}
+
+	// 检查是否已存在该缓存文件的头信息
+	if existingEntry, exists := c.headers[cacheFile]; exists {
+		// 解析已存在的时间
+		existingTime, err := time.Parse(http.TimeFormat, existingEntry.ifModifiedSince)
+		if err != nil {
+			// 如果已存在的时间解析失败，用新的时间替换
+			c.headers[cacheFile] = &cacheHeaderEntry{
+				ifModifiedSince: ifModifiedSince,
+				createdAt:       time.Now(),
+			}
+			return
+		}
+
+		// 只保存更早的时间
+		if newTime.Before(existingTime) {
+			c.headers[cacheFile] = &cacheHeaderEntry{
+				ifModifiedSince: ifModifiedSince,
+				createdAt:       time.Now(),
+			}
+		}
+	} else {
+		// 如果不存在，直接保存
+		c.headers[cacheFile] = &cacheHeaderEntry{
+			ifModifiedSince: ifModifiedSince,
+			createdAt:       time.Now(),
+		}
+	}
+}
+
+// Get 获取缓存文件的 If-Modified-Since 头，同时检查是否过期
+func (c *ClientCacheHeaders) Get(cacheFile string) (string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	entry, exists := c.headers[cacheFile]
+	if !exists {
+		return "", false
+	}
+
+	// 检查是否过期（使用索引文件过期时间）
+	if time.Since(entry.createdAt) > *indexCacheDuration {
+		return "", false
+	}
+
+	return entry.ifModifiedSince, true
+}
+
+// CleanupExpired 清理过期的缓存头
+func (c *ClientCacheHeaders) CleanupExpired() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for cacheFile, entry := range c.headers {
+		if time.Since(entry.createdAt) > *indexCacheDuration {
+			delete(c.headers, cacheFile)
+		}
+	}
+}
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	log.Println(t("RequestReceived", map[string]any{
@@ -28,7 +127,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	// 首先检查内存缓存
 	if memoryCache != nil {
 		if memoryCache.ServeFromMemory(w, cacheFile) {
-			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
 			return
 		}
 	}
@@ -44,18 +142,16 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 					"Error": err,
 				}))
 			} else if !valid {
-				log.Println(t("CacheFileCorrupted", map[string]any{"Path": r.URL.Path}))
+				log.Println(t("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
 				// 文件损坏，视为缓存未命中
 				// 继续从上游获取
 			} else {
 				// 文件完整，从缓存提供
-				log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
 				serveFromCache(w, r, cacheFile)
 				return
 			}
 		} else {
 			// 数据完整性校验未启用，直接从缓存提供
-			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
 			serveFromCache(w, r, cacheFile)
 			return
 		}
@@ -64,7 +160,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	cacheMisses.Add(1)
 
 	// 缓存未命中,从上游获取
-	log.Println(t("CacheMiss", map[string]any{"Path": r.URL.Path}))
+	log.Println(t("CacheMiss", map[string]any{"Path": cacheFile}))
 	upstreamResp, err := fetchFromUpstream(r.URL.Path)
 	if err != nil {
 		log.Println(t("FetchUpstreamFailed", map[string]any{"Error": err}))
@@ -82,7 +178,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
 		log.Println(t("SaveCacheFailed", map[string]any{"Error": err}))
 	} else {
-		log.Println(t("CacheSaved", map[string]any{"Path": r.URL.Path}))
+		log.Println(t("CacheSaved", map[string]any{"Path": cacheFile}))
 	}
 }
 
@@ -117,10 +213,11 @@ func cacheValid(path string) bool {
 }
 
 func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
+	log.Println(t("CacheHit", map[string]any{"Path": cacheFile}))
+
 	// 首先尝试从内存缓存提供
 	if memoryCache != nil {
 		if memoryCache.ServeFromMemory(w, cacheFile) {
-			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
 			return
 		}
 	}
@@ -229,7 +326,6 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 
 	// 再次检查文件是否已存在（可能在等待锁期间已被其他 goroutine 创建）
 	if cacheValid(cacheFile) {
-		log.Println(t("CachedByOther", map[string]any{"Path": cacheFile}))
 		// 文件已存在，直接从缓存读取并发送给客户端
 		serveFromCache(w, r, cacheFile)
 		return nil
@@ -435,10 +531,19 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 		return true
 	case http.StatusNotModified:
 		// 304 Not Modified - 内容未修改，可以继续使用缓存
-		log.Println(t("UpstreamNotModified", map[string]any{"Path": r.URL.Path}))
+		log.Println(t("UpstreamNotModified", map[string]any{"Path": cacheFile}))
+
+		// 保存客户端的 If-Modified-Since 头信息
+		if ifModifiedSince := r.Header.Get("If-Modified-Since"); ifModifiedSince != "" {
+			clientCacheHeaders.Save(cacheFile, ifModifiedSince)
+			log.Println(t("ClientCacheHeaderSaved", map[string]any{
+				"Path":   cacheFile,
+				"Header": ifModifiedSince,
+			}))
+		}
+
 		// 如果缓存存在，直接使用缓存
 		if cacheValid(cacheFile) {
-			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
 			serveFromCache(w, r, cacheFile)
 			return false
 		}

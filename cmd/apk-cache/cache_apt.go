@@ -26,16 +26,16 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 	// 生成包含host的APT缓存文件路径
 	cacheFile := getAPTCacheFilePath(r)
 
+	// 检查客户端条件请求头
+	if handleAPTClientConditionalRequest(w, r, cacheFile) {
+		return
+	}
+
 	// 首先检查内存缓存
 	if memoryCache != nil {
 		// 在提供内存缓存之前检查客户端缓存头
-		if checkClientCacheHeaders(w, r, memoryCache, cacheFile) {
-			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
-			return
-		}
-
-		if memoryCache.ServeFromMemory(w, cacheFile) {
-			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
+		if handleMemoryCacheConditionalRequest(w, r, memoryCache, cacheFile) ||
+			memoryCache.ServeFromMemory(w, cacheFile) {
 			return
 		}
 	}
@@ -44,57 +44,53 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 	if cacheValid(cacheFile) {
 		// 非 hash 请求，使用原有逻辑
 		// 检查客户端缓存头，如果缓存未过期则返回304
-		if checkClientCacheHeaders(w, r, nil, cacheFile) {
+		if handleFileCacheConditionalRequest(w, r, cacheFile) {
 			return
 		}
 
-		// 如果数据完整性校验启用，验证文件完整性
-		if dataIntegrityManager != nil {
-			// 对于 hash 请求，必须使用 URL 中的哈希值进行完整性校验
-			if isHashRequest(r.URL.Path) {
-				// 使用统一的哈希请求验证函数
-				valid, err := verifyHashRequest(cacheFile, r.URL.Path)
-				if err != nil || !valid {
-					// 校验出错，视为缓存未命中
-					// 哈希不匹配，视为缓存未命中
-				} else {
-					// 哈希验证通过，从缓存提供
-					log.Println(t("CacheHitWithHashVerification", map[string]any{
-						"Path": r.URL.Path,
-					}))
-					serveFromCache(w, r, cacheFile)
-					return
-				}
-			} else {
-				valid, err := dataIntegrityManager.VerifyFileIntegrity(cacheFile)
-				if err != nil {
-					log.Println(t("FileIntegrityCheckError", map[string]any{
-						"File":  cacheFile,
-						"Error": err,
-					}))
-				} else if !valid {
-					log.Println(t("CacheFileCorrupted", map[string]any{"Path": r.URL.Path}))
-					// 文件损坏，视为缓存未命中
-					// 继续从上游获取
-				} else {
-					// 文件完整，从缓存提供
-					log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-					serveFromCache(w, r, cacheFile)
-					return
-				}
-			}
-		} else {
+		if dataIntegrityManager == nil {
 			// 数据完整性校验未启用，从缓存提供
-			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
 			serveFromCache(w, r, cacheFile)
 			return
+		}
+		// 如果数据完整性校验启用，验证文件完整性
+
+		// 对于 hash 请求，必须使用 URL 中的哈希值进行完整性校验
+		if isHashRequest(r.URL.Path) {
+			// 使用统一的哈希请求验证函数
+			valid, err := verifyHashRequest(cacheFile, r.URL.Path)
+			if err != nil || !valid {
+				// 校验出错，视为缓存未命中
+				// 哈希不匹配，视为缓存未命中
+			} else {
+				// 哈希验证通过，从缓存提供
+				serveFromCache(w, r, cacheFile)
+				return
+			}
+		} else {
+			valid, err := dataIntegrityManager.VerifyFileIntegrity(cacheFile)
+			if err != nil {
+				log.Println(t("FileIntegrityCheckError", map[string]any{
+					"File":  cacheFile,
+					"Error": err,
+				}))
+			} else if !valid {
+				log.Println(t("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
+				// 文件损坏，视为缓存未命中
+				// 继续从上游获取
+			} else {
+				// 文件完整，从缓存提供
+				serveFromCache(w, r, cacheFile)
+				return
+			}
 		}
 	}
 
 	cacheMisses.Add(1)
 
 	// 缓存未命中,从上游获取
-	log.Println(t("CacheMiss", map[string]any{"Path": r.URL.Path}))
+	log.Println(t("CacheMiss", map[string]any{"Path": cacheFile}))
+
 	upstreamResp, err := fetchAPTFromUpstream(r)
 	if err != nil {
 		log.Println(t("FetchUpstreamFailed", map[string]any{"Error": err}))
@@ -201,8 +197,40 @@ func sanitizeHostForPath(host string) string {
 	return host
 }
 
-// checkClientCacheHeaders 检查客户端缓存头，如果缓存未过期则返回304
-func checkClientCacheHeaders(w http.ResponseWriter, r *http.Request, memoryCache *MemoryCache, cacheFile string) bool {
+// handleAPTClientConditionalRequest 处理APT协议客户端的条件请求
+// 比较客户端提供的If-Modified-Since与之前保存的值，如果缓存未过期则返回304
+func handleAPTClientConditionalRequest(w http.ResponseWriter, r *http.Request, cacheFile string) bool {
+	// 检查当前请求的 If-Modified-Since 头
+	currentIfModifiedSince := r.Header.Get("If-Modified-Since")
+	if currentIfModifiedSince == "" {
+		return false
+	}
+
+	// 获取之前保存的 If-Modified-Since 头（当上游返回304时保存的）
+	savedIfModifiedSince, savedExists := clientCacheHeaders.Get(cacheFile)
+	if !savedExists {
+		return false
+	}
+
+	// 如果之前保存过值，比较当前值和保存值
+	currentTime, err1 := time.Parse(http.TimeFormat, currentIfModifiedSince)
+	savedTime, err2 := time.Parse(http.TimeFormat, savedIfModifiedSince)
+
+	// 如果当前值比保存值更早，说明客户端缓存可能已过期，需要重新获取
+	if err1 != nil || err2 != nil || currentTime.Before(savedTime) {
+		return false
+	}
+
+	// 客户端缓存未过期，返回304 Not Modified
+	w.WriteHeader(http.StatusNotModified)
+	cacheHits.Add(1)
+	log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
+	return true
+}
+
+// handleMemoryCacheConditionalRequest 处理内存缓存的条件请求
+// 基于内存缓存项的修改时间检查If-Modified-Since头，如果缓存未过期则返回304
+func handleMemoryCacheConditionalRequest(w http.ResponseWriter, r *http.Request, memoryCache *MemoryCache, cacheFile string) bool {
 	// 检查 If-Modified-Since 头
 	ifModifiedSince := r.Header.Get("If-Modified-Since")
 	if ifModifiedSince == "" {
@@ -216,21 +244,37 @@ func checkClientCacheHeaders(w http.ResponseWriter, r *http.Request, memoryCache
 		return false
 	}
 
-	// 首先检查内存缓存中的修改时间
-	if memoryCache != nil {
-		if modTime, found := memoryCache.GetModTime(cacheFile); found {
-			// 如果内存缓存项的修改时间晚于客户端提供的修改时间，说明内容已更新
-			// 需要返回完整内容
-			if modTime.After(clientTime) {
-				return false
-			}
-
-			// 内存缓存项未修改，返回304 Not Modified
-			w.WriteHeader(http.StatusNotModified)
-			cacheHits.Add(1)
-			log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
-			return true
+	if modTime, found := memoryCache.GetModTime(cacheFile); found {
+		// 如果内存缓存项的修改时间晚于客户端提供的修改时间，说明内容已更新
+		// 需要返回完整内容
+		if modTime.After(clientTime) {
+			return false
 		}
+
+		// 内存缓存项未修改，返回304 Not Modified
+		w.WriteHeader(http.StatusNotModified)
+		cacheHits.Add(1)
+		log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
+		return true
+	}
+
+	return false
+}
+
+// handleFileCacheConditionalRequest 处理文件缓存的条件请求
+// 基于文件系统修改时间检查If-Modified-Since头，如果缓存未过期则返回304
+func handleFileCacheConditionalRequest(w http.ResponseWriter, r *http.Request, cacheFile string) bool {
+	// 检查 If-Modified-Since 头
+	ifModifiedSince := r.Header.Get("If-Modified-Since")
+	if ifModifiedSince == "" {
+		return false
+	}
+
+	// 解析客户端提供的修改时间
+	clientTime, err := time.Parse(http.TimeFormat, ifModifiedSince)
+	if err != nil {
+		log.Println(t("ParseIfModifiedSinceFailed", map[string]any{"Error": err}))
+		return false
 	}
 
 	// 内存缓存未命中，检查文件缓存的修改时间
