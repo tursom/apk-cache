@@ -28,42 +28,44 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 首先检查内存缓存
 	if memoryCache != nil {
-		if memoryCache.ServeFromMemory(w, r, r.URL.Path) {
-			log.Println(t("MemoryCacheHit", map[string]any{"Path": r.URL.Path}))
+		// 在提供内存缓存之前检查客户端缓存头
+		if checkClientCacheHeaders(w, r, memoryCache, cacheFile) {
+			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
+			return
+		}
+
+		if memoryCache.ServeFromMemory(w, cacheFile) {
+			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
 			return
 		}
 	}
 
 	// 检查文件缓存是否存在
 	if cacheValid(cacheFile) {
-		// 对于 hash 请求，必须使用 URL 中的哈希值进行完整性校验
-		if isHashRequest(r.URL.Path) {
-			// 使用统一的哈希请求验证函数
-			valid, err := verifyHashRequest(cacheFile, r.URL.Path)
-			if err != nil || !valid {
-				// 校验出错，视为缓存未命中
-				// 哈希不匹配，视为缓存未命中
-				cacheMisses.Add(1)
-			} else {
-				// 哈希验证通过，从缓存提供
-				log.Println(t("CacheHitWithHashVerification", map[string]any{
-					"Path": r.URL.Path,
-				}))
-				cacheHits.Add(1)
-				serveFromCache(w, r, cacheFile)
-				return
-			}
-		} else {
-			// 非 hash 请求，使用原有逻辑
-			// 检查客户端缓存头，如果缓存未过期则返回304
-			if checkClientCacheHeaders(w, r, cacheFile) {
-				log.Println(t("ClientCacheValid", map[string]any{"Path": r.URL.Path}))
-				cacheHits.Add(1)
-				return
-			}
+		// 非 hash 请求，使用原有逻辑
+		// 检查客户端缓存头，如果缓存未过期则返回304
+		if checkClientCacheHeaders(w, r, nil, cacheFile) {
+			return
+		}
 
-			// 如果数据完整性校验启用，验证文件完整性
-			if dataIntegrityManager != nil {
+		// 如果数据完整性校验启用，验证文件完整性
+		if dataIntegrityManager != nil {
+			// 对于 hash 请求，必须使用 URL 中的哈希值进行完整性校验
+			if isHashRequest(r.URL.Path) {
+				// 使用统一的哈希请求验证函数
+				valid, err := verifyHashRequest(cacheFile, r.URL.Path)
+				if err != nil || !valid {
+					// 校验出错，视为缓存未命中
+					// 哈希不匹配，视为缓存未命中
+				} else {
+					// 哈希验证通过，从缓存提供
+					log.Println(t("CacheHitWithHashVerification", map[string]any{
+						"Path": r.URL.Path,
+					}))
+					serveFromCache(w, r, cacheFile)
+					return
+				}
+			} else {
 				valid, err := dataIntegrityManager.VerifyFileIntegrity(cacheFile)
 				if err != nil {
 					log.Println(t("FileIntegrityCheckError", map[string]any{
@@ -73,22 +75,19 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 				} else if !valid {
 					log.Println(t("CacheFileCorrupted", map[string]any{"Path": r.URL.Path}))
 					// 文件损坏，视为缓存未命中
-					cacheMisses.Add(1)
 					// 继续从上游获取
 				} else {
 					// 文件完整，从缓存提供
 					log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-					cacheHits.Add(1)
 					serveFromCache(w, r, cacheFile)
 					return
 				}
-			} else {
-				// 数据完整性校验未启用，从缓存提供
-				log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-				cacheHits.Add(1)
-				serveFromCache(w, r, cacheFile)
-				return
 			}
+		} else {
+			// 数据完整性校验未启用，从缓存提供
+			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
+			serveFromCache(w, r, cacheFile)
+			return
 		}
 	}
 
@@ -203,7 +202,7 @@ func sanitizeHostForPath(host string) string {
 }
 
 // checkClientCacheHeaders 检查客户端缓存头，如果缓存未过期则返回304
-func checkClientCacheHeaders(w http.ResponseWriter, r *http.Request, cacheFile string) bool {
+func checkClientCacheHeaders(w http.ResponseWriter, r *http.Request, memoryCache *MemoryCache, cacheFile string) bool {
 	// 检查 If-Modified-Since 头
 	ifModifiedSince := r.Header.Get("If-Modified-Since")
 	if ifModifiedSince == "" {
@@ -217,7 +216,24 @@ func checkClientCacheHeaders(w http.ResponseWriter, r *http.Request, cacheFile s
 		return false
 	}
 
-	// 获取缓存文件的修改时间
+	// 首先检查内存缓存中的修改时间
+	if memoryCache != nil {
+		if modTime, found := memoryCache.GetModTime(cacheFile); found {
+			// 如果内存缓存项的修改时间晚于客户端提供的修改时间，说明内容已更新
+			// 需要返回完整内容
+			if modTime.After(clientTime) {
+				return false
+			}
+
+			// 内存缓存项未修改，返回304 Not Modified
+			w.WriteHeader(http.StatusNotModified)
+			cacheHits.Add(1)
+			log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
+			return true
+		}
+	}
+
+	// 内存缓存未命中，检查文件缓存的修改时间
 	fileInfo, err := os.Stat(cacheFile)
 	if err != nil {
 		log.Println(t("GetFileInfoFailed", map[string]any{"File": cacheFile, "Error": err}))
@@ -232,6 +248,8 @@ func checkClientCacheHeaders(w http.ResponseWriter, r *http.Request, cacheFile s
 
 	// 缓存文件未修改，返回304 Not Modified
 	w.WriteHeader(http.StatusNotModified)
+	cacheHits.Add(1)
+	log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
 	return true
 }
 

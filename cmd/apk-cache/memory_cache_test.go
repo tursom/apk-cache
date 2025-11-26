@@ -24,7 +24,7 @@ func TestMemoryCacheBasicOperations(t *testing.T) {
 	}
 
 	// 测试 Set 和 Get
-	if !cache.Set(testKey, testData, testHeaders, http.StatusOK) {
+	if !cache.Set(testKey, testData, testHeaders, http.StatusOK, time.Now()) {
 		t.Error("Failed to set cache item")
 	}
 
@@ -53,7 +53,7 @@ func TestMemoryCacheExpiration(t *testing.T) {
 	testKey := "/test/expiring.apk"
 	testData := []byte("expiring data")
 
-	if !cache.Set(testKey, testData, nil, http.StatusOK) {
+	if !cache.Set(testKey, testData, nil, http.StatusOK, time.Now()) {
 		t.Error("Failed to set cache item")
 	}
 
@@ -78,17 +78,17 @@ func TestMemoryCacheEviction(t *testing.T) {
 	cache := NewMemoryCache(100, 2, 30*time.Minute)
 
 	// 添加第一个项目
-	if !cache.Set("/test/1.apk", []byte("data1"), nil, http.StatusOK) {
+	if !cache.Set("/test/1.apk", []byte("data1"), nil, http.StatusOK, time.Now()) {
 		t.Error("Failed to set first cache item")
 	}
 
 	// 添加第二个项目
-	if !cache.Set("/test/2.apk", []byte("data2"), nil, http.StatusOK) {
+	if !cache.Set("/test/2.apk", []byte("data2"), nil, http.StatusOK, time.Now()) {
 		t.Error("Failed to set second cache item")
 	}
 
 	// 添加第三个项目，应该触发驱逐
-	if !cache.Set("/test/3.apk", []byte("data3"), nil, http.StatusOK) {
+	if !cache.Set("/test/3.apk", []byte("data3"), nil, http.StatusOK, time.Now()) {
 		t.Error("Failed to set third cache item")
 	}
 
@@ -109,7 +109,7 @@ func TestMemoryCacheTooLargeItem(t *testing.T) {
 
 	// 尝试添加过大的项目
 	largeData := []byte("this data is too large for the cache")
-	result := cache.Set("/test/large.apk", largeData, nil, http.StatusOK)
+	result := cache.Set("/test/large.apk", largeData, nil, http.StatusOK, time.Now())
 
 	if result {
 		t.Error("Should not be able to set item larger than cache capacity")
@@ -122,7 +122,7 @@ func TestMemoryCacheDelete(t *testing.T) {
 	testKey := "/test/delete.apk"
 	testData := []byte("data to delete")
 
-	if !cache.Set(testKey, testData, nil, http.StatusOK) {
+	if !cache.Set(testKey, testData, nil, http.StatusOK, time.Now()) {
 		t.Error("Failed to set cache item")
 	}
 
@@ -142,7 +142,7 @@ func TestMemoryCacheClear(t *testing.T) {
 	// 添加多个项目
 	for i := 0; i < 5; i++ {
 		key := "/test/" + string(rune('a'+i)) + ".apk"
-		cache.Set(key, []byte("data"), nil, http.StatusOK)
+		cache.Set(key, []byte("data"), nil, http.StatusOK, time.Now())
 	}
 
 	// 清空缓存
@@ -165,7 +165,7 @@ func TestMemoryCacheStats(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		key := "/test/" + string(rune('a'+i)) + ".apk"
 		data := []byte("test data " + string(rune('a'+i)))
-		cache.Set(key, data, nil, http.StatusOK)
+		cache.Set(key, data, nil, http.StatusOK, time.Now())
 	}
 
 	// 获取统计信息

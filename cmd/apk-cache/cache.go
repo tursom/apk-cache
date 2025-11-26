@@ -27,8 +27,8 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 首先检查内存缓存
 	if memoryCache != nil {
-		if memoryCache.ServeFromMemory(w, r, r.URL.Path) {
-			log.Println(t("MemoryCacheHit", map[string]any{"Path": r.URL.Path}))
+		if memoryCache.ServeFromMemory(w, cacheFile) {
+			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
 			return
 		}
 	}
@@ -46,19 +46,16 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 			} else if !valid {
 				log.Println(t("CacheFileCorrupted", map[string]any{"Path": r.URL.Path}))
 				// 文件损坏，视为缓存未命中
-				cacheMisses.Add(1)
 				// 继续从上游获取
 			} else {
 				// 文件完整，从缓存提供
 				log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-				cacheHits.Add(1)
 				serveFromCache(w, r, cacheFile)
 				return
 			}
 		} else {
 			// 数据完整性校验未启用，直接从缓存提供
 			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-			cacheHits.Add(1)
 			serveFromCache(w, r, cacheFile)
 			return
 		}
@@ -122,8 +119,8 @@ func cacheValid(path string) bool {
 func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	// 首先尝试从内存缓存提供
 	if memoryCache != nil {
-		if memoryCache.ServeFromMemory(w, r, r.URL.Path) {
-			log.Println(t("MemoryCacheHit", map[string]any{"Path": r.URL.Path}))
+		if memoryCache.ServeFromMemory(w, cacheFile) {
+			log.Println(t("MemoryCacheHit", map[string]any{"Path": cacheFile}))
 			return
 		}
 	}
@@ -148,7 +145,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 		// 检查文件大小是否超过内存缓存限制
 		if memoryCacheMaxFileSizeBytes > 0 && stat.Size() > memoryCacheMaxFileSizeBytes {
 			log.Println(t("MemoryCacheFileTooLarge", map[string]any{
-				"Path": r.URL.Path,
+				"Path": cacheFile,
 				"Size": stat.Size(),
 				"Max":  memoryCacheMaxFileSizeBytes,
 			}))
@@ -162,13 +159,14 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 				headers["Last-Modified"] = []string{stat.ModTime().Format(http.TimeFormat)}
 				headers["Content-Length"] = []string{strconv.FormatInt(stat.Size(), 10)}
 
-				// 将文件内容缓存到内存
-				memoryCache.CacheToMemory(r.URL.Path, data, headers, http.StatusOK)
+				// 将文件内容缓存到内存，包括修改时间
+				memoryCache.CacheToMemory(cacheFile, data, headers, http.StatusOK, stat.ModTime())
 			}
 		}
 	}
 
 	http.ServeContent(w, r, filepath.Base(cacheFile), stat.ModTime(), file)
+	cacheHits.Add(1)
 }
 
 func fetchFromUpstream(urlPath string) (*http.Response, error) {
@@ -354,12 +352,12 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		// 检查文件大小是否超过内存缓存限制
 		if memoryCacheMaxFileSizeBytes > 0 && int64(len(responseData)) > memoryCacheMaxFileSizeBytes {
 			log.Println(t("MemoryCacheFileTooLarge", map[string]any{
-				"Path": r.URL.Path,
+				"Path": cacheFile,
 				"Size": len(responseData),
 				"Max":  memoryCacheMaxFileSizeBytes,
 			}))
 		} else {
-			memoryCache.CacheToMemory(r.URL.Path, responseData, headers, statusCode)
+			memoryCache.CacheToMemory(cacheFile, responseData, headers, statusCode, time.Now())
 		}
 	}
 
@@ -441,7 +439,6 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 		// 如果缓存存在，直接使用缓存
 		if cacheValid(cacheFile) {
 			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
-			cacheHits.Add(1)
 			serveFromCache(w, r, cacheFile)
 			return false
 		}

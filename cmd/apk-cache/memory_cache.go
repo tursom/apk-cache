@@ -27,6 +27,7 @@ type CacheItem struct {
 	Size        int64
 	AccessTime  time.Time
 	CreateTime  time.Time
+	ModTime     time.Time
 	AccessCount int64
 	Headers     map[string][]string
 	StatusCode  int
@@ -116,7 +117,7 @@ func (m *MemoryCache) Get(key string) (*CacheItem, bool) {
 }
 
 // Set 将数据存入内存缓存
-func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, statusCode int) bool {
+func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, statusCode int, modTime time.Time) bool {
 	size := int64(len(data))
 
 	// 检查是否超过最大大小限制
@@ -137,6 +138,7 @@ func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, 
 		AccessCount: 1,
 		Headers:     headers,
 		StatusCode:  statusCode,
+		ModTime:     modTime,
 	}
 
 	m.mu.Lock()
@@ -317,7 +319,7 @@ func (m *MemoryCache) GetStats() (currentSize int64, maxSize int64, itemCount in
 }
 
 // ServeFromMemory 从内存缓存提供数据
-func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, r *http.Request, key string) bool {
+func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 	item, found := m.Get(key)
 	if !found {
 		return false
@@ -339,14 +341,24 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, r *http.Request, ke
 		return false
 	}
 
+	cacheHits.Add(1)
 	return true
 }
 
 // CacheToMemory 将数据缓存到内存
-func (m *MemoryCache) CacheToMemory(key string, data []byte, headers map[string][]string, statusCode int) {
-	if !m.Set(key, data, headers, statusCode) {
+func (m *MemoryCache) CacheToMemory(key string, data []byte, headers map[string][]string, statusCode int, modTime time.Time) {
+	if !m.Set(key, data, headers, statusCode, modTime) {
 		log.Println(t("MemoryCacheStoreFailed", map[string]any{"Key": key}))
 	}
+}
+
+// GetModTime 获取内存缓存项的修改时间
+func (m *MemoryCache) GetModTime(key string) (time.Time, bool) {
+	item, found := m.Get(key)
+	if !found {
+		return time.Time{}, false
+	}
+	return item.ModTime, true
 }
 
 // CreateReaderFromMemory 从内存缓存创建读取器
