@@ -317,3 +317,182 @@ other = "Rate limiting disabled"
 
 [RateLimitExceeded]
 other = "Rate limit exceeded"
+
+# HTTP proxy related translations
+[HTTPProxyEnabled]
+other = "HTTP proxy functionality enabled"
+
+[HTTPProxyDisabled]
+other = "HTTP proxy functionality disabled"
+
+[ProxyCacheEnabled]
+other = "Proxy cache enabled"
+
+[ProxyCacheDisabled]
+other = "Proxy cache disabled"
+
+[HTTPProxyMode]
+other = "Running in HTTP proxy mode"
+
+[HTTPSProxyRequest]
+other = "HTTPS proxy request: {{.Method}} {{.Host}}"
+
+[HTTPProxyRequest]
+other = "HTTP proxy request: {{.Method}} {{.URL}} Host: {{.Host}}"
+
+[HTTPSProxyConnectFailed]
+other = "HTTPS proxy connect failed to {{.Host}}: {{.Error}}"
+
+[HTTPProxyForwardFailed]
+other = "HTTP proxy forward failed to {{.URL}}: {{.Error}}"
+
+[HTTPProxyCopyResponseFailed]
+other = "HTTP proxy copy response failed: {{.Error}}"
+
+[TLSHandshakeFailed]
+other = "TLS handshake failed {{.Host}}: {{.Error}}"
+
+[ProxyConnectionEstablished]
+other = "Proxy connection established: proxy {{.Proxy}} -> target {{.Target}}"
+
+# APT protocol related translations
+[APTProxyRequest]
+other = "APT proxy request: {{.Method}} {{.URL}} Host: {{.Host}}"
+
+[InvalidTargetURL]
+other = "Invalid target URL: {{.Error}}"
+
+[FailedToCreateRequest]
+other = "Failed to create request: {{.Error}}"
+
+# Data integrity related translations
+[DataIntegrityEnabled]
+other = "Data integrity check enabled: interval {{.Interval}}, auto repair: {{.AutoRepair}}"
+
+[DataIntegrityDisabled]
+other = "Data integrity check disabled"
+
+[DataIntegrityInitFailed]
+other = "Data integrity initialization failed: {{.Error}}"
+
+[DataIntegrityCheckComplete]
+other = "Data integrity check complete: checked {{.Checked}} files, repaired {{.Repaired}} files, took {{.Duration}}"
+
+[PeriodicIntegrityCheckComplete]
+other = "Periodic data integrity check complete: checked {{.Checked}} files, repaired {{.Repaired}} files"
+
+[PeriodicIntegrityCheckFailed]
+other = "Periodic data integrity check failed: {{.Error}}"
+
+[InvalidDataIntegrityCheckInterval]
+other = "Invalid data integrity check interval: {{.Error}}"
+
+[InitializingFileHashes]
+other = "Initializing file hashes..."
+
+[FileHashesInitialized]
+other = "File hashes initialized: {{.Count}} files"
+
+[CalculateFileHashFailed]
+other = "Failed to calculate file hash {{.File}}: {{.Error}}"
+
+[FileIntegrityCheckError]
+other = "File integrity check error {{.File}}: {{.Error}}"
+
+[FileIntegrityCheckFailed]
+other = "File integrity check failed {{.File}}: expected hash {{.ExpectedHash}}, actual hash {{.ActualHash}}"
+
+[CacheFileCorrupted]
+other = "Cache file corrupted: {{.Path}}"
+
+[RecordFileHashFailed]
+other = "Failed to record file hash {{.File}}: {{.Error}}"
+
+[RepairingCorruptedFile]
+other = "Repairing corrupted file: {{.File}}"
+
+[FileRepaired]
+other = "File repaired: {{.File}}"
+
+[DeleteCorruptedFileFailed]
+other = "Failed to delete corrupted file {{.File}}: {{.Error}}"
+
+[AutoRepairFailed]
+other = "Auto repair failed {{.File}}: {{.Error}}"
+
+[OrphanedHashesCleaned]
+other = "Orphaned hashes cleaned: {{.Count}}"
+
+[ReadFileFailed]
+other = "Failed to read file: {{.Error}}"
+
+[NoAvailableUpstreamServer]
+other = "No available upstream server"
+
+[InvalidHealthCheckInterval]
+other = "Invalid health check interval: {{.Error}}"
+
+[InvalidHealthCheckTimeout]
+other = "Invalid health check timeout: {{.Error}}"
+
+# Forwarding request to upstream
+[ForwardingToUpstream]
+other = "Forwarding to upstream: {{.Method}} {{.URL}}"
+
+# Upstream returned error status
+[UpstreamReturnedError]
+other = "Upstream returned error: {{.Status}}"
+
+# Upstream returned 304 Not Modified
+[UpstreamNotModified]
+other = "Upstream returned 304 Not Modified: {{.Path}}"
+
+# New translations for log.Printf calls
+[HTTPProxyHandlerReceived]
+other = "HTTPProxyHandler received: {{.Method}} {{.Path}}"
+
+[ParseIfModifiedSinceFailed]
+other = "Failed to parse If-Modified-Since header: {{.Error}}"
+
+[GetFileInfoFailed]
+other = "Failed to get file info for {{.File}}: {{.Error}}"
+
+[HTTPSProxyAddedDefaultPort]
+other = "HTTPS proxy - added default port 443, target: {{.Target}}"
+
+[ClientCacheValid]
+other = "Client cache valid: {{.Path}}"
+
+[GetTempFileSizeFailed]
+other = "Failed to get temporary file size: {{.Error}}"
+
+[TempFileZeroSize]
+other = "Temporary file has zero size: {{.File}}"
+
+# Hash request related translations
+[ParseHashFromURLFailed]
+other = "Failed to parse hash from URL {{.Path}}: {{.Error}}"
+
+[HashVerificationFailed]
+other = "Hash verification failed {{.File}}: {{.Error}}"
+
+[HashVerificationMismatch]
+other = "Hash verification mismatch {{.Path}} (file: {{.File}}, algorithm: {{.Algorithm}}, expected: {{.Expected}})"
+
+[CacheHitWithHashVerification]
+other = "Cache hit (hash verification passed): {{.Path}} (algorithm: {{.Algorithm}})"
+
+[InvalidHashURLFormat]
+other = "Invalid hash URL format"
+
+[UnsupportedHashAlgorithm]
+other = "Unsupported hash algorithm: {{.Algorithm}}"
+
+[EmptyHashValue]
+other = "Empty hash value"
+
+[RemoveCorruptedCacheFailed]
+other = "Failed to remove corrupted cache file {{.File}}: {{.Error}}"
+
+[HashVerificationPassed]
+other = "Hash verification passed: {{.Path}} (algorithm: {{.Algorithm}})"

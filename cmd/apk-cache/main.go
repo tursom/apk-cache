@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -129,6 +130,13 @@ var (
 	dataIntegrityManager *DataIntegrityManager
 )
 
+type webHandler struct {
+	metricsHandler http.HandlerFunc
+	adminHandler   http.HandlerFunc
+	healthHandler  http.HandlerFunc
+	rootHandler    http.HandlerFunc
+}
+
 // detectLocale 自动检测系统语言
 func detectLocale() string {
 	// 如果命令行参数已指定，直接使用
@@ -182,6 +190,13 @@ func t(messageID string, templateData map[string]any) string {
 		TemplateData: templateData,
 	})
 	if err != nil {
+		// 在未命中时将 templateData 以 JSON 格式添加到返回值中以便调试
+		if len(templateData) > 0 {
+			jsonData, err := json.Marshal(templateData)
+			if err == nil {
+				return messageID + " " + string(jsonData)
+			}
+		}
 		return messageID // 回退到 ID
 	}
 	return msg
@@ -361,8 +376,8 @@ func main() {
 			log.Println(t("DataIntegrityInitFailed", map[string]any{"Error": err}))
 		} else {
 			log.Println(t("DataIntegrityEnabled", map[string]any{
-				"Interval": *dataIntegrityCheckInterval,
-				"AutoRepair": *dataIntegrityAutoRepair,
+				"Interval":      *dataIntegrityCheckInterval,
+				"AutoRepair":    *dataIntegrityAutoRepair,
 				"PeriodicCheck": *dataIntegrityPeriodicCheck,
 			}))
 		}
@@ -373,13 +388,23 @@ func main() {
 		log.Println(t("DataIntegrityDisabled", nil))
 	}
 
-	// 使用自定义 Registry
-	http.HandleFunc("/metrics", rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	var handler webHandler
+
+	handler.metricsHandler = rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
-	}))
-	http.HandleFunc("/_admin/", authMiddleware(rateLimitAdminMiddleware(adminDashboardHandler)))
-	http.HandleFunc("/_health", authMiddleware(healthCheckManager.HealthCheckHandler))
-	http.HandleFunc("/", rateLimitMiddleware(proxyHandler))
+	})
+	handler.adminHandler = authMiddleware(rateLimitAdminMiddleware(adminDashboardHandler))
+	handler.healthHandler = authMiddleware(healthCheckManager.HealthCheckHandler)
+
+	handler.rootHandler = rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		// 检查是否是CONNECT方法（HTTPS代理）或代理请求
+		if proxyIsProxyRequest(r) {
+			handleProxyRequest(w, r)
+		} else {
+			// 非代理请求使用原有的APK缓存逻辑
+			proxyHandler(w, r)
+		}
+	})
 
 	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
 	log.Println(t("UpstreamServer", map[string]any{"URL": *upstreamURL}))
@@ -388,9 +413,29 @@ func main() {
 		log.Println(t("ProxyServer", map[string]any{"Proxy": *proxyURL}))
 	}
 
-	if err := http.ListenAndServe(*listenAddr, nil); err != nil {
+	if err := http.ListenAndServe(*listenAddr, &handler); err != nil {
 		log.Fatalln(t("ServerStartFailed", map[string]any{"Error": err}))
 	}
+}
+
+// ServeHTTP implements http.Handler.
+func (h *webHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/metrics" {
+		h.metricsHandler.ServeHTTP(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/_admin") {
+		h.adminHandler.ServeHTTP(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/_health") {
+		h.healthHandler.ServeHTTP(w, r)
+		return
+	}
+
+	h.rootHandler.ServeHTTP(w, r)
 }
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {

@@ -2,7 +2,7 @@
 
 English | [简体中文](README.md)
 
-A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP proxy and multi-language interface.
+A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP proxy, APT package caching, HTTP/HTTPS proxy and multi-language interface.
 
 ## Features
 
@@ -10,6 +10,8 @@ A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP pro
 - 📦 Serve directly from local cache on cache hits
 - 🔄 Fetch from upstream servers and save on cache misses
 - 🌐 Support SOCKS5/HTTP proxy for upstream access
+- 📦 **APT Package Caching**: Support for Debian/Ubuntu APT package caching
+- 🔄 **HTTP/HTTPS Proxy**: Support for HTTP/HTTPS proxy functionality, can cache APT and APK packages
 - 💾 Configurable cache directory and listening address
 - ⏱️ Flexible cache expiration policies
 - 🧹 Automatic cleanup of expired cache
@@ -77,6 +79,28 @@ RUN sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g
 
 # Install packages (will use cache)
 RUN apk update && apk add --no-cache curl wget git
+```
+
+## Configure Debian/Ubuntu to Use APT Cache Server
+
+APT proxy functionality must be used through HTTP proxy mode and does not support direct URL access.
+
+### Configure APT to Use HTTP Proxy
+
+Method 1: Create proxy configuration file
+
+```bash
+echo 'Acquire::HTTP::Proxy "http://your-cache-server:3142";
+Acquire::HTTPS::Proxy "http://your-cache-server:3142";' > /etc/apt/apt.conf.d/01proxy
+```
+
+Method 2: Edit existing configuration file
+
+Edit `/etc/apt/apt.conf.d/95proxies`:
+
+```bash
+Acquire::HTTP::Proxy "http://your-cache-server:3142";
+Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 ```
 
 ## Main Configuration Parameters

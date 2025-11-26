@@ -317,3 +317,182 @@ other = "请求限流已禁用"
 
 [RateLimitExceeded]
 other = "请求频率超过限制"
+
+# HTTP 代理相关翻译
+[HTTPProxyEnabled]
+other = "HTTP 代理功能已启用"
+
+[HTTPProxyDisabled]
+other = "HTTP 代理功能已禁用"
+
+[ProxyCacheEnabled]
+other = "代理缓存已启用"
+
+[ProxyCacheDisabled]
+other = "代理缓存已禁用"
+
+[HTTPProxyMode]
+other = "运行在 HTTP 代理模式"
+
+[HTTPSProxyRequest]
+other = "HTTPS 代理请求: {{.Method}} {{.Host}}"
+
+[HTTPProxyRequest]
+other = "HTTP 代理请求: {{.Method}} {{.URL}} 主机: {{.Host}}"
+
+[HTTPSProxyConnectFailed]
+other = "HTTPS 代理连接到 {{.Host}} 失败: {{.Error}}"
+
+[HTTPProxyForwardFailed]
+other = "HTTP 代理转发到 {{.URL}} 失败: {{.Error}}"
+
+[HTTPProxyCopyResponseFailed]
+other = "HTTP 代理复制响应失败: {{.Error}}"
+
+[TLSHandshakeFailed]
+other = "TLS 握手失败 {{.Host}}: {{.Error}}"
+
+[ProxyConnectionEstablished]
+other = "代理连接已建立: 代理 {{.Proxy}} -> 目标 {{.Target}}"
+
+# APT 协议相关翻译
+[APTProxyRequest]
+other = "APT 代理请求: {{.Method}} {{.URL}} 主机: {{.Host}}"
+
+[InvalidTargetURL]
+other = "无效的目标 URL: {{.Error}}"
+
+[FailedToCreateRequest]
+other = "创建请求失败: {{.Error}}"
+
+# 数据完整性相关翻译
+[DataIntegrityEnabled]
+other = "数据完整性检查已启用: 间隔 {{.Interval}}, 自动修复: {{.AutoRepair}}"
+
+[DataIntegrityDisabled]
+other = "数据完整性检查已禁用"
+
+[DataIntegrityInitFailed]
+other = "数据完整性初始化失败: {{.Error}}"
+
+[DataIntegrityCheckComplete]
+other = "数据完整性检查完成: 检查 {{.Checked}} 个文件，修复 {{.Repaired}} 个文件，耗时 {{.Duration}}"
+
+[PeriodicIntegrityCheckComplete]
+other = "定期数据完整性检查完成: 检查 {{.Checked}} 个文件，修复 {{.Repaired}} 个文件"
+
+[PeriodicIntegrityCheckFailed]
+other = "定期数据完整性检查失败: {{.Error}}"
+
+[InvalidDataIntegrityCheckInterval]
+other = "无效的数据完整性检查间隔: {{.Error}}"
+
+[InitializingFileHashes]
+other = "正在初始化文件哈希值..."
+
+[FileHashesInitialized]
+other = "文件哈希值初始化完成: {{.Count}} 个文件"
+
+[CalculateFileHashFailed]
+other = "计算文件哈希失败 {{.File}}: {{.Error}}"
+
+[FileIntegrityCheckError]
+other = "文件完整性检查出错 {{.File}}: {{.Error}}"
+
+[FileIntegrityCheckFailed]
+other = "文件完整性检查失败 {{.File}}: 期望哈希 {{.ExpectedHash}}, 实际哈希 {{.ActualHash}}"
+
+[CacheFileCorrupted]
+other = "缓存文件损坏: {{.Path}}"
+
+[RecordFileHashFailed]
+other = "记录文件哈希失败 {{.File}}: {{.Error}}"
+
+[RepairingCorruptedFile]
+other = "正在修复损坏的文件: {{.File}}"
+
+[FileRepaired]
+other = "文件已修复: {{.File}}"
+
+[DeleteCorruptedFileFailed]
+other = "删除损坏文件失败 {{.File}}: {{.Error}}"
+
+[AutoRepairFailed]
+other = "自动修复失败 {{.File}}: {{.Error}}"
+
+[OrphanedHashesCleaned]
+other = "已清理孤立哈希记录: {{.Count}} 个"
+
+[ReadFileFailed]
+other = "读取文件失败: {{.Error}}"
+
+[NoAvailableUpstreamServer]
+other = "没有可用的上游服务器"
+
+[InvalidHealthCheckInterval]
+other = "无效的健康检查间隔: {{.Error}}"
+
+[InvalidHealthCheckTimeout]
+other = "无效的健康检查超时: {{.Error}}"
+
+# 转发请求到上游
+[ForwardingToUpstream]
+other = "正在转发到上游: {{.Method}} {{.URL}}"
+
+# 上游返回错误状态
+[UpstreamReturnedError]
+other = "上游返回错误: {{.Status}}"
+
+# 上游返回 304 Not Modified
+[UpstreamNotModified]
+other = "上游返回 304 Not Modified: {{.Path}}"
+
+# 新增 log.Printf 调用的翻译
+[HTTPProxyHandlerReceived]
+other = "HTTPProxyHandler 收到: {{.Method}} {{.Path}}"
+
+[ParseIfModifiedSinceFailed]
+other = "解析 If-Modified-Since 头失败: {{.Error}}"
+
+[GetFileInfoFailed]
+other = "获取文件信息失败 {{.File}}: {{.Error}}"
+
+[HTTPSProxyAddedDefaultPort]
+other = "HTTPS 代理 - 添加默认端口 443，目标: {{.Target}}"
+
+[ClientCacheValid]
+other = "客户端缓存有效: {{.Path}}"
+
+[GetTempFileSizeFailed]
+other = "获取临时文件大小失败: {{.Error}}"
+
+[TempFileZeroSize]
+other = "临时文件大小为0: {{.File}}"
+
+# Hash 请求相关翻译
+[ParseHashFromURLFailed]
+other = "从 URL 解析哈希失败 {{.Path}}: {{.Error}}"
+
+[HashVerificationFailed]
+other = "哈希验证失败 {{.File}}: {{.Error}}"
+
+[HashVerificationMismatch]
+other = "哈希验证不匹配 {{.Path}} (文件: {{.File}}, 算法: {{.Algorithm}}, 期望: {{.Expected}})"
+
+[CacheHitWithHashVerification]
+other = "缓存命中（哈希验证通过）: {{.Path}} (算法: {{.Algorithm}})"
+
+[InvalidHashURLFormat]
+other = "无效的哈希 URL 格式"
+
+[UnsupportedHashAlgorithm]
+other = "不支持的哈希算法: {{.Algorithm}}"
+
+[EmptyHashValue]
+other = "空的哈希值"
+
+[RemoveCorruptedCacheFailed]
+other = "删除损坏的缓存文件失败 {{.File}}: {{.Error}}"
+
+[HashVerificationPassed]
+other = "哈希验证通过: {{.Path}} (算法: {{.Algorithm}})"

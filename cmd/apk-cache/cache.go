@@ -76,6 +76,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer upstreamResp.Body.Close()
 
+	// 使用统一的函数处理上游响应状态码
+	if !handleUpstreamResponse(w, r, upstreamResp, cacheFile) {
+		return
+	}
+
 	// 保存到缓存（带文件锁）
 	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
 		log.Println(t("SaveCacheFailed", map[string]any{"Error": err}))
@@ -331,6 +336,15 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		return errors.New(t("CacheWriteFailed", map[string]any{"Error": cacheErr}))
 	}
 
+	// 检查临时文件大小
+	ostInfo, err := os.Stat(tmpFileName)
+	if err != nil {
+		return errors.New(t("GetTempFileSizeFailed", map[string]any{"Error": err}))
+	}
+	if ostInfo.Size() == 0 {
+		return errors.New(t("TempFileZeroSize", map[string]any{"File": tmpFileName}))
+	}
+
 	if err := os.Rename(tmpFileName, cacheFile); err != nil {
 		return errors.New(t("RenameCacheFileFailed", map[string]any{"Error": err}))
 	}
@@ -404,5 +418,46 @@ func isCacheExpiredByAccessTime(path string, duration time.Duration) bool {
 }
 
 func isIndexFile(path string) bool {
-	return strings.HasSuffix(path, "/APKINDEX.tar.gz")
+	return strings.HasSuffix(path, "/APKINDEX.tar.gz") ||
+		strings.HasSuffix(path, "/InRelease") ||
+		strings.HasSuffix(path, "/Release") ||
+		strings.HasSuffix(path, "/Packages") ||
+		strings.HasSuffix(path, "/Packages.gz") ||
+		strings.HasSuffix(path, "/Sources") ||
+		strings.HasSuffix(path, "/Sources.gz")
+}
+
+// handleUpstreamResponse 统一处理上游响应状态码
+// 返回 true 表示继续处理，false 表示已处理完成
+func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp *http.Response, cacheFile string) bool {
+	// 细化处理上游响应状态码
+	switch upstreamResp.StatusCode {
+	case http.StatusOK:
+		// 正常响应，继续处理
+		return true
+	case http.StatusNotModified:
+		// 304 Not Modified - 内容未修改，可以继续使用缓存
+		log.Println(t("UpstreamNotModified", map[string]any{"Path": r.URL.Path}))
+		// 如果缓存存在，直接使用缓存
+		if cacheValid(cacheFile) {
+			log.Println(t("CacheHit", map[string]any{"Path": r.URL.Path}))
+			cacheHits.Add(1)
+			serveFromCache(w, r, cacheFile)
+			return false
+		}
+		// 如果缓存不存在，返回304状态
+		w.WriteHeader(http.StatusNotModified)
+		return false
+	default:
+		// 其他错误状态码
+		log.Println(t("UpstreamReturnedError", map[string]any{
+			"Status":     upstreamResp.Status,
+			"StatusCode": upstreamResp.StatusCode,
+		}))
+		http.Error(w, t("UpstreamReturnedError", map[string]any{
+			"Status":     upstreamResp.Status,
+			"StatusCode": upstreamResp.StatusCode,
+		}), upstreamResp.StatusCode)
+		return false
+	}
 }

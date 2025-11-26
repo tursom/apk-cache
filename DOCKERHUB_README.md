@@ -3,7 +3,7 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/tursom/apk-cache)](https://hub.docker.com/r/tursom/apk-cache)
 [![Docker Image Size](https://img.shields.io/docker/image-size/tursom/apk-cache)](https://hub.docker.com/r/tursom/apk-cache)
 
-A high-performance proxy server for caching Alpine Linux APK packages, featuring memory caching, health checks, and self-healing capabilities.
+A high-performance proxy server for caching Alpine Linux APK packages, featuring memory caching, health checks, self-healing capabilities, and APT package caching support.
 
 ## 🚀 Quick Start
 
@@ -43,6 +43,8 @@ services:
 - 🚀 **Automatic Caching** - Cache Alpine Linux APK packages automatically
 - 📦 **Three-Tier Cache** - Memory → File → Upstream caching architecture
 - 🌐 **Proxy Support** - SOCKS5/HTTP proxy for upstream access
+- 📦 **APT Package Caching** - Support for Debian/Ubuntu APT package caching
+- 🔄 **HTTP/HTTPS Proxy** - HTTP/HTTPS proxy functionality with caching support
 - 🩺 **Health Checks** - Automatic upstream server monitoring
 - 🔄 **Self-Healing** - Automatic recovery from failures
 - 📊 **Monitoring** - Prometheus metrics and web dashboard
@@ -95,6 +97,17 @@ RUN sed -i 's|https://dl-cdn.alpinelinux.org|http://your-cache-server:3142|g' /e
 
 # Install packages (will use cache)
 RUN apk update && apk add --no-cache curl wget git
+```
+
+### Configure Debian/Ubuntu for APT Caching
+
+APT proxy functionality must be used through HTTP proxy mode and does not support direct URL access.
+
+Create APT proxy configuration:
+
+```bash
+echo 'Acquire::HTTP::Proxy "http://your-cache-server:3142";
+Acquire::HTTPS::Proxy "http://your-cache-server:3142";' > /etc/apt/apt.conf.d/01proxy
 ```
 
 ## 📊 Monitoring
