@@ -199,6 +199,9 @@ func parseCleanStrategy(strategy string) CleanStrategy {
 func main() {
 	flag.Parse()
 
+	// 初始化上游服务器管理器（必须在 ApplyConfig 之前初始化）
+	upstreamManager = NewUpstreamManager()
+
 	// 加载配置文件（如果指定）
 	if *configFile != "" {
 		config, err := LoadConfig(*configFile)
@@ -212,9 +215,6 @@ func main() {
 			log.Println(i18n.T("LoadedConfigFrom", map[string]any{"Path": *configFile}))
 		}
 	}
-
-	// 初始化上游服务器管理器
-	upstreamManager = NewUpstreamManager()
 
 	// 如果没有从配置文件加载上游服务器，使用命令行参数
 	if upstreamManager.GetServerCount() == 0 {
