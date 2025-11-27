@@ -42,11 +42,21 @@ docker run -d \
 
 ### 从源码构建
 
+**必须使用构建脚本**，因为需要预压缩管理界面的HTML文件：
+
 ```bash
 git clone https://github.com/tursom/apk-cache.git
 cd apk-cache
-go build -o apk-cache ./cmd/apk-cache
+./build.sh
 ```
+
+构建脚本会自动：
+- 检测系统中可用的HTML压缩工具
+- 压缩管理界面的HTML文件
+- 使用最高压缩率生成gzip版本
+- 执行优化的Go构建
+
+**注意**：直接使用 `go build` 会失败，因为缺少预压缩的HTML文件。
 
 ### 运行
 

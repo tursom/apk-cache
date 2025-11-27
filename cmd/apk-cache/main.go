@@ -18,9 +18,6 @@ import (
 	"golang.org/x/text/language"
 )
 
-//go:embed admin.html
-var adminHTML string
-
 //go:embed locales/en.toml
 var enToml []byte
 
@@ -44,6 +41,18 @@ var (
 	downloadBytes = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_download_bytes_total",
 		Help: "Total bytes downloaded from upstream",
+	})
+
+	// 缓存命中大小统计
+	cacheHitBytes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_hit_bytes_total",
+		Help: "Total bytes served from cache hits",
+	})
+
+	// 缓存未命中大小统计
+	cacheMissBytes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_miss_bytes_total",
+		Help: "Total bytes served from cache misses",
 	})
 
 	// 限流相关指标
@@ -330,6 +339,8 @@ func main() {
 	registry.MustRegister(cacheHits)
 	registry.MustRegister(cacheMisses)
 	registry.MustRegister(downloadBytes)
+	registry.MustRegister(cacheHitBytes)
+	registry.MustRegister(cacheMissBytes)
 	registry.MustRegister(rateLimitAllowed)
 	registry.MustRegister(rateLimitRejected)
 	registry.MustRegister(rateLimitCurrentTokens)

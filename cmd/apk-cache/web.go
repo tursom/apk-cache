@@ -12,6 +12,11 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// html 文件内容
+//
+//go:embed admin_min.html.gz
+var adminHTMLGzip []byte
+
 func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
@@ -32,8 +37,10 @@ func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func serveAdminDashboard(w http.ResponseWriter, r *http.Request) {
+	// 直接返回预压缩的gzip内容
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(adminHTML))
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Write(adminHTMLGzip)
 }
 
 func serveAdminStats(w http.ResponseWriter, r *http.Request) {
@@ -43,20 +50,32 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 	cacheHitsVal := getMetricValue(cacheHits)
 	cacheMissesVal := getMetricValue(cacheMisses)
 	downloadBytesVal := getMetricValue(downloadBytes)
+	cacheHitBytesVal := getMetricValue(cacheHitBytes)
+	cacheMissBytesVal := getMetricValue(cacheMissBytes)
 
 	// 计算缓存大小
 	cacheSize, _ := getDirSize(*cachePath)
+
+	// 计算字节命中率
+	totalBytes := cacheHitBytesVal + cacheMissBytesVal
+	hitBytesRate := 0.0
+	if totalBytes > 0 {
+		hitBytesRate = (cacheHitBytesVal / totalBytes) * 100
+	}
 
 	stats := map[string]any{
 		"cache_hits":           int64(cacheHitsVal),
 		"cache_misses":         int64(cacheMissesVal),
 		"download_bytes":       int64(downloadBytesVal),
+		"cache_hit_bytes":      int64(cacheHitBytesVal),
+		"cache_miss_bytes":     int64(cacheMissBytesVal),
+		"hit_bytes_rate":       hitBytesRate,
 		"active_locks":         lockManager.Size(),
 		"tracked_files":        accessTimeTracker.Size(),
 		"cache_size":           cacheSize,
 		"listen_addr":          *listenAddr,
 		"cache_dir":            *cachePath,
-		"upstream":             *upstreamURL,
+		"upstream":             getUpstreamServersInfo(),
 		"index_cache_duration": indexCacheDuration.String(),
 		"pkg_cache_duration":   pkgCacheDuration.String(),
 		"cleanup_interval":     cleanupInterval.String(),
@@ -176,6 +195,33 @@ func getDirSize(path string) (int64, error) {
 		return nil
 	})
 	return size, err
+}
+
+// getUpstreamServersInfo 获取上游服务器结构化信息
+func getUpstreamServersInfo() []map[string]any {
+	servers := upstreamManager.GetAllServers()
+	if len(servers) == 0 {
+		return []map[string]any{}
+	}
+
+	var upstreamInfo []map[string]any
+	for i, server := range servers {
+		name := server.GetName()
+		if name == "" {
+			name = fmt.Sprintf("Server %d", i+1)
+		}
+
+		serverInfo := map[string]any{
+			"name":    name,
+			"url":     server.GetURL(),
+			"proxy":   server.GetProxy(),
+			"healthy": server.IsHealthy(),
+			"index":   i,
+		}
+		upstreamInfo = append(upstreamInfo, serverInfo)
+	}
+
+	return upstreamInfo
 }
 
 // handleDataIntegrityCheck 处理数据完整性检查请求

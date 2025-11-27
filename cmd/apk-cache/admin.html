@@ -6,24 +6,64 @@
     <title>APK Cache - Admin Dashboard</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            /* 明色主题变量 */
+            --bg-primary: #f5f5f5;
+            --bg-secondary: #ffffff;
+            --bg-header: #ffffff;
+            --text-primary: #333333;
+            --text-secondary: #666666;
+            --text-muted: #999999;
+            --border-color: #eeeeee;
+            --shadow-color: rgba(0,0,0,0.1);
+            --primary-color: #007bff;
+            --primary-hover: #0056b3;
+            --danger-color: #dc3545;
+            --danger-hover: #c82333;
+            --success-color: #28a745;
+            --warning-color: #ffc107;
+        }
+
+        [data-theme="dark"] {
+            /* 暗色主题变量 */
+            --bg-primary: #1a1a1a;
+            --bg-secondary: #2d2d2d;
+            --bg-header: #2d2d2d;
+            --text-primary: #ffffff;
+            --text-secondary: #cccccc;
+            --text-muted: #888888;
+            --border-color: #444444;
+            --shadow-color: rgba(0,0,0,0.3);
+            --primary-color: #0d6efd;
+            --primary-hover: #0b5ed7;
+            --danger-color: #dc3545;
+            --danger-hover: #bb2d3b;
+            --success-color: #198754;
+            --warning-color: #ffc107;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: #f5f5f5;
+            background: var(--bg-primary);
+            color: var(--text-primary);
             padding: 20px;
+            transition: background-color 0.3s ease, color 0.3s ease;
         }
         .container {
             max-width: 1200px;
             margin: 0 auto;
         }
         header {
-            background: white;
+            background: var(--bg-header);
             padding: 20px;
             border-radius: 8px;
             margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px var(--shadow-color);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
         h1 {
-            color: #333;
+            color: var(--text-primary);
             margin-bottom: 10px;
         }
         .stats {
@@ -33,13 +73,14 @@
             margin-bottom: 20px;
         }
         .stat-card {
-            background: white;
+            background: var(--bg-secondary);
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px var(--shadow-color);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
         .stat-card h3 {
-            color: #666;
+            color: var(--text-secondary);
             font-size: 14px;
             margin-bottom: 10px;
             text-transform: uppercase;
@@ -47,22 +88,23 @@
         .stat-card .value {
             font-size: 32px;
             font-weight: bold;
-            color: #333;
+            color: var(--text-primary);
         }
         .stat-card .label {
-            color: #999;
+            color: var(--text-muted);
             font-size: 12px;
             margin-top: 5px;
         }
         .actions {
-            background: white;
+            background: var(--bg-secondary);
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px var(--shadow-color);
             margin-bottom: 20px;
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
         button {
-            background: #007bff;
+            background: var(--primary-color);
             color: white;
             border: none;
             padding: 10px 20px;
@@ -70,46 +112,85 @@
             cursor: pointer;
             font-size: 14px;
             margin-right: 10px;
+            transition: background-color 0.3s ease;
         }
         button:hover {
-            background: #0056b3;
+            background: var(--primary-hover);
         }
         button.danger {
-            background: #dc3545;
+            background: var(--danger-color);
         }
         button.danger:hover {
-            background: #c82333;
+            background: var(--danger-hover);
         }
         .info {
-            background: white;
+            background: var(--bg-secondary);
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px var(--shadow-color);
+            transition: background-color 0.3s ease, box-shadow 0.3s ease;
         }
         .info-row {
             display: flex;
             justify-content: space-between;
             padding: 10px 0;
-            border-bottom: 1px solid #eee;
+            border-bottom: 1px solid var(--border-color);
         }
         .info-row:last-child {
             border-bottom: none;
         }
         .info-label {
-            color: #666;
+            color: var(--text-secondary);
             font-weight: 500;
         }
         .info-value {
-            color: #333;
+            color: var(--text-primary);
         }
         #loading {
             display: none;
-            color: #666;
+            color: var(--text-secondary);
             font-style: italic;
+        }
+        
+        /* 主题切换控件样式 */
+        .theme-switcher {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .theme-toggle {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 8px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px var(--shadow-color);
+        }
+        .theme-toggle:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px var(--shadow-color);
+        }
+        .theme-icon {
+            font-size: 16px;
         }
     </style>
 </head>
 <body>
+    <!-- 主题切换控件 -->
+    <div class="theme-switcher">
+        <div class="theme-toggle" id="themeToggle">
+            <span class="theme-icon" id="themeIcon">🌙</span>
+            <span id="themeText">暗色</span>
+        </div>
+    </div>
+
     <div class="container">
         <header>
             <h1>🚀 APK Cache - Admin Dashboard</h1>
@@ -137,6 +218,21 @@
                 <h3>Hit Rate</h3>
                 <div class="value" id="hit-rate">-</div>
                 <div class="label">Percentage</div>
+            </div>
+            <div class="stat-card">
+                <h3>Cache Hit Size</h3>
+                <div class="value" id="cache-hit-bytes">-</div>
+                <div class="label">Bytes served from cache</div>
+            </div>
+            <div class="stat-card">
+                <h3>Cache Miss Size</h3>
+                <div class="value" id="cache-miss-bytes">-</div>
+                <div class="label">Bytes served from upstream</div>
+            </div>
+            <div class="stat-card">
+                <h3>Hit Bytes Rate</h3>
+                <div class="value" id="hit-bytes-rate">-</div>
+                <div class="label">Bytes efficiency</div>
             </div>
             <div class="stat-card">
                 <h3>Downloaded</h3>
@@ -179,8 +275,11 @@
                 <span class="info-value" id="cache-dir">-</span>
             </div>
             <div class="info-row">
-                <span class="info-label">Upstream Server:</span>
+                <span class="info-label">Upstream Servers:</span>
                 <span class="info-value" id="upstream">-</span>
+            </div>
+            <div id="upstream-list">
+                <!-- 上游服务器列表将在这里动态生成 -->
             </div>
             <div class="info-row">
                 <span class="info-label">Index Cache Duration:</span>
@@ -210,6 +309,107 @@
     </div>
 
     <script>
+        // 主题管理功能
+        const ThemeManager = {
+            // 主题选项
+            themes: {
+                light: 'light',
+                dark: 'dark',
+                auto: 'auto'
+            },
+            
+            // 初始化主题
+            init() {
+                this.loadTheme();
+                this.setupEventListeners();
+                this.updateThemeDisplay();
+            },
+            
+            // 加载保存的主题设置
+            loadTheme() {
+                const savedTheme = localStorage.getItem('apk-cache-theme');
+                if (savedTheme && this.themes[savedTheme]) {
+                    this.currentTheme = savedTheme;
+                } else {
+                    // 默认跟随系统
+                    this.currentTheme = this.themes.auto;
+                }
+                this.applyTheme();
+            },
+            
+            // 应用主题
+            applyTheme() {
+                let themeToApply = this.currentTheme;
+                
+                if (themeToApply === this.themes.auto) {
+                    // 检测系统主题偏好
+                    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                        themeToApply = this.themes.dark;
+                    } else {
+                        themeToApply = this.themes.light;
+                    }
+                }
+                
+                // 设置data-theme属性
+                document.documentElement.setAttribute('data-theme', themeToApply);
+                
+                // 保存到localStorage
+                localStorage.setItem('apk-cache-theme', this.currentTheme);
+                
+                this.updateThemeDisplay();
+            },
+            
+            // 切换主题
+            toggleTheme() {
+                const themeOrder = [this.themes.light, this.themes.dark, this.themes.auto];
+                const currentIndex = themeOrder.indexOf(this.currentTheme);
+                const nextIndex = (currentIndex + 1) % themeOrder.length;
+                this.currentTheme = themeOrder[nextIndex];
+                this.applyTheme();
+            },
+            
+            // 更新主题显示
+            updateThemeDisplay() {
+                const themeIcon = document.getElementById('themeIcon');
+                const themeText = document.getElementById('themeText');
+                
+                switch (this.currentTheme) {
+                    case this.themes.light:
+                        themeIcon.textContent = '☀️';
+                        themeText.textContent = '明色';
+                        break;
+                    case this.themes.dark:
+                        themeIcon.textContent = '🌙';
+                        themeText.textContent = '暗色';
+                        break;
+                    case this.themes.auto:
+                        themeIcon.textContent = '🔄';
+                        themeText.textContent = '跟随系统';
+                        break;
+                }
+            },
+            
+            // 设置事件监听器
+            setupEventListeners() {
+                const themeToggle = document.getElementById('themeToggle');
+                themeToggle.addEventListener('click', () => this.toggleTheme());
+                
+                // 监听系统主题变化
+                if (window.matchMedia) {
+                    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+                        if (this.currentTheme === this.themes.auto) {
+                            this.applyTheme();
+                        }
+                    });
+                }
+            }
+        };
+
+        // 初始化主题管理器
+        document.addEventListener('DOMContentLoaded', () => {
+            ThemeManager.init();
+        });
+
         function formatBytes(bytes) {
             if (bytes === 0) return '0 B';
             const k = 1024;
@@ -234,6 +434,11 @@
                     const hitRate = total > 0 ? ((data.cache_hits / total) * 100).toFixed(2) : 0;
                     document.getElementById('hit-rate').textContent = hitRate + '%';
                     
+                    // 更新缓存大小统计
+                    document.getElementById('cache-hit-bytes').textContent = formatBytes(data.cache_hit_bytes);
+                    document.getElementById('cache-miss-bytes').textContent = formatBytes(data.cache_miss_bytes);
+                    document.getElementById('hit-bytes-rate').textContent = data.hit_bytes_rate.toFixed(2) + '%';
+                    
                     document.getElementById('download-bytes').textContent = formatBytes(data.download_bytes);
                     document.getElementById('active-locks').textContent = data.active_locks;
                     document.getElementById('tracked-files').textContent = data.tracked_files.toLocaleString();
@@ -241,7 +446,8 @@
                     
                     document.getElementById('listen-addr').textContent = data.listen_addr;
                     document.getElementById('cache-dir').textContent = data.cache_dir;
-                    document.getElementById('upstream').textContent = data.upstream;
+                    // 更新上游服务器信息
+                    updateUpstreamInfo(data.upstream);
                     document.getElementById('index-cache').textContent = data.index_cache_duration;
                     document.getElementById('pkg-cache').textContent = data.pkg_cache_duration === '0s' ? 'Never expire' : data.pkg_cache_duration;
                     document.getElementById('cleanup-interval').textContent = data.cleanup_interval === '0s' ? 'Disabled' : data.cleanup_interval;
@@ -257,6 +463,46 @@
                     document.getElementById('loading').style.display = 'none';
                     alert('Failed to fetch stats');
                 });
+        }
+
+        function updateUpstreamInfo(upstreams) {
+            const upstreamElement = document.getElementById('upstream');
+            const upstreamList = document.getElementById('upstream-list');
+            
+            if (!upstreams || upstreams.length === 0) {
+                upstreamElement.textContent = 'No upstream servers configured';
+                upstreamList.innerHTML = '';
+                return;
+            }
+
+            // 隐藏原来的单行显示
+            upstreamElement.textContent = `${upstreams.length} servers configured`;
+            
+            // 清空列表
+            upstreamList.innerHTML = '';
+            
+            // 为每个上游服务器创建单独的行
+            upstreams.forEach(server => {
+                const serverRow = document.createElement('div');
+                serverRow.className = 'info-row';
+                serverRow.style.paddingLeft = '20px';
+                serverRow.style.fontSize = '14px';
+                
+                const healthEmoji = server.healthy ? '✅' : '❌';
+                const healthColor = server.healthy ? '#28a745' : '#dc3545';
+                const proxyInfo = server.proxy ? `<br><span style="color: #666; font-size: 12px;">Proxy: ${server.proxy}</span>` : '';
+                
+                serverRow.innerHTML = `
+                    <span class="info-label" style="color: ${healthColor};">
+                        ${healthEmoji} ${server.name}
+                    </span>
+                    <span class="info-value">
+                        ${server.url}${proxyInfo}
+                    </span>
+                `;
+                
+                upstreamList.appendChild(serverRow);
+            });
         }
 
         function updateUpstreamHealth(data) {

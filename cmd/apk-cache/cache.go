@@ -264,6 +264,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 
 	http.ServeContent(w, r, filepath.Base(cacheFile), stat.ModTime(), file)
 	cacheHits.Add(1)
+	cacheHitBytes.Add(float64(stat.Size()))
 }
 
 func fetchFromUpstream(urlPath string) (*http.Response, error) {
@@ -467,6 +468,8 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		}
 	}
 
+	// 记录缓存未命中时的大小
+	cacheMissBytes.Add(float64(totalBytes))
 	return nil
 }
 

@@ -42,11 +42,21 @@ Visit http://localhost:3142/_admin/ to view the management interface.
 
 ### Build from Source
 
+**You must use the build script** because pre-compressed HTML files are required for the management interface:
+
 ```bash
 git clone https://github.com/tursom/apk-cache.git
 cd apk-cache
-go build -o apk-cache ./cmd/apk-cache
+./build.sh
 ```
+
+The build script automatically:
+- Detects available HTML compression tools in the system
+- Compresses the management interface HTML files
+- Generates gzip versions with maximum compression ratio
+- Executes optimized Go build
+
+**Note**: Direct use of `go build` will fail due to missing pre-compressed HTML files.
 
 ### Run
 

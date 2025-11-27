@@ -344,6 +344,7 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 	}
 
 	cacheHits.Add(1)
+	cacheHitBytes.Add(float64(len(item.Data)))
 	return true
 }
 

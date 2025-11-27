@@ -1,11 +1,11 @@
 FROM golang:alpine as builder
 
-RUN apk add upx
+RUN apk add upx gzip
 
 WORKDIR /app
 COPY . entrypoint.sh /app/
 
-RUN go build -ldflags="-s -w" -trimpath ./... && \
+RUN sh build.sh && \
     upx --best --lzma ./apk-cache
 
 FROM alpine:latest
