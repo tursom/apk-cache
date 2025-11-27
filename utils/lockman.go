@@ -1,9 +1,11 @@
-package main
+package utils
 
 import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // fileLockInfo 文件锁信息
@@ -90,7 +92,7 @@ func (m *FileLockManager) StartMonitor(interval time.Duration) {
 		for range ticker.C {
 			size := m.Size()
 			if size > 0 {
-				log.Println(t("ActiveFileLockCount", map[string]any{"Count": size}))
+				log.Println(i18n.T("ActiveFileLockCount", map[string]any{"Count": size}))
 			}
 		}
 	}()

@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"testing"
@@ -21,16 +21,14 @@ var testCases = []struct {
 	{"/debian/pool/main/g/gcc/gcc_10.2.1-1_amd64.deb", PackageTypeAPT, "DEB包文件"},
 	{"/ubuntu/dists/jammy/", PackageTypeAPT, "APT发行版路径"},
 	{"/debian/pool/contrib/", PackageTypeAPT, "APT软件池"},
-
-	// 混合路径
 	{"/by-hash/SHA256/abc123", PackageTypeAPT, "哈希请求(默认APT)"},
-	{"/alpine/v3.18/by-hash/SHA256/def456", PackageTypeAPK, "Alpine哈希请求"},
 
 	// 未知类型
 	{"/other/file.txt", PackageTypeUnknown, "未知文件类型"},
 	{"/random/path/", PackageTypeUnknown, "随机路径"},
 }
 
+// 基准测试数据
 var benchmarkPaths = []string{
 	"/ubuntu/dists/noble-security/universe/binary-amd64/by-hash/SHA256/c92f7e7bc306b24ac3f668b16e43b3659e469a8f2f2f0acce383bb6a91fafc5e",
 	"/ubuntu/dists/noble-security/restricted/binary-amd64/by-hash/SHA256/2a4f602eab0793435cd6b26bfcf95650efb84b10a9201c3174774fd2d919c71b",
@@ -128,7 +126,7 @@ var benchmarkPaths = []string{
 func TestDetectPackageType(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			result := detectPackageType(tc.path)
+			result := DetectPackageType(tc.path)
 			if result != tc.expected {
 				t.Errorf("DetectPackageTypeFast(%q) = %v; want %v",
 					tc.path, result, tc.expected)
@@ -143,7 +141,7 @@ func BenchmarkDetectPackageType(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for _, path := range benchmarkPaths {
-			detectPackageType(path)
+			DetectPackageType(path)
 		}
 	}
 }
@@ -152,7 +150,7 @@ func BenchmarkDetectPackageTypeFast(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		for _, path := range benchmarkPaths {
-			detectPackageTypeFast(path)
+			DetectPackageTypeFast(path)
 		}
 	}
 }

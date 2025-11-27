@@ -6,24 +6,27 @@
 
 ## 功能特性
 
-- 🚀 自动缓存 Alpine Linux APK 包
-- 📦 缓存命中时直接从本地提供服务
-- 🔄 缓存未命中时从上游服务器获取并保存
-- 🌐 支持 SOCKS5/HTTP 代理访问上游服务器
-- 📦 **APT 包缓存**：支持 Debian/Ubuntu APT 包缓存
-- 🔄 **HTTP/HTTPS 代理**：支持 HTTP/HTTPS 代理功能，可缓存 APT 和 APK 包
-- � 可配置的缓存目录和监听地址
-- ⏱️ 灵活的缓存过期策略
-- 🧹 自动清理过期缓存
-- 🔒 文件级锁管理，避免并发下载冲突
-- 🌍 多语言支持（中文/英文）
-- 📊 Prometheus 监控指标
-- 🎛️ Web 管理界面
-- 💰 缓存配额管理（支持 LRU/LFU/FIFO 清理策略）
-- 🚀 **内存缓存层**：三级缓存架构（内存 → 文件 → 上游）
-- 🩺 **健康检查**：上游服务器状态监控和自愈机制
-- 🚦 **请求限流**：基于令牌桶算法的请求频率限制
-- 🔍 **数据完整性校验**：文件校验和验证和自动修复
+- 🚀 **自动缓存** - 自动缓存 Alpine Linux APK 包
+- 📦 **三级缓存架构** - 内存 → 文件 → 上游缓存架构
+- 🔄 **智能缓存** - 缓存命中时直接从本地提供服务，未命中时从上游获取
+- 🌐 **代理支持** - 支持 SOCKS5/HTTP 代理访问上游服务器
+- 📦 **APT 包缓存** - 支持 Debian/Ubuntu APT 包缓存
+- 🔄 **HTTP/HTTPS 代理** - 支持 HTTP/HTTPS 代理功能，可缓存 APT 和 APK 包
+- 💾 **灵活配置** - 可配置的缓存目录、监听地址和缓存策略
+- ⏱️ **过期策略** - 灵活的缓存过期时间和自动清理机制
+- 🧹 **自动清理** - 自动清理过期缓存和磁盘空间管理
+- 🔒 **并发安全** - 文件级锁管理，避免并发下载冲突
+- 🌍 **多语言界面** - 支持中文/英文界面和错误消息
+- 📊 **监控指标** - Prometheus 监控指标和实时统计
+- 🎛️ **Web 管理界面** - 现代化的管理仪表板
+- 💰 **缓存配额** - 缓存配额管理（支持 LRU/LFU/FIFO 清理策略）
+- 🚀 **内存缓存** - 高性能内存缓存层，减少磁盘 I/O
+- 🩺 **健康检查** - 上游服务器状态监控和自愈机制
+- 🚦 **请求限流** - 基于令牌桶算法的请求频率限制
+- 🔍 **数据完整性** - SHA-256 文件校验和验证和自动修复
+- 🔐 **身份验证** - 支持代理身份验证和管理界面认证
+- 📈 **故障转移** - 多上游服务器支持和自动故障转移
+- 🛡️ **安全增强** - IP 白名单、反向代理支持和路径安全验证
 
 ## 快速开始
 
@@ -123,6 +126,16 @@ Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 | `-proxy` | (空) | 代理地址（支持 SOCKS5/HTTP 协议） |
 | `-index-cache` | `24h` | 索引文件缓存时间 |
 | `-pkg-cache` | `0` | 包文件缓存时间（0 = 永不过期） |
+| `-cleanup-interval` | `1h` | 自动清理间隔（0 = 禁用） |
+| `-locale` | (空) | 语言设置 (en/zh)，留空自动检测 |
+| `-admin-user` | `admin` | 管理界面用户名 |
+| `-admin-password` | (空) | 管理界面密码（留空则无需认证） |
+| `-config` | (空) | 配置文件路径（可选） |
+| `-proxy-auth` | `false` | 启用代理身份验证 |
+| `-proxy-user` | `proxy` | 代理身份验证用户名 |
+| `-proxy-password` | (空) | 代理身份验证密码（留空则无需认证） |
+| `-proxy-auth-exempt-ips` | (空) | 不需要验证的 IP 网段（CIDR格式，逗号分隔） |
+| `-trusted-reverse-proxy-ips` | (空) | 信任的反向代理 IP（逗号分隔） |
 | `-cache-max-size` | (空) | 最大缓存大小（如 `10GB`, `1TB`） |
 | `-cache-clean-strategy` | `LRU` | 缓存清理策略 (`LRU`/`LFU`/`FIFO`) |
 | `-memory-cache` | `false` | 启用内存缓存 |
@@ -140,61 +153,30 @@ Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 | `-data-integrity-check-interval` | `1h` | 数据完整性检查间隔（0 = 禁用） |
 | `-data-integrity-auto-repair` | `true` | 启用损坏文件自动修复 |
 | `-data-integrity-periodic-check` | `true` | 启用定期数据完整性检查 |
+| `-data-integrity-initialize-existing-files` | `false` | 启动时初始化现有文件的哈希记录 |
 
 ## 配置文件示例
 
-创建 `config.toml`：
+完整的配置示例请参考 [`config.example.toml`](config.example.toml) 文件。
 
-```toml
-[server]
-addr = ":3142"
-locale = "zh"
+创建 `config.toml` 并参考示例文件进行配置：
 
-# 上游服务器列表（支持故障转移）
-[[upstreams]]
-name = "Official CDN"
-url = "https://dl-cdn.alpinelinux.org"
-# proxy = "socks5://127.0.0.1:1080"  # 或 "http://127.0.0.1:8080"
+```bash
+# 复制示例配置文件
+cp config.example.toml config.toml
 
-[cache]
-dir = "./cache"
-index_duration = "24h"
-pkg_duration = "168h"  # 7 天
-cleanup_interval = "1h"
-max_size = "10GB"      # 最大缓存大小
-clean_strategy = "LRU" # 清理策略 (`LRU`/`LFU`/`FIFO`)
-
-# 内存缓存配置
-[memory_cache]
-enabled = true
-max_size = "100MB"     # 内存缓存最大大小
-max_items = 1000       # 内存缓存最大项目数
-ttl = "30m"            # 内存缓存项过期时间
-max_file_size = "10MB" # 单个文件最大缓存大小
-
-# 健康检查配置
-[health_check]
-interval = "30s"       # 健康检查间隔
-timeout = "10s"        # 健康检查超时时间
-enable_self_healing = true  # 启用自愈机制
-
-# 请求限流配置
-[rate_limit]
-enabled = false        # 启用请求限流
-rate = 100             # 限流速率（每秒请求数）
-burst = 200            # 限流突发容量
-exempt_paths = ["/_health"]  # 豁免限流的路径
-
-# 数据完整性校验配置
-[data_integrity]
-check_interval = "1h"        # 数据完整性检查间隔（0 = 禁用）
-auto_repair = true           # 启用损坏文件自动修复
-periodic_check = true        # 启用定期数据完整性检查
-
-[security]
-# admin_user = "admin" # 管理界面用户名（默认：admin）
-# admin_password = "your-secret-password"  # 管理界面密码
+# 编辑配置文件
+vim config.toml
 ```
+
+主要配置节包括：
+- `[server]` - 服务器基本配置
+- `[[upstreams]]` - 上游服务器列表（支持多个）
+- `[cache]` - 缓存配置
+- `[security]` - 安全配置（身份验证等）
+- `[health_check]` - 健康检查配置
+- `[rate_limit]` - 请求限流配置
+- `[data_integrity]` - 数据完整性校验配置
 
 ## Docker Compose 示例
 

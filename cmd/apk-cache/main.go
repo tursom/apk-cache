@@ -2,7 +2,6 @@ package main
 
 import (
 	_ "embed"
-	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -11,18 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
-	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/text/language"
+	"github.com/tursom/apk-cache/utils"
+	"github.com/tursom/apk-cache/utils/i18n"
 )
-
-//go:embed locales/en.toml
-var enToml []byte
-
-//go:embed locales/zh.toml
-var zhToml []byte
 
 var (
 	// 创建自定义 Registry，不包含默认的 Go 运行时指标
@@ -84,6 +76,14 @@ var (
 	adminUser          = flag.String("admin-user", "admin", "Admin dashboard username")
 	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
 	configFile         = flag.String("config", "", "Config file path (optional)")
+	// 代理身份验证参数
+	proxyAuthEnabled = flag.Bool("proxy-auth", false, "Enable proxy authentication")
+	proxyUser        = flag.String("proxy-user", "proxy", "Proxy authentication username")
+	proxyPassword    = flag.String("proxy-password", "", "Proxy authentication password (empty = no auth)")
+	// 不需要验证的 IP 网段（CIDR格式，逗号分隔）
+	proxyAuthExemptIPs = flag.String("proxy-auth-exempt-ips", "", "Comma-separated list of IP ranges exempt from proxy auth (CIDR format)")
+	// 信任的 nginx 反向代理 IP（逗号分隔）
+	trustedReverseProxyIPs = flag.String("trusted-reverse-proxy-ips", "", "Comma-separated list of trusted reverse proxy IPs")
 	// 缓存配额相关参数
 	cacheMaxSize       = flag.String("cache-max-size", "", "Maximum cache size (e.g. 10GB, 1TB, 0 = unlimited)")
 	cacheCleanStrategy = flag.String("cache-clean-strategy", "LRU", "Cache cleanup strategy (LRU, LFU, FIFO)")
@@ -119,7 +119,7 @@ var (
 	upstreamManager *UpstreamManager
 
 	// 文件锁管理器
-	lockManager = NewFileLockManager()
+	lockManager = utils.NewFileLockManager()
 	// 访问时间跟踪器
 	accessTimeTracker = NewAccessTimeTracker()
 	// 缓存配额管理器
@@ -128,7 +128,6 @@ var (
 	memoryCache *MemoryCache
 	// 内存缓存最大文件大小
 	memoryCacheMaxFileSizeBytes int64
-	localizer                   *i18n.Localizer
 
 	// 健康检查管理器
 	healthCheckManager = NewHealthCheckManager()
@@ -138,6 +137,9 @@ var (
 
 	// 数据完整性管理器
 	dataIntegrityManager *DataIntegrityManager
+
+	// IP匹配器（用于代理身份验证）
+	proxyIPMatcher *utils.IPMatcher
 )
 
 type webHandler struct {
@@ -145,71 +147,6 @@ type webHandler struct {
 	adminHandler   http.HandlerFunc
 	healthHandler  http.HandlerFunc
 	rootHandler    http.HandlerFunc
-}
-
-// detectLocale 自动检测系统语言
-func detectLocale() string {
-	// 如果命令行参数已指定，直接使用
-	if *locale != "" {
-		return *locale
-	}
-
-	// 按优先级检查环境变量
-	envVars := []string{"LC_ALL", "LC_MESSAGES", "LANG"}
-	for _, env := range envVars {
-		if val := os.Getenv(env); val != "" {
-			// 解析语言代码，如 "zh_CN.UTF-8" -> "zh"
-			lang := strings.Split(val, ".")[0] // 去除编码部分
-			lang = strings.Split(lang, "_")[0] // 去除地区部分
-			lang = strings.ToLower(lang)
-
-			// 支持的语言列表
-			supported := map[string]bool{
-				"zh": true,
-				"en": true,
-			}
-
-			if supported[lang] {
-				return lang
-			}
-		}
-	}
-
-	// 默认使用英语
-	return "en"
-}
-
-func initI18n() {
-	bundle := i18n.NewBundle(language.English)
-	bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
-
-	// 加载嵌入的翻译文件
-	bundle.MustParseMessageFileBytes(enToml, "en.toml")
-	bundle.MustParseMessageFileBytes(zhToml, "zh.toml")
-	// 自动检测语言
-	detectedLocale := detectLocale()
-
-	localizer = i18n.NewLocalizer(bundle, detectedLocale)
-
-	log.Println(t("UsingLanguage", map[string]any{"Lang": detectedLocale}))
-}
-
-func t(messageID string, templateData map[string]any) string {
-	msg, err := localizer.Localize(&i18n.LocalizeConfig{
-		MessageID:    messageID,
-		TemplateData: templateData,
-	})
-	if err != nil {
-		// 在未命中时将 templateData 以 JSON 格式添加到返回值中以便调试
-		if len(templateData) > 0 {
-			jsonData, err := json.Marshal(templateData)
-			if err == nil {
-				return messageID + " " + string(jsonData)
-			}
-		}
-		return messageID // 回退到 ID
-	}
-	return msg
 }
 
 // parseSizeString 解析大小字符串（如 "10GB", "1TB"）
@@ -259,6 +196,10 @@ func parseCleanStrategy(strategy string) CleanStrategy {
 	}
 }
 
+func t(messageID string, templateData map[string]any) string {
+	return i18n.T(messageID, templateData)
+}
+
 func main() {
 	flag.Parse()
 
@@ -285,7 +226,7 @@ func main() {
 		upstreamManager.AddServer(server)
 	}
 
-	initI18n()
+	i18n.Init(*locale)
 
 	// 初始化缓存配额管理器
 	if *cacheMaxSize != "" {
@@ -412,6 +353,15 @@ func main() {
 
 	var handler webHandler
 
+	// 初始化代理IP匹配器（如果启用了代理身份验证）
+	if *proxyAuthEnabled {
+		var err error
+		proxyIPMatcher, err = utils.NewIPMatcher(*proxyAuthExemptIPs, *trustedReverseProxyIPs)
+		if err != nil {
+			log.Printf("Failed to create proxy IP matcher: %v", err)
+		}
+	}
+
 	handler.metricsHandler = rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
 	})
@@ -421,9 +371,10 @@ func main() {
 	handler.rootHandler = rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		// 检查是否是CONNECT方法（HTTPS代理）或代理请求
 		if proxyIsProxyRequest(r) {
-			handleProxyRequest(w, r)
+			// 代理请求需要身份验证
+			proxyAuth(handleProxyRequest, w, r)
 		} else {
-			// 非代理请求使用原有的APK缓存逻辑
+			// 非代理请求使用原有的APK缓存逻辑，不需要代理身份验证
 			proxyHandler(w, r)
 		}
 	})
@@ -477,4 +428,44 @@ func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// proxyAuth 代理身份验证
+func proxyAuth(next http.HandlerFunc, w http.ResponseWriter, r *http.Request) {
+	// 如果没有启用代理身份验证，直接返回next
+	if !*proxyAuthEnabled {
+		next(w, r)
+		return
+	}
+
+	// 如果IP匹配器初始化失败，使用简单的认证逻辑
+	if proxyIPMatcher == nil {
+		// Basic Auth for proxy
+		username, password, ok := r.BasicAuth()
+		if !ok || username != *proxyUser || password != *proxyPassword {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Proxy"`)
+			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+			return
+		}
+		next(w, r)
+		return
+	}
+
+	// 获取真实的客户端 IP
+	clientIP := proxyIPMatcher.GetRealClientIP(r)
+
+	// 检查 IP 是否在不需要验证的网段中
+	if proxyIPMatcher.IsExemptIP(clientIP) {
+		next(w, r)
+		return
+	}
+
+	// Basic Auth for proxy
+	username, password, ok := r.BasicAuth()
+	if !ok || username != *proxyUser || password != *proxyPassword {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Proxy"`)
+		http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
+		return
+	}
+	next(w, r)
 }

@@ -6,24 +6,27 @@ A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP pro
 
 ## Features
 
-- 🚀 Automatic caching of Alpine Linux APK packages
-- 📦 Serve directly from local cache on cache hits
-- 🔄 Fetch from upstream servers and save on cache misses
-- 🌐 Support SOCKS5/HTTP proxy for upstream access
-- 📦 **APT Package Caching**: Support for Debian/Ubuntu APT package caching
-- 🔄 **HTTP/HTTPS Proxy**: Support for HTTP/HTTPS proxy functionality, can cache APT and APK packages
-- 💾 Configurable cache directory and listening address
-- ⏱️ Flexible cache expiration policies
-- 🧹 Automatic cleanup of expired cache
-- 🔒 File-level lock management to avoid concurrent download conflicts
-- 🌍 Multi-language support (Chinese/English)
-- 📊 Prometheus monitoring metrics
-- 🎛️ Web management interface
-- 💰 Cache quota management (supports LRU/LFU/FIFO cleanup strategies)
-- 🚀 **Memory Cache Layer**: Three-tier caching architecture (memory → file → upstream)
-- 🩺 **Health Check**: Upstream server status monitoring and self-healing mechanisms
-- 🚦 **Request Rate Limiting**: Token bucket algorithm for request frequency limiting
-- 🔍 **Data Integrity Verification**: File checksum validation and automatic repair
+- 🚀 **Automatic Caching** - Automatic caching of Alpine Linux APK packages
+- 📦 **Three-Tier Cache** - Memory → File → Upstream caching architecture
+- 🔄 **Smart Caching** - Serve directly from local cache on cache hits, fetch from upstream on misses
+- 🌐 **Proxy Support** - Support SOCKS5/HTTP proxy for upstream access
+- 📦 **APT Package Caching** - Support for Debian/Ubuntu APT package caching
+- 🔄 **HTTP/HTTPS Proxy** - Support for HTTP/HTTPS proxy functionality, can cache APT and APK packages
+- 💾 **Flexible Configuration** - Configurable cache directory, listening address and caching strategies
+- ⏱️ **Expiration Policies** - Flexible cache expiration times and automatic cleanup mechanisms
+- 🧹 **Automatic Cleanup** - Automatic cleanup of expired cache and disk space management
+- 🔒 **Concurrent Safety** - File-level lock management to avoid concurrent download conflicts
+- 🌍 **Multi-language Interface** - Support for Chinese/English interface and error messages
+- 📊 **Monitoring Metrics** - Prometheus monitoring metrics and real-time statistics
+- 🎛️ **Web Management Interface** - Modern management dashboard
+- 💰 **Cache Quota** - Cache quota management (supports LRU/LFU/FIFO cleanup strategies)
+- 🚀 **Memory Cache** - High-performance memory cache layer, reducing disk I/O
+- 🩺 **Health Check** - Upstream server status monitoring and self-healing mechanisms
+- 🚦 **Request Rate Limiting** - Token bucket algorithm for request frequency limiting
+- 🔍 **Data Integrity** - SHA-256 file checksum validation and automatic repair
+- 🔐 **Authentication** - Support for proxy authentication and management interface authentication
+- 📈 **Failover Support** - Multiple upstream servers support and automatic failover
+- 🛡️ **Security Enhancements** - IP whitelisting, reverse proxy support and path security validation
 
 ## Quick Start
 
@@ -123,6 +126,16 @@ Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 | `-proxy` | (empty) | Proxy address (supports SOCKS5/HTTP protocols) |
 | `-index-cache` | `24h` | Index file cache duration |
 | `-pkg-cache` | `0` | Package file cache duration (0 = never expire) |
+| `-cleanup-interval` | `1h` | Automatic cleanup interval (0 = disabled) |
+| `-locale` | (empty) | Language (en/zh), auto-detect if empty |
+| `-admin-user` | `admin` | Admin dashboard username |
+| `-admin-password` | (empty) | Admin dashboard password (empty = no auth) |
+| `-config` | (empty) | Config file path (optional) |
+| `-proxy-auth` | `false` | Enable proxy authentication |
+| `-proxy-user` | `proxy` | Proxy authentication username |
+| `-proxy-password` | (empty) | Proxy authentication password (empty = no auth) |
+| `-proxy-auth-exempt-ips` | (empty) | Comma-separated list of IP ranges exempt from proxy auth (CIDR format) |
+| `-trusted-reverse-proxy-ips` | (empty) | Comma-separated list of trusted reverse proxy IPs |
 | `-cache-max-size` | (empty) | Maximum cache size (e.g., `10GB`, `1TB`) |
 | `-cache-clean-strategy` | `LRU` | Cache cleanup strategy (`LRU`/`LFU`/`FIFO`) |
 | `-memory-cache` | `false` | Enable memory cache |
@@ -140,61 +153,30 @@ Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 | `-data-integrity-check-interval` | `1h` | Data integrity check interval (0 = disabled) |
 | `-data-integrity-auto-repair` | `true` | Enable automatic repair of corrupted files |
 | `-data-integrity-periodic-check` | `true` | Enable periodic data integrity checks |
+| `-data-integrity-initialize-existing-files` | `false` | Initialize existing files hash records on startup |
 
 ## Configuration File Example
 
-Create `config.toml`:
+For a complete configuration example, please refer to the [`config.example.toml`](config.example.toml) file.
 
-```toml
-[server]
-addr = ":3142"
-locale = "en"
+Create `config.toml` and refer to the example file for configuration:
 
-# Upstream servers list (supports failover)
-[[upstreams]]
-name = "Official CDN"
-url = "https://dl-cdn.alpinelinux.org"
-# proxy = "socks5://127.0.0.1:1080"  # or "http://127.0.0.1:8080"
+```bash
+# Copy example configuration file
+cp config.example.toml config.toml
 
-[cache]
-dir = "./cache"
-index_duration = "24h"
-pkg_duration = "168h"  # 7 days
-cleanup_interval = "1h"
-max_size = "10GB"      # Maximum cache size
-clean_strategy = "LRU" # Cleanup strategy (`LRU`/`LFU`/`FIFO`)
-
-# Memory cache configuration
-[memory_cache]
-enabled = true
-max_size = "100MB"     # Maximum memory cache size
-max_items = 1000       # Maximum number of items in memory cache
-ttl = "30m"            # Memory cache item expiration time
-max_file_size = "10MB" # Maximum file size for memory caching
-
-# Health check configuration
-[health_check]
-interval = "30s"       # Health check interval
-timeout = "10s"        # Health check timeout
-enable_self_healing = true  # Enable self-healing mechanisms
-
-# Request rate limiting configuration
-[rate_limit]
-enabled = false        # Enable request rate limiting
-rate = 100             # Rate limit (requests per second)
-burst = 200            # Rate limit burst capacity
-exempt_paths = ["/_health"]  # Paths exempt from rate limiting
-
-# Data integrity verification configuration
-[data_integrity]
-check_interval = "1h"        # Data integrity check interval (0 = disabled)
-auto_repair = true           # Enable automatic repair of corrupted files
-periodic_check = true        # Enable periodic data integrity checks
-
-[security]
-# admin_user = "admin" # Management interface username (default: admin)
-# admin_password = "your-secret-password"  # Management interface password
+# Edit configuration file
+vim config.toml
 ```
+
+Main configuration sections include:
+- `[server]` - Server basic configuration
+- `[[upstreams]]` - Upstream servers list (supports multiple)
+- `[cache]` - Cache configuration
+- `[security]` - Security configuration (authentication, etc.)
+- `[health_check]` - Health check configuration
+- `[rate_limit]` - Request rate limiting configuration
+- `[data_integrity]` - Data integrity verification configuration
 
 ## Docker Compose Example
 

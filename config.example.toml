@@ -45,17 +45,29 @@ max_size = "0"
 clean_strategy = "LRU"
 
 # 内存缓存配置
-[memory_cache]
-enabled = true
-max_size = "100MB"     # 内存缓存最大大小
-ttl = "1h"             # 内存缓存项过期时间
-max_file_size = "10MB" # 单个文件最大缓存大小
+memory_cache_enabled = true
+memory_cache_size = "100MB"     # 内存缓存最大大小
+memory_cache_max_items = 1000   # 内存缓存最大项目数
+memory_cache_ttl = "1h"         # 内存缓存项过期时间
+memory_cache_max_file_size = "10MB" # 单个文件最大缓存大小
 
 [security]
 # 管理界面用户名（默认：admin）
 # admin_user = "admin"
 # 管理界面密码（留空则无需认证）
 # admin_password = "your-secret-password"
+
+# 代理身份验证配置
+# 是否启用代理身份验证
+# proxy_auth_enabled = false
+# 代理身份验证用户名（默认：proxy）
+# proxy_user = "proxy"
+# 代理身份验证密码（留空则无需认证）
+# proxy_password = "your-proxy-password"
+# 不需要验证的 IP 网段（CIDR格式，逗号分隔）
+# proxy_auth_exempt_ips = "192.168.1.0/24,10.0.0.0/8"
+# 信任的反向代理 IP（逗号分隔，用于获取真实客户端 IP）
+# trusted_reverse_proxy_ips = "172.17.0.1,192.168.1.100"
 
 # 健康检查配置
 [health_check]

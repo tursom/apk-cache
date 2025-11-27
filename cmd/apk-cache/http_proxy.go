@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tursom/apk-cache/utils"
 	"golang.org/x/net/proxy"
 )
 
@@ -108,9 +109,9 @@ func handleProxyHTTPS(w http.ResponseWriter, r *http.Request) {
 
 	// 告诉客户端连接已建立
 	// 对于CONNECT请求，需要发送特定格式的响应
-	fmt.Fprintf(clientConn, "HTTP/1.1 200 Connection Established\r\n")
-	fmt.Fprintf(clientConn, "Proxy-Agent: apk-cache\r\n")
-	fmt.Fprintf(clientConn, "\r\n")
+	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n"))
+	clientConn.Write([]byte("Proxy-Agent: apk-cache\r\n"))
+	clientConn.Write([]byte("\r\n"))
 
 	// 双向转发数据
 	// 注意：对于HTTPS代理，代理服务器不应该进行TLS握手
@@ -130,11 +131,11 @@ func handleProxyHTTP(w http.ResponseWriter, r *http.Request) {
 		"Host":   r.Host,
 	}))
 
-	switch detectPackageTypeFast(r.URL.Path) {
-	case PackageTypeAPT:
+	switch utils.DetectPackageTypeFast(r.URL.Path) {
+	case utils.PackageTypeAPT:
 		// 检查是否是APT协议请求，如果是则使用缓存逻辑
 		handleAPTProxy(w, r)
-	case PackageTypeAPK:
+	case utils.PackageTypeAPK:
 		// 检查是否是APK协议请求，如果是则使用现有的缓存逻辑
 		proxyHandler(w, r)
 	default:

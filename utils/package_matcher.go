@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"strings"
@@ -13,8 +13,8 @@ const (
 	PackageTypeAPT
 )
 
-// detectPackageType 检测包类型
-func detectPackageType(path string) PackageType {
+// DetectPackageType 检测包类型
+func DetectPackageType(path string) PackageType {
 	// 优化的检测顺序，按出现频率排序
 	switch {
 	case strings.HasSuffix(path, ".apk"):
@@ -39,9 +39,9 @@ func detectPackageType(path string) PackageType {
 	}
 }
 
-// detectPackageTypeFast 快速包类型检测
+// DetectPackageTypeFast 快速包类型检测
 // 使用字节切片和 Boyer-Moore 启发式算法
-func detectPackageTypeFast(path string) PackageType {
+func DetectPackageTypeFast(path string) PackageType {
 	// 转换为字节切片以获得更好的性能
 	n := len(path)
 	if n < 6 || path[0] != '/' {

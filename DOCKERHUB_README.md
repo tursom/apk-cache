@@ -52,6 +52,10 @@ services:
 - 🔒 **File Locking** - Prevent concurrent download conflicts
 - 🚦 **Rate Limiting** - Token bucket algorithm for request limiting
 - 🔍 **Data Integrity** - File checksum validation and automatic repair
+- 🔐 **Authentication** - Proxy authentication and management interface security
+- 📈 **Failover Support** - Multiple upstream servers with automatic failover
+- 🛡️ **Security Features** - IP whitelisting and reverse proxy support
+- 🌍 **Multi-language** - Chinese/English interface support
 
 ## ⚙️ Configuration
 
@@ -65,11 +69,25 @@ services:
 | `PROXY` | (empty) | Proxy address (SOCKS5/HTTP) |
 | `INDEX_CACHE` | `24h` | Index file cache duration |
 | `PKG_CACHE` | `0` | Package cache duration (0 = never expire) |
+| `CLEANUP_INTERVAL` | `1h` | Automatic cleanup interval (0 = disabled) |
+| `LOCALE` | (empty) | Language (en/zh), auto-detect if empty |
+| `ADMIN_USER` | `admin` | Admin dashboard username |
+| `ADMIN_PASSWORD` | (empty) | Admin dashboard password (empty = no auth) |
+| `CONFIG` | (empty) | Config file path (optional) |
+| `PROXY_AUTH` | `false` | Enable proxy authentication |
+| `PROXY_USER` | `proxy` | Proxy authentication username |
+| `PROXY_PASSWORD` | (empty) | Proxy authentication password (empty = no auth) |
+| `PROXY_AUTH_EXEMPT_IPS` | (empty) | IP ranges exempt from proxy auth (CIDR format) |
+| `TRUSTED_REVERSE_PROXY_IPS` | (empty) | Trusted reverse proxy IPs (comma-separated) |
 | `CACHE_MAX_SIZE` | (empty) | Maximum cache size (e.g., `10GB`, `1TB`) |
+| `CACHE_CLEAN_STRATEGY` | `LRU` | Cache cleanup strategy (`LRU`/`LFU`/`FIFO`) |
 | `MEMORY_CACHE_ENABLED` | `false` | Enable memory cache |
 | `MEMORY_CACHE_SIZE` | `100MB` | Memory cache size |
 | `MEMORY_CACHE_MAX_ITEMS` | `1000` | Maximum items in memory cache |
+| `MEMORY_CACHE_TTL` | `30m` | Memory cache item expiration time |
+| `MEMORY_CACHE_MAX_FILE_SIZE` | `10MB` | Maximum file size for memory caching |
 | `HEALTH_CHECK_INTERVAL` | `30s` | Health check interval |
+| `HEALTH_CHECK_TIMEOUT` | `10s` | Health check timeout |
 | `ENABLE_SELF_HEALING` | `true` | Enable self-healing mechanisms |
 | `RATE_LIMIT_ENABLED` | `false` | Enable request rate limiting |
 | `RATE_LIMIT_RATE` | `100` | Rate limit (requests per second) |
@@ -78,6 +96,7 @@ services:
 | `DATA_INTEGRITY_CHECK_INTERVAL` | `1h` | Data integrity check interval (0 = disabled) |
 | `DATA_INTEGRITY_AUTO_REPAIR` | `true` | Enable automatic repair of corrupted files |
 | `DATA_INTEGRITY_PERIODIC_CHECK` | `true` | Enable periodic data integrity checks |
+| `DATA_INTEGRITY_INITIALIZE_EXISTING_FILES` | `false` | Initialize existing files hash records on startup |
 
 ### Configure Alpine Linux
 
@@ -159,11 +178,11 @@ pkg_duration = "168h"  # 7 days
 max_size = "10GB"
 clean_strategy = "LRU"
 
-[memory_cache]
-enabled = true
-max_size = "100MB"
-ttl = "30m"
-max_file_size = "10MB"
+memory_cache_enabled = true
+memory_cache_size = "100MB"
+memory_cache_max_items = 1000
+memory_cache_ttl = "30m"
+memory_cache_max_file_size = "10MB"
 
 [health_check]
 interval = "30s"

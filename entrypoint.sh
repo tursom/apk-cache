@@ -16,6 +16,13 @@ CONFIG=${CONFIG:-}
 CACHE_MAX_SIZE=${CACHE_MAX_SIZE:-}
 CACHE_CLEAN_STRATEGY=${CACHE_CLEAN_STRATEGY:-}
 
+# 新增：代理身份验证相关环境变量
+PROXY_AUTH_ENABLED=${PROXY_AUTH_ENABLED:-false}
+PROXY_USER=${PROXY_USER:-proxy}
+PROXY_PASSWORD=${PROXY_PASSWORD:-}
+PROXY_AUTH_EXEMPT_IPS=${PROXY_AUTH_EXEMPT_IPS:-}
+TRUSTED_REVERSE_PROXY_IPS=${TRUSTED_REVERSE_PROXY_IPS:-}
+
 # 新增：内存缓存相关环境变量
 MEMORY_CACHE_ENABLED=${MEMORY_CACHE_ENABLED:-false}
 MEMORY_CACHE_SIZE=${MEMORY_CACHE_SIZE:-100MB}
@@ -38,6 +45,7 @@ RATE_LIMIT_EXEMPT_PATHS=${RATE_LIMIT_EXEMPT_PATHS:-/_health}
 DATA_INTEGRITY_CHECK_INTERVAL=${DATA_INTEGRITY_CHECK_INTERVAL:-1h}
 DATA_INTEGRITY_AUTO_REPAIR=${DATA_INTEGRITY_AUTO_REPAIR:-true}
 DATA_INTEGRITY_PERIODIC_CHECK=${DATA_INTEGRITY_PERIODIC_CHECK:-true}
+DATA_INTEGRITY_INITIALIZE_EXISTING_FILES=${DATA_INTEGRITY_INITIALIZE_EXISTING_FILES:-false}
 
 # 构建参数
 ARGS="-addr $ADDR -cache $CACHE_DIR -index-cache $INDEX_CACHE -pkg-cache $PKG_CACHE -cleanup-interval $CLEANUP_INTERVAL"
@@ -78,6 +86,32 @@ fi
 # 如果 CACHE_CLEAN_STRATEGY 不为空，添加 -cache-clean-strategy 参数
 if [ -n "$CACHE_CLEAN_STRATEGY" ]; then
     ARGS="$ARGS -cache-clean-strategy $CACHE_CLEAN_STRATEGY"
+fi
+
+# 新增：代理身份验证相关参数
+# 如果 PROXY_AUTH_ENABLED 为 true，添加 -proxy-auth 参数
+if [ "$PROXY_AUTH_ENABLED" = "true" ]; then
+    ARGS="$ARGS -proxy-auth"
+fi
+
+# 如果 PROXY_USER 不为空，添加 -proxy-user 参数
+if [ -n "$PROXY_USER" ]; then
+    ARGS="$ARGS -proxy-user $PROXY_USER"
+fi
+
+# 如果 PROXY_PASSWORD 不为空，添加 -proxy-password 参数
+if [ -n "$PROXY_PASSWORD" ]; then
+    ARGS="$ARGS -proxy-password $PROXY_PASSWORD"
+fi
+
+# 如果 PROXY_AUTH_EXEMPT_IPS 不为空，添加 -proxy-auth-exempt-ips 参数
+if [ -n "$PROXY_AUTH_EXEMPT_IPS" ]; then
+    ARGS="$ARGS -proxy-auth-exempt-ips $PROXY_AUTH_EXEMPT_IPS"
+fi
+
+# 如果 TRUSTED_REVERSE_PROXY_IPS 不为空，添加 -trusted-reverse-proxy-ips 参数
+if [ -n "$TRUSTED_REVERSE_PROXY_IPS" ]; then
+    ARGS="$ARGS -trusted-reverse-proxy-ips $TRUSTED_REVERSE_PROXY_IPS"
 fi
 
 # 新增：内存缓存相关参数
@@ -156,6 +190,11 @@ fi
 # 如果 DATA_INTEGRITY_PERIODIC_CHECK 不为空，添加 -data-integrity-periodic-check 参数
 if [ -n "$DATA_INTEGRITY_PERIODIC_CHECK" ]; then
     ARGS="$ARGS -data-integrity-periodic-check $DATA_INTEGRITY_PERIODIC_CHECK"
+fi
+
+# 新增：数据完整性初始化现有文件参数
+if [ -n "$DATA_INTEGRITY_INITIALIZE_EXISTING_FILES" ]; then
+    ARGS="$ARGS -data-integrity-initialize-existing-files $DATA_INTEGRITY_INITIALIZE_EXISTING_FILES"
 fi
 
 # 启动应用

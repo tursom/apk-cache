@@ -50,6 +50,14 @@ type CacheConfig struct {
 type SecurityConfig struct {
 	AdminUser     string `toml:"admin_user"`
 	AdminPassword string `toml:"admin_password"`
+	// 代理身份验证配置
+	ProxyAuthEnabled bool   `toml:"proxy_auth_enabled"`
+	ProxyUser        string `toml:"proxy_user"`
+	ProxyPassword    string `toml:"proxy_password"`
+	// 不需要验证的 IP 网段（CIDR格式，逗号分隔）
+	ProxyAuthExemptIPs string `toml:"proxy_auth_exempt_ips"`
+	// 信任的 nginx 反向代理 IP（逗号分隔）
+	TrustedReverseProxyIPs string `toml:"trusted_reverse_proxy_ips"`
 }
 
 // HealthCheckConfig 健康检查配置
@@ -182,6 +190,24 @@ func ApplyConfig(config *Config) error {
 	}
 	if config.Security.AdminPassword != "" && !isFlagSet("admin-password") {
 		*adminPassword = config.Security.AdminPassword
+	}
+	// 代理身份验证配置
+	if !isFlagSet("proxy-auth") {
+		*proxyAuthEnabled = config.Security.ProxyAuthEnabled
+	}
+	if config.Security.ProxyUser != "" && !isFlagSet("proxy-user") {
+		*proxyUser = config.Security.ProxyUser
+	}
+	if config.Security.ProxyPassword != "" && !isFlagSet("proxy-password") {
+		*proxyPassword = config.Security.ProxyPassword
+	}
+	// 不需要验证的 IP 网段配置
+	if config.Security.ProxyAuthExemptIPs != "" && !isFlagSet("proxy-auth-exempt-ips") {
+		*proxyAuthExemptIPs = config.Security.ProxyAuthExemptIPs
+	}
+	// 信任的反向代理 IP 配置
+	if config.Security.TrustedReverseProxyIPs != "" && !isFlagSet("trusted-reverse-proxy-ips") {
+		*trustedReverseProxyIPs = config.Security.TrustedReverseProxyIPs
 	}
 
 	// HealthCheck 配置

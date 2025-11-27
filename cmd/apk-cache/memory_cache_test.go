@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 func init() {
-	initI18n()
+	i18n.Init("zh")
 }
 
 func TestMemoryCacheBasicOperations(t *testing.T) {
