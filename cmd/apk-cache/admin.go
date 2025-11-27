@@ -92,33 +92,39 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 添加健康检查信息
-	if healthCheckManager != nil {
-		healthStatus := healthCheckManager.GetSystemStatus().GetAllStatus()
-		stats["health_status"] = healthStatus
-
-		// 计算整体健康状态
-		overallHealthy := true
-		for _, status := range healthStatus {
-			if status.Status == "unhealthy" {
-				overallHealthy = false
-				break
-			}
-		}
-		stats["overall_health"] = overallHealthy
-
-		// 添加上游服务器健康状态
-		upstreamHealth := make(map[string]any)
-		servers := upstreamManager.GetAllServers()
-		for i, server := range servers {
-			upstreamHealth[fmt.Sprintf("upstream_%d", i)] = map[string]any{
-				"url":    server.GetURL(),
-				"proxy":  server.GetProxy(),
-				"name":   server.GetName(),
-				"health": server.IsHealthy(),
-			}
-		}
-		stats["upstream_health"] = upstreamHealth
+	healthyCount := upstreamManager.GetHealthyCount()
+	totalCount := upstreamManager.GetServerCount()
+	
+	// 计算整体健康状态
+	overallHealthy := healthyCount > 0
+	stats["overall_health"] = overallHealthy
+	stats["health_status"] = map[string]any{
+		"upstream": map[string]any{
+			"status": func() string {
+				if healthyCount == 0 {
+					return "unhealthy"
+				} else if healthyCount < totalCount {
+					return "degraded"
+				}
+				return "healthy"
+			}(),
+			"healthy_servers": healthyCount,
+			"total_servers":   totalCount,
+		},
 	}
+
+	// 添加上游服务器健康状态
+	upstreamHealth := make(map[string]any)
+	servers := upstreamManager.GetAllServers()
+	for i, server := range servers {
+		upstreamHealth[fmt.Sprintf("upstream_%d", i)] = map[string]any{
+			"url":    server.GetURL(),
+			"proxy":  server.GetProxy(),
+			"name":   server.GetName(),
+			"health": server.IsHealthy(),
+		}
+	}
+	stats["upstream_health"] = upstreamHealth
 
 	// 添加数据完整性信息
 	if dataIntegrityManager != nil {

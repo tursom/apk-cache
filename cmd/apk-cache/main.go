@@ -129,9 +129,6 @@ var (
 	// 内存缓存最大文件大小
 	memoryCacheMaxFileSizeBytes int64
 
-	// 健康检查管理器
-	healthCheckManager = NewHealthCheckManager()
-
 	// 请求限流器
 	rateLimiter *RateLimiter
 
@@ -308,9 +305,6 @@ func main() {
 		log.Println(i18n.T("AutoCleanupEnabled", map[string]any{"Interval": *cleanupInterval}))
 	}
 
-	// 启动健康检查循环
-	go healthCheckManager.StartHealthCheckLoop()
-
 	// 启动限流指标更新循环
 	if *rateLimitEnabled {
 		go updateRateLimitMetrics()
@@ -366,7 +360,7 @@ func main() {
 		promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
 	})
 	handler.adminHandler = authMiddleware(rateLimitAdminMiddleware(adminDashboardHandler))
-	handler.healthHandler = authMiddleware(healthCheckManager.HealthCheckHandler)
+	handler.healthHandler = authMiddleware(healthCheckHandler)
 
 	handler.rootHandler = rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		// 检查是否是CONNECT方法（HTTPS代理）或代理请求
@@ -411,61 +405,3 @@ func (h *webHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.rootHandler.ServeHTTP(w, r)
 }
 
-func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// 如果没有设置密码，跳过认证
-		if *adminPassword == "" {
-			next(w, r)
-			return
-		}
-
-		// Basic Auth
-		username, password, ok := r.BasicAuth()
-		if !ok || username != *adminUser || password != *adminPassword {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Admin"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
-// proxyAuth 代理身份验证
-func proxyAuth(next http.HandlerFunc, w http.ResponseWriter, r *http.Request) {
-	// 如果没有启用代理身份验证，直接返回next
-	if !*proxyAuthEnabled {
-		next(w, r)
-		return
-	}
-
-	// 如果IP匹配器初始化失败，使用简单的认证逻辑
-	if proxyIPMatcher == nil {
-		// Basic Auth for proxy
-		username, password, ok := r.BasicAuth()
-		if !ok || username != *proxyUser || password != *proxyPassword {
-			w.Header().Set("WWW-Authenticate", `Basic realm="Proxy"`)
-			http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
-			return
-		}
-		next(w, r)
-		return
-	}
-
-	// 获取真实的客户端 IP
-	clientIP := proxyIPMatcher.GetRealClientIP(r)
-
-	// 检查 IP 是否在不需要验证的网段中
-	if proxyIPMatcher.IsExemptIP(clientIP) {
-		next(w, r)
-		return
-	}
-
-	// Basic Auth for proxy
-	username, password, ok := r.BasicAuth()
-	if !ok || username != *proxyUser || password != *proxyPassword {
-		w.Header().Set("WWW-Authenticate", `Basic realm="Proxy"`)
-		http.Error(w, "Proxy Authentication Required", http.StatusProxyAuthRequired)
-		return
-	}
-	next(w, r)
-}
