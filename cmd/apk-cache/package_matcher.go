@@ -44,29 +44,28 @@ func detectPackageType(path string) PackageType {
 func detectPackageTypeFast(path string) PackageType {
 	// 转换为字节切片以获得更好的性能
 	n := len(path)
-	if n < 6 {
+	if n < 6 || path[0] != '/' {
 		return PackageTypeUnknown
 	}
 
 	// 检查开头
-	if path[0] == '/' {
-		// "/alpine"
-		if n >= 8 {
-			if path[1] == 'a' && path[2] == 'l' && path[3] == 'p' &&
-				path[4] == 'i' && path[5] == 'n' && path[6] == 'e' {
-				return PackageTypeAPK
+	if n >= 7 {
+		switch path[1] {
+		case 'a':
+			// "/alpine"
+			if path[2] == 'u' && path[3] == 'b' &&
+				path[4] == 'u' && path[5] == 'n' && path[6] == 't' {
+				return PackageTypeAPT
 			}
-		}
-		// "/debian"
-		if n >= 8 {
-			if path[1] == 'd' && path[2] == 'e' && path[3] == 'b' &&
+		case 'd':
+			// "/debian"
+			if path[2] == 'e' && path[3] == 'b' &&
 				path[4] == 'i' && path[5] == 'a' && path[6] == 'n' {
 				return PackageTypeAPT
 			}
-		}
-		// "/ubuntu"
-		if n >= 7 {
-			if path[1] == 'u' && path[2] == 'b' && path[3] == 'u' &&
+		case 'u':
+			// "/ubuntu"
+			if path[2] == 'b' && path[3] == 'u' &&
 				path[4] == 'n' && path[5] == 't' && path[6] == 'u' {
 				return PackageTypeAPT
 			}
@@ -74,18 +73,18 @@ func detectPackageTypeFast(path string) PackageType {
 	}
 
 	// 检查文件后缀
-	if n >= 4 {
-		if path[n-4] == '.' {
+	if path[n-4] == '.' {
+		switch path[n-3] {
+		case 'a':
 			// 检查 .apk 后缀
-			if path[n-3] == 'a' && path[n-2] == 'p' && path[n-1] == 'k' {
+			if path[n-2] == 'p' && path[n-1] == 'k' {
 				return PackageTypeAPK
 			}
-
+		case 'd':
 			// 检查 .deb 后缀
-			if path[n-3] == 'd' && path[n-2] == 'e' && path[n-1] == 'b' {
+			if path[n-2] == 'e' && path[n-1] == 'b' {
 				return PackageTypeAPT
 			}
-
 		}
 	}
 
