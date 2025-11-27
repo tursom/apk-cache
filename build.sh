@@ -114,9 +114,19 @@ if ! command -v go &> /dev/null; then
 fi
 
 # 执行Go构建
-echo "📦 运行: go build -ldflags=\"-s -w\" -trimpath ./..."
-if go build -ldflags="-s -w" -trimpath ./...; then
+echo "📦 运行: go build -ldflags=\"-s -w\" -trimpath -o apk-cache ./cmd/apk-cache"
+if go build -ldflags="-s -w" -trimpath -o apk-cache ./cmd/apk-cache; then
     echo "✅ Go构建成功完成!"
+    echo "📁 生成的可执行文件: apk-cache"
+    
+    # 显示构建产物信息
+    if [ -f "apk-cache" ]; then
+        BINARY_SIZE=$(stat -c%s "apk-cache" 2>/dev/null || stat -f%z "apk-cache")
+        echo "📊 可执行文件大小: $BINARY_SIZE 字节"
+    else
+        echo "❌ 错误: 可执行文件未生成"
+        exit 1
+    fi
 else
     echo "❌ Go构建失败"
     exit 1
