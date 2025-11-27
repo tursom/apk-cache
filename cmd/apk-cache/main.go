@@ -199,6 +199,9 @@ func parseCleanStrategy(strategy string) CleanStrategy {
 func main() {
 	flag.Parse()
 
+	// 初始化 i18n，先使用默认语言
+	i18n.Init(*locale)
+
 	// 初始化上游服务器管理器（必须在 ApplyConfig 之前初始化）
 	upstreamManager = NewUpstreamManager()
 
@@ -222,6 +225,7 @@ func main() {
 		upstreamManager.AddServer(server)
 	}
 
+	// 初始化 i18n，在配置文件应用之后
 	i18n.Init(*locale)
 
 	// 初始化缓存配额管理器
