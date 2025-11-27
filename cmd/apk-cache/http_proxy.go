@@ -14,16 +14,16 @@ import (
 	"golang.org/x/net/proxy"
 )
 
-// countingReader 用于计算读取的字节数
-type countingReader struct {
+// cacheMissReader 用于在读取时统计未命中缓存的字节数
+type cacheMissReader struct {
 	reader     io.Reader
 	totalBytes int64
 }
 
-func (cr *countingReader) Read(p []byte) (int, error) {
+func (cr *cacheMissReader) Read(p []byte) (int, error) {
 	n, err := cr.reader.Read(p)
 	if n > 0 {
-		cr.totalBytes += int64(n)
+		cacheMissBytes.Add(float64(n))
 	}
 	return n, err
 }
@@ -169,16 +169,13 @@ func proxyForwardHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	// 复制响应体并计算大小
-	reader := &countingReader{reader: resp.Body}
+	reader := &cacheMissReader{reader: resp.Body}
 	_, err = io.Copy(w, reader)
 	if err != nil {
 		log.Println(t("HTTPProxyCopyResponseFailed", map[string]any{
 			"Error": err,
 		}))
 	}
-
-	// 记录缓存未命中时的大小
-	cacheMissBytes.Add(float64(reader.totalBytes))
 }
 
 // proxyDialWithProxy 通过代理建立连接

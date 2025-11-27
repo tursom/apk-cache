@@ -360,7 +360,6 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 
 	buf := make([]byte, 32*1024)
 	var cacheErr, clientErr error
-	var totalBytes int64 = 0
 	var responseData []byte
 
 	for {
@@ -368,7 +367,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		n, readErr := body.Read(buf)
 		if n > 0 {
 			downloadBytes.Add(float64(n))
-			totalBytes += int64(n)
+			cacheMissBytes.Add(float64(n))
 
 			// 写入缓存文件（只要缓存没出错就继续写）
 			if cacheErr == nil {
@@ -467,9 +466,6 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 			}))
 		}
 	}
-
-	// 记录缓存未命中时的大小
-	cacheMissBytes.Add(float64(totalBytes))
 	return nil
 }
 
