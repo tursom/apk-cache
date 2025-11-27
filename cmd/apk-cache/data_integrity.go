@@ -11,8 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -27,29 +25,6 @@ type DataIntegrityManager struct {
 	enablePeriodicCheck bool
 }
 
-// 数据完整性相关的 Prometheus 指标
-var (
-	dataIntegrityChecks = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_data_integrity_checks_total",
-		Help: "Total number of data integrity checks performed",
-	})
-
-	dataIntegrityCorruptedFiles = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "apk_cache_data_integrity_corrupted_files_total",
-		Help: "Total number of corrupted files detected",
-	})
-
-	dataIntegrityRepairedFiles = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_data_integrity_repaired_files_total",
-		Help: "Total number of corrupted files repaired",
-	})
-
-	dataIntegrityCheckDuration = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name:    "apk_cache_data_integrity_check_duration_seconds",
-		Help:    "Duration of data integrity checks",
-		Buckets: prometheus.DefBuckets,
-	})
-)
 
 // NewDataIntegrityManager 创建新的数据完整性管理器
 func NewDataIntegrityManager(checkInterval time.Duration, enableAutoRepair bool, enablePeriodicCheck bool) *DataIntegrityManager {
@@ -101,7 +76,7 @@ func (d *DataIntegrityManager) VerifyFileIntegrity(filePath string) (bool, error
 	if currentHash != recordedHash {
 		d.mu.Lock()
 		d.corruptedFiles[filePath] = true
-		dataIntegrityCorruptedFiles.Inc()
+		monitoring.RecordDataIntegrityCorrupted()
 		d.mu.Unlock()
 
 		log.Println(i18n.T("FileIntegrityCheckFailed", map[string]any{
@@ -130,8 +105,7 @@ func (d *DataIntegrityManager) RepairCorruptedFile(filePath string) error {
 	delete(d.corruptedFiles, filePath)
 	d.mu.Unlock()
 
-	dataIntegrityRepairedFiles.Inc()
-	dataIntegrityCorruptedFiles.Dec()
+	monitoring.RecordDataIntegrityRepaired()
 
 	log.Println(i18n.T("FileRepaired", map[string]any{"File": filePath}))
 	return nil
@@ -140,7 +114,6 @@ func (d *DataIntegrityManager) RepairCorruptedFile(filePath string) error {
 // CheckAllFilesIntegrity 检查所有文件的完整性
 func (d *DataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
 	startTime := time.Now()
-	dataIntegrityChecks.Inc()
 
 	var checkedCount, corruptedCount int
 
@@ -193,7 +166,7 @@ func (d *DataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
 	}
 
 	duration := time.Since(startTime)
-	dataIntegrityCheckDuration.Observe(duration.Seconds())
+	monitoring.RecordDataIntegrityCheck(duration)
 
 	d.mu.Lock()
 	d.lastCheckTime = time.Now()

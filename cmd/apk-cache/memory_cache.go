@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -34,33 +32,6 @@ type CacheItem struct {
 	StatusCode  int
 }
 
-// 内存缓存相关的 Prometheus 指标
-var (
-	memCacheHits = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_memory_hits_total",
-		Help: "Total number of memory cache hits",
-	})
-
-	memCacheMisses = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_memory_misses_total",
-		Help: "Total number of memory cache misses",
-	})
-
-	memCacheSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "apk_cache_memory_size_bytes",
-		Help: "Memory cache size information",
-	}, []string{"type"})
-
-	memCacheItems = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "apk_cache_memory_items_total",
-		Help: "Total number of items in memory cache",
-	})
-
-	memCacheEvictions = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_memory_evictions_total",
-		Help: "Total number of memory cache evictions",
-	})
-)
 
 // NewMemoryCache 创建新的内存缓存
 func NewMemoryCache(maxSize int64, maxItems int, ttl time.Duration) *MemoryCache {
@@ -72,9 +43,8 @@ func NewMemoryCache(maxSize int64, maxItems int, ttl time.Duration) *MemoryCache
 	}
 
 	// 初始化 Prometheus 指标
-	memCacheSize.WithLabelValues("max").Set(float64(maxSize))
-	memCacheSize.WithLabelValues("current").Set(0)
-	memCacheItems.Set(0)
+	monitoring.MemCacheSize.WithLabelValues("max").Set(float64(maxSize))
+	monitoring.UpdateMemoryCacheMetrics(0, 0)
 
 	// 启动定期清理过期项的 goroutine
 	if ttl > 0 {
@@ -91,7 +61,7 @@ func (m *MemoryCache) Get(key string) (*CacheItem, bool) {
 	m.mu.RUnlock()
 
 	if !exists {
-		memCacheMisses.Inc()
+		monitoring.RecordMemoryCacheMiss()
 		return nil, false
 	}
 
@@ -102,8 +72,8 @@ func (m *MemoryCache) Get(key string) (*CacheItem, bool) {
 		m.currentSize -= item.Size
 		m.mu.Unlock()
 
-		memCacheMisses.Inc()
-		m.updateMetrics()
+		monitoring.RecordMemoryCacheMiss()
+		monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 		return nil, false
 	}
 
@@ -113,7 +83,7 @@ func (m *MemoryCache) Get(key string) (*CacheItem, bool) {
 	item.AccessCount++
 	m.mu.Unlock()
 
-	memCacheHits.Inc()
+	monitoring.RecordMemoryCacheHit()
 	return item, true
 }
 
@@ -161,7 +131,7 @@ func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, 
 	m.cache[key] = item
 	m.currentSize += size
 
-	m.updateMetrics()
+	monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 	return true
 }
 
@@ -173,7 +143,7 @@ func (m *MemoryCache) Delete(key string) {
 	if item, exists := m.cache[key]; exists {
 		m.currentSize -= item.Size
 		delete(m.cache, key)
-		m.updateMetrics()
+		monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 	}
 }
 
@@ -184,7 +154,7 @@ func (m *MemoryCache) Clear() {
 
 	m.cache = make(map[string]*CacheItem)
 	m.currentSize = 0
-	m.updateMetrics()
+	monitoring.UpdateMemoryCacheMetrics(0, 0)
 }
 
 // needCleanup 检查是否需要清理空间
@@ -242,7 +212,7 @@ func (m *MemoryCache) cleanup(needSize int64) bool {
 		freed += entry.item.Size
 		evicted++
 
-		memCacheEvictions.Inc()
+		monitoring.RecordMemoryCacheEviction()
 		log.Println(i18n.T("MemoryCacheEvicted", map[string]any{
 			"Key":  entry.key,
 			"Size": entry.item.Size,
@@ -293,14 +263,8 @@ func (m *MemoryCache) cleanupExpired() {
 		log.Println(i18n.T("MemoryCacheExpiredCleaned", map[string]any{
 			"Count": expiredCount,
 		}))
-		m.updateMetrics()
+		monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 	}
-}
-
-// updateMetrics 更新 Prometheus 指标
-func (m *MemoryCache) updateMetrics() {
-	memCacheSize.WithLabelValues("current").Set(float64(m.currentSize))
-	memCacheItems.Set(float64(len(m.cache)))
 }
 
 // GetStats 获取内存缓存统计信息
@@ -344,8 +308,7 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 		return false
 	}
 
-	cacheHits.Add(1)
-	cacheHitBytes.Add(float64(len(item.Data)))
+	monitoring.RecordCacheHit(int64(len(item.Data)))
 	return true
 }
 

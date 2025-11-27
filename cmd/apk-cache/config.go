@@ -11,6 +11,56 @@ import (
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
+// 命令行参数定义
+var (
+	listenAddr         = flag.String("addr", ":3142", "Listen address")
+	cachePath          = flag.String("cache", "./cache", "Cache directory path")
+	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "Upstream server URL")
+	proxyURL           = flag.String("proxy", "", "Proxy address (e.g. socks5://127.0.0.1:1080 or http://127.0.0.1:8080)")
+	indexCacheDuration = flag.Duration("index-cache", 24*time.Hour, "APKINDEX.tar.gz cache duration")
+	pkgCacheDuration   = flag.Duration("pkg-cache", 0, "Package cache duration (0 = never expire)")
+	cleanupInterval    = flag.Duration("cleanup-interval", time.Hour, "Automatic cleanup interval (0 = disabled)")
+	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
+	adminUser          = flag.String("admin-user", "admin", "Admin dashboard username")
+	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
+	configFile         = flag.String("config", "", "Config file path (optional)")
+	// 代理身份验证参数
+	proxyAuthEnabled = flag.Bool("proxy-auth", false, "Enable proxy authentication")
+	proxyUser        = flag.String("proxy-user", "proxy", "Proxy authentication username")
+	proxyPassword    = flag.String("proxy-password", "", "Proxy authentication password (empty = no auth)")
+	// 不需要验证的 IP 网段（CIDR格式，逗号分隔）
+	proxyAuthExemptIPs = flag.String("proxy-auth-exempt-ips", "", "Comma-separated list of IP ranges exempt from proxy auth (CIDR format)")
+	// 信任的 nginx 反向代理 IP（逗号分隔）
+	trustedReverseProxyIPs = flag.String("trusted-reverse-proxy-ips", "", "Comma-separated list of trusted reverse proxy IPs")
+	// 缓存配额相关参数
+	cacheMaxSize       = flag.String("cache-max-size", "", "Maximum cache size (e.g. 10GB, 1TB, 0 = unlimited)")
+	cacheCleanStrategy = flag.String("cache-clean-strategy", "LRU", "Cache cleanup strategy (LRU, LFU, FIFO)")
+
+	// 内存缓存相关参数
+	memoryCacheEnabled     = flag.Bool("memory-cache", false, "Enable memory cache")
+	memoryCacheSize        = flag.String("memory-cache-size", "100MB", "Memory cache size (e.g. 100MB, 1GB)")
+	memoryCacheMaxItems    = flag.Int("memory-cache-max-items", 1000, "Maximum number of items in memory cache")
+	memoryCacheTTL         = flag.Duration("memory-cache-ttl", 30*time.Minute, "Memory cache TTL duration")
+	memoryCacheMaxFileSize = flag.String("memory-cache-max-file-size", "10MB", "Maximum file size to cache in memory (e.g. 1MB, 10MB)")
+
+	// 请求限流相关参数
+	rateLimitEnabled     = flag.Bool("rate-limit", false, "Enable request rate limiting")
+	rateLimitRate        = flag.Float64("rate-limit-rate", 100, "Rate limit requests per second")
+	rateLimitBurst       = flag.Float64("rate-limit-burst", 200, "Rate limit burst capacity")
+	rateLimitExemptPaths = flag.String("rate-limit-exempt-paths", "/_health", "Comma-separated list of paths exempt from rate limiting")
+
+	// 健康检查相关变量
+	healthCheckInterval = flag.Duration("health-check-interval", 30*time.Second, "Health check interval")
+	healthCheckTimeout  = flag.Duration("health-check-timeout", 10*time.Second, "Health check timeout")
+	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
+
+	// 数据完整性校验相关参数
+	dataIntegrityCheckInterval           = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
+	dataIntegrityAutoRepair              = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
+	dataIntegrityPeriodicCheck           = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
+	dataIntegrityInitializeExistingFiles = flag.Bool("data-integrity-initialize-existing-files", false, "Initialize existing files hash records on startup")
+)
+
 // Config 配置文件结构
 type Config struct {
 	Server        ServerConfig        `toml:"server"`

@@ -47,11 +47,11 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// 获取 Prometheus metrics
-	cacheHitsVal := getMetricValue(cacheHits)
-	cacheMissesVal := getMetricValue(cacheMisses)
-	downloadBytesVal := getMetricValue(downloadBytes)
-	cacheHitBytesVal := getMetricValue(cacheHitBytes)
-	cacheMissBytesVal := getMetricValue(cacheMissBytes)
+	cacheHitsVal := getMetricValue(monitoring.CacheHits)
+	cacheMissesVal := getMetricValue(monitoring.CacheMisses)
+	downloadBytesVal := getMetricValue(monitoring.DownloadBytes)
+	cacheHitBytesVal := getMetricValue(monitoring.CacheHitBytes)
+	cacheMissBytesVal := getMetricValue(monitoring.CacheMissBytes)
 
 	// 计算缓存大小
 	cacheSize, _ := getDirSize(*cachePath)

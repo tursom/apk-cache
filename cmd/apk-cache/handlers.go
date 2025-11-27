@@ -3,17 +3,68 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/tursom/apk-cache/utils/i18n"
 )
+
+type webHandler struct {
+	metricsHandler http.HandlerFunc
+	adminHandler   http.HandlerFunc
+	healthHandler  http.HandlerFunc
+	rootHandler    http.HandlerFunc
+}
+
+func newWebHandler() *webHandler {
+	return &webHandler{
+		metricsHandler: rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			promhttp.HandlerFor(monitoring.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
+		}),
+		adminHandler:  authMiddleware(rateLimitAdminMiddleware(adminDashboardHandler)),
+		healthHandler: authMiddleware(healthCheckHandler),
+		rootHandler: rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			// 检查是否是CONNECT方法（HTTPS代理）或代理请求
+			if proxyIsProxyRequest(r) {
+				// 代理请求需要身份验证
+				proxyAuth(handleProxyRequest, w, r)
+			} else {
+				// 非代理请求使用原有的APK缓存逻辑，不需要代理身份验证
+				proxyHandler(w, r)
+			}
+		}),
+	}
+}
+
+// ServeHTTP implements http.Handler.
+func (h *webHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/metrics" {
+		h.metricsHandler.ServeHTTP(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/_admin") {
+		h.adminHandler.ServeHTTP(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/_health") {
+		h.healthHandler.ServeHTTP(w, r)
+		return
+	}
+
+	h.rootHandler.ServeHTTP(w, r)
+}
 
 // healthCheckHandler 简单的健康检查处理器
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	
+
 	// 检查上游服务器健康状态
 	healthyCount := upstreamManager.GetHealthyCount()
 	totalCount := upstreamManager.GetServerCount()
-	
+
 	status := "healthy"
 	if healthyCount == 0 {
 		status = "unhealthy"
@@ -23,7 +74,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.WriteHeader(http.StatusOK)
 	}
-	
+
 	response := map[string]any{
 		"status":    status,
 		"timestamp": time.Now(),
@@ -32,7 +83,7 @@ func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 			"total_servers":   totalCount,
 		},
 	}
-	
+
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -94,4 +145,86 @@ func proxyAuth(next http.HandlerFunc, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	next(w, r)
+}
+
+// rateLimitMiddleware 限流中间件
+func rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 如果限流器未启用，直接调用下一个处理器
+		if rateLimiter == nil || !*rateLimitEnabled {
+			next(w, r)
+			return
+		}
+
+		// 检查路径是否在豁免列表中
+		if isExemptPath(r.URL.Path) {
+			next(w, r)
+			return
+		}
+
+		// 检查是否允许请求
+		if !rateLimiter.Allow() {
+			monitoring.RecordRateLimitRejected()
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, i18n.T("RateLimitExceeded", nil), http.StatusTooManyRequests)
+			return
+		}
+
+		// 请求被允许，继续处理
+		monitoring.RecordRateLimitAllowed()
+		next(w, r)
+	}
+}
+
+// isExemptPath 检查路径是否在豁免列表中
+func isExemptPath(path string) bool {
+	if *rateLimitExemptPaths == "" {
+		return false
+	}
+
+	exemptPaths := strings.Split(*rateLimitExemptPaths, ",")
+	for _, exemptPath := range exemptPaths {
+		exemptPath = strings.TrimSpace(exemptPath)
+		if exemptPath != "" && strings.HasPrefix(path, exemptPath) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// rateLimitAdminMiddleware 管理员接口限流中间件（更宽松的限制）
+func rateLimitAdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 如果限流器未启用，直接调用下一个处理器
+		if rateLimiter == nil || !*rateLimitEnabled {
+			next(w, r)
+			return
+		}
+
+		// 管理员接口使用更宽松的限制
+		if !rateLimiter.Allow() {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, i18n.T("RateLimitExceeded", nil), http.StatusTooManyRequests)
+			return
+		}
+
+		// 请求被允许，继续处理
+		next(w, r)
+	}
+}
+
+// updateRateLimitMetrics 定期更新限流器指标
+func updateRateLimitMetrics() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if rateLimiter != nil {
+			stats := rateLimiter.GetStats()
+			if currentTokens, ok := stats["current_tokens"].(float64); ok {
+				monitoring.UpdateRateLimitMetrics(currentTokens)
+			}
+		}
+	}
 }

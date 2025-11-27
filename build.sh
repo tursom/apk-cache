@@ -2,8 +2,38 @@
 
 set -e
 
+# 默认启用trimpath
+TRIMPATH_ENABLED=true
+
+# 解析命令行参数
+while [ $# -gt 0 ]; do
+    case $1 in
+        --no-trimpath)
+            TRIMPATH_ENABLED=false
+            shift
+            ;;
+        -h|--help)
+            echo "用法: $0 [选项]"
+            echo ""
+            echo "选项:"
+            echo "  --no-trimpath    禁用Go构建的-trimpath选项"
+            echo "  -h, --help       显示此帮助信息"
+            echo ""
+            exit 0
+            ;;
+        *)
+            echo "❌ 未知选项: $1"
+            echo "使用 $0 --help 查看可用选项"
+            exit 1
+            ;;
+    esac
+done
+
 echo "🚀 APK Cache Build Script"
 echo "=========================="
+if [ "$TRIMPATH_ENABLED" = "false" ]; then
+    echo "⚠️  trimpath已禁用"
+fi
 
 # 检查HTML压缩工具
 echo "🔍 检测HTML压缩工具..."
@@ -113,9 +143,16 @@ if ! command -v go &> /dev/null; then
     exit 1
 fi
 
+# 构建Go命令
+GO_BUILD_CMD="go build -ldflags=\"-s -w\""
+if [ "$TRIMPATH_ENABLED" = "true" ]; then
+    GO_BUILD_CMD="$GO_BUILD_CMD -trimpath"
+fi
+GO_BUILD_CMD="$GO_BUILD_CMD -o apk-cache ./cmd/apk-cache"
+
 # 执行Go构建
-echo "📦 运行: go build -ldflags=\"-s -w\" -trimpath -o apk-cache ./cmd/apk-cache"
-if go build -ldflags="-s -w" -trimpath -o apk-cache ./cmd/apk-cache; then
+echo "📦 运行: $GO_BUILD_CMD"
+if eval $GO_BUILD_CMD; then
     echo "✅ Go构建成功完成!"
     echo "📁 生成的可执行文件: apk-cache"
     

@@ -5,12 +5,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -22,6 +21,14 @@ type CacheQuota struct {
 	mu          sync.RWMutex
 }
 
+// fileInfo 文件信息结构
+type fileInfo struct {
+	path    string
+	size    int64
+	atime   time.Time
+	modTime time.Time
+}
+
 // CleanStrategy 清理策略
 type CleanStrategy int
 
@@ -31,28 +38,6 @@ const (
 	FIFO                      // 先进先出
 )
 
-// 缓存配额相关的 Prometheus 指标
-var (
-	cacheQuotaSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "apk_cache_quota_size_bytes",
-		Help: "Cache quota size information",
-	}, []string{"type"})
-
-	cacheQuotaFiles = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "apk_cache_quota_files_total",
-		Help: "Total number of files in cache",
-	})
-
-	cacheQuotaCleanups = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_quota_cleanups_total",
-		Help: "Total number of cache quota cleanups performed",
-	})
-
-	cacheQuotaBytesFreed = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_quota_bytes_freed_total",
-		Help: "Total bytes freed by cache quota cleanups",
-	})
-)
 
 // NewCacheQuota 创建新的缓存配额管理器
 func NewCacheQuota(maxSize int64, strategy CleanStrategy) *CacheQuota {
@@ -62,8 +47,8 @@ func NewCacheQuota(maxSize int64, strategy CleanStrategy) *CacheQuota {
 	}
 
 	// 初始化 Prometheus 指标
-	cacheQuotaSize.WithLabelValues("max").Set(float64(maxSize))
-	cacheQuotaSize.WithLabelValues("current").Set(0)
+	monitoring.CacheQuotaSize.WithLabelValues("max").Set(float64(maxSize))
+	monitoring.CacheQuotaSize.WithLabelValues("current").Set(0)
 
 	return quota
 }
@@ -147,7 +132,7 @@ func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
 		"Strategy": q.Strategy.String(),
 	}))
 
-	cacheQuotaCleanups.Inc()
+	monitoring.RecordCacheQuotaCleanup(0) // 字节数稍后记录
 
 	var files []fileInfo
 	var err error
@@ -198,7 +183,7 @@ func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
 		}))
 	}
 
-	cacheQuotaBytesFreed.Add(float64(freed))
+	monitoring.RecordCacheQuotaCleanup(freed)
 	log.Println(i18n.T("CacheQuotaCleanupComplete", map[string]any{
 		"Freed":        freed,
 		"FilesDeleted": filesDeleted,
@@ -207,12 +192,16 @@ func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
 	return freed, nil
 }
 
-// fileInfo 文件信息结构
-type fileInfo struct {
-	path    string
-	size    int64
-	atime   time.Time
-	modTime time.Time
+// parseCleanStrategy 解析清理策略字符串
+func parseCleanStrategy(strategy string) CleanStrategy {
+	switch strings.ToUpper(strategy) {
+	case "LFU":
+		return LFU
+	case "FIFO":
+		return FIFO
+	default:
+		return LRU
+	}
 }
 
 // getLRUFiles 获取最近最少使用的文件列表（按访问时间排序）
@@ -325,7 +314,7 @@ func sortFilesByModTime(files []fileInfo) {
 
 // updateMetrics 更新 Prometheus 指标
 func (q *CacheQuota) updateMetrics() {
-	cacheQuotaSize.WithLabelValues("current").Set(float64(q.CurrentSize))
+	monitoring.UpdateCacheQuotaMetrics(q.CurrentSize, 0) // 文件数稍后更新
 }
 
 // String 方法返回清理策略的字符串表示
@@ -368,7 +357,7 @@ func (q *CacheQuota) InitializeCacheSize() error {
 	}
 
 	q.CurrentSize = totalSize
-	cacheQuotaFiles.Set(float64(fileCount))
+	monitoring.UpdateCacheQuotaMetrics(totalSize, fileCount)
 	q.updateMetrics()
 
 	log.Println(i18n.T("CacheSizeInitialized", map[string]any{

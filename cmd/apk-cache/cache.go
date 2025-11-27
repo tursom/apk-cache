@@ -158,8 +158,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cacheMisses.Add(1)
-
 	// 缓存未命中,从上游获取
 	log.Println(i18n.T("CacheMiss", map[string]any{"Path": cacheFile}))
 	upstreamResp, err := fetchFromUpstream(r.URL.Path)
@@ -264,8 +262,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	}
 
 	http.ServeContent(w, r, filepath.Base(cacheFile), stat.ModTime(), file)
-	cacheHits.Add(1)
-	cacheHitBytes.Add(float64(stat.Size()))
+	monitoring.RecordCacheHit(stat.Size())
 }
 
 func fetchFromUpstream(urlPath string) (*http.Response, error) {
@@ -367,8 +364,8 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		// 读取数据
 		n, readErr := body.Read(buf)
 		if n > 0 {
-			downloadBytes.Add(float64(n))
-			cacheMissBytes.Add(float64(n))
+			monitoring.RecordDownloadBytes(int64(n))
+			monitoring.RecordCacheMiss(int64(n))
 
 			// 写入缓存文件（只要缓存没出错就继续写）
 			if cacheErr == nil {
@@ -547,11 +544,12 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 			serveFromCache(w, r, cacheFile)
 			return false
 		}
-		// 如果缓存不存在，返回304状态
+		// 如果缓存不存在，返回304状态，记录缓存未命中
 		w.WriteHeader(http.StatusNotModified)
+		monitoring.RecordCacheMiss(0)
 		return false
 	default:
-		// 其他错误状态码
+		// 其他错误状态码，记录缓存未命中
 		log.Println(i18n.T("UpstreamReturnedError", map[string]any{
 			"Status":     upstreamResp.Status,
 			"StatusCode": upstreamResp.StatusCode,
@@ -560,6 +558,7 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 			"Status":     upstreamResp.Status,
 			"StatusCode": upstreamResp.StatusCode,
 		}), upstreamResp.StatusCode)
+		monitoring.RecordCacheMiss(0)
 		return false
 	}
 }

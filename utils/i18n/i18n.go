@@ -20,6 +20,11 @@ var zhToml []byte
 
 var localizer *i18n.Localizer
 
+func init() {
+	// 在未手动加载 i18n 时保证不会 panic
+	initLocale("")
+}
+
 // detectLocale 自动检测系统语言
 func detectLocale(locale string) string {
 	// 如果命令行参数已指定，直接使用
@@ -53,6 +58,12 @@ func detectLocale(locale string) string {
 }
 
 func Init(locale string) {
+	detectedLocale := initLocale(locale)
+
+	log.Println(T("UsingLanguage", map[string]any{"Lang": detectedLocale}))
+}
+
+func initLocale(locale string) string {
 	bundle := i18n.NewBundle(language.English)
 	bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
 
@@ -64,7 +75,7 @@ func Init(locale string) {
 
 	localizer = i18n.NewLocalizer(bundle, detectedLocale)
 
-	log.Println(T("UsingLanguage", map[string]any{"Lang": detectedLocale}))
+	return detectedLocale
 }
 
 func T(messageID string, templateData map[string]any) string {

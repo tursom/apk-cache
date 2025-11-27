@@ -6,118 +6,18 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 var (
-	// 创建自定义 Registry，不包含默认的 Go 运行时指标
-	registry = prometheus.NewRegistry()
-
-	cacheHits = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_hits_total",
-		Help: "Total number of cache hits",
-	})
-
-	cacheMisses = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_misses_total",
-		Help: "Total number of cache misses",
-	})
-
-	downloadBytes = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_download_bytes_total",
-		Help: "Total bytes downloaded from upstream",
-	})
-
-	// 缓存命中大小统计
-	cacheHitBytes = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_hit_bytes_total",
-		Help: "Total bytes served from cache hits",
-	})
-
-	// 缓存未命中大小统计
-	cacheMissBytes = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_miss_bytes_total",
-		Help: "Total bytes served from cache misses",
-	})
-
-	// 限流相关指标
-	rateLimitAllowed = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_rate_limit_allowed_total",
-		Help: "Total number of requests allowed by rate limiter",
-	})
-
-	rateLimitRejected = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "apk_cache_rate_limit_rejected_total",
-		Help: "Total number of requests rejected by rate limiter",
-	})
-
-	rateLimitCurrentTokens = prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "apk_cache_rate_limit_current_tokens",
-		Help: "Current number of tokens in the rate limiter bucket",
-	})
-)
-
-var (
-	listenAddr         = flag.String("addr", ":3142", "Listen address")
-	cachePath          = flag.String("cache", "./cache", "Cache directory path")
-	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "Upstream server URL")
-	proxyURL           = flag.String("proxy", "", "Proxy address (e.g. socks5://127.0.0.1:1080 or http://127.0.0.1:8080)")
-	indexCacheDuration = flag.Duration("index-cache", 24*time.Hour, "APKINDEX.tar.gz cache duration")
-	pkgCacheDuration   = flag.Duration("pkg-cache", 0, "Package cache duration (0 = never expire)")
-	cleanupInterval    = flag.Duration("cleanup-interval", time.Hour, "Automatic cleanup interval (0 = disabled)")
-	locale             = flag.String("locale", "", "Language (en/zh), auto-detect if empty")
-	adminUser          = flag.String("admin-user", "admin", "Admin dashboard username")
-	adminPassword      = flag.String("admin-password", "", "Admin dashboard password (empty = no auth)")
-	configFile         = flag.String("config", "", "Config file path (optional)")
-	// 代理身份验证参数
-	proxyAuthEnabled = flag.Bool("proxy-auth", false, "Enable proxy authentication")
-	proxyUser        = flag.String("proxy-user", "proxy", "Proxy authentication username")
-	proxyPassword    = flag.String("proxy-password", "", "Proxy authentication password (empty = no auth)")
-	// 不需要验证的 IP 网段（CIDR格式，逗号分隔）
-	proxyAuthExemptIPs = flag.String("proxy-auth-exempt-ips", "", "Comma-separated list of IP ranges exempt from proxy auth (CIDR format)")
-	// 信任的 nginx 反向代理 IP（逗号分隔）
-	trustedReverseProxyIPs = flag.String("trusted-reverse-proxy-ips", "", "Comma-separated list of trusted reverse proxy IPs")
-	// 缓存配额相关参数
-	cacheMaxSize       = flag.String("cache-max-size", "", "Maximum cache size (e.g. 10GB, 1TB, 0 = unlimited)")
-	cacheCleanStrategy = flag.String("cache-clean-strategy", "LRU", "Cache cleanup strategy (LRU, LFU, FIFO)")
-
-	// 内存缓存相关参数
-	memoryCacheEnabled     = flag.Bool("memory-cache", false, "Enable memory cache")
-	memoryCacheSize        = flag.String("memory-cache-size", "100MB", "Memory cache size (e.g. 100MB, 1GB)")
-	memoryCacheMaxItems    = flag.Int("memory-cache-max-items", 1000, "Maximum number of items in memory cache")
-	memoryCacheTTL         = flag.Duration("memory-cache-ttl", 30*time.Minute, "Memory cache TTL duration")
-	memoryCacheMaxFileSize = flag.String("memory-cache-max-file-size", "10MB", "Maximum file size to cache in memory (e.g. 1MB, 10MB)")
-
-	// 请求限流相关参数
-	rateLimitEnabled     = flag.Bool("rate-limit", false, "Enable request rate limiting")
-	rateLimitRate        = flag.Float64("rate-limit-rate", 100, "Rate limit requests per second")
-	rateLimitBurst       = flag.Float64("rate-limit-burst", 200, "Rate limit burst capacity")
-	rateLimitExemptPaths = flag.String("rate-limit-exempt-paths", "/_health", "Comma-separated list of paths exempt from rate limiting")
-
-	// 健康检查相关变量
-	healthCheckInterval = flag.Duration("health-check-interval", 30*time.Second, "Health check interval")
-	healthCheckTimeout  = flag.Duration("health-check-timeout", 10*time.Second, "Health check timeout")
-	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
-
-	// 数据完整性校验相关参数
-	dataIntegrityCheckInterval           = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
-	dataIntegrityAutoRepair              = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
-	dataIntegrityPeriodicCheck           = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
-	dataIntegrityInitializeExistingFiles = flag.Bool("data-integrity-initialize-existing-files", false, "Initialize existing files hash records on startup")
-
 	// 进程启动时间
 	processStartTime = time.Now()
 
 	// 上游服务器管理器（支持故障转移和健康检查）
 	upstreamManager *UpstreamManager
-
 	// 文件锁管理器
 	lockManager = utils.NewFileLockManager()
 	// 访问时间跟踪器
@@ -128,76 +28,18 @@ var (
 	memoryCache *MemoryCache
 	// 内存缓存最大文件大小
 	memoryCacheMaxFileSizeBytes int64
-
 	// 请求限流器
-	rateLimiter *RateLimiter
-
+	rateLimiter *utils.RateLimiter
 	// 数据完整性管理器
 	dataIntegrityManager *DataIntegrityManager
-
+	// 监控管理器
+	monitoring *Monitoring
 	// IP匹配器（用于代理身份验证）
 	proxyIPMatcher *utils.IPMatcher
 )
 
-type webHandler struct {
-	metricsHandler http.HandlerFunc
-	adminHandler   http.HandlerFunc
-	healthHandler  http.HandlerFunc
-	rootHandler    http.HandlerFunc
-}
-
-// parseSizeString 解析大小字符串（如 "10GB", "1TB"）
-func parseSizeString(sizeStr string) (int64, error) {
-	if sizeStr == "" || sizeStr == "0" {
-		return 0, nil // 0 表示无限制
-	}
-
-	sizeStr = strings.ToUpper(sizeStr)
-	multiplier := int64(1)
-
-	// 检查单位
-	if strings.HasSuffix(sizeStr, "TB") {
-		multiplier = 1024 * 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "TB")
-	} else if strings.HasSuffix(sizeStr, "GB") {
-		multiplier = 1024 * 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "GB")
-	} else if strings.HasSuffix(sizeStr, "MB") {
-		multiplier = 1024 * 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "MB")
-	} else if strings.HasSuffix(sizeStr, "KB") {
-		multiplier = 1024
-		sizeStr = strings.TrimSuffix(sizeStr, "KB")
-	} else if strings.HasSuffix(sizeStr, "B") {
-		sizeStr = strings.TrimSuffix(sizeStr, "B")
-	}
-
-	// 解析数字部分
-	value, err := strconv.ParseInt(strings.TrimSpace(sizeStr), 10, 64)
-	if err != nil {
-		return 0, err
-	}
-
-	return value * multiplier, nil
-}
-
-// parseCleanStrategy 解析清理策略字符串
-func parseCleanStrategy(strategy string) CleanStrategy {
-	switch strings.ToUpper(strategy) {
-	case "LFU":
-		return LFU
-	case "FIFO":
-		return FIFO
-	default:
-		return LRU
-	}
-}
-
 func main() {
 	flag.Parse()
-
-	// 初始化 i18n，先使用默认语言
-	i18n.Init(*locale)
 
 	// 初始化上游服务器管理器（必须在 ApplyConfig 之前初始化）
 	upstreamManager = NewUpstreamManager()
@@ -222,12 +64,12 @@ func main() {
 		upstreamManager.AddServer(server)
 	}
 
-	// 初始化 i18n，在配置文件应用之后
+	// 初始化 i18n
 	i18n.Init(*locale)
 
 	// 初始化缓存配额管理器
 	if *cacheMaxSize != "" {
-		maxSize, err := parseSizeString(*cacheMaxSize)
+		maxSize, err := utils.ParseSizeString(*cacheMaxSize)
 		if err != nil {
 			log.Fatalln(i18n.T("InvalidCacheMaxSize", map[string]any{"Error": err}))
 		}
@@ -252,12 +94,12 @@ func main() {
 
 	// 初始化内存缓存
 	if *memoryCacheEnabled {
-		memoryMaxSize, err := parseSizeString(*memoryCacheSize)
+		memoryMaxSize, err := utils.ParseSizeString(*memoryCacheSize)
 		if err != nil {
 			log.Fatalln(i18n.T("InvalidMemoryCacheSize", map[string]any{"Error": err}))
 		}
 
-		memoryCacheMaxFileSizeBytes, err = parseSizeString(*memoryCacheMaxFileSize)
+		memoryCacheMaxFileSizeBytes, err = utils.ParseSizeString(*memoryCacheMaxFileSize)
 		if err != nil {
 			log.Fatalln(i18n.T("InvalidMemoryCacheMaxFileSize", map[string]any{"Error": err}))
 		}
@@ -273,19 +115,12 @@ func main() {
 		log.Println(i18n.T("MemoryCacheDisabled", nil))
 	}
 
-	// 注册 Prometheus 指标到自定义 Registry
-	registry.MustRegister(cacheHits)
-	registry.MustRegister(cacheMisses)
-	registry.MustRegister(downloadBytes)
-	registry.MustRegister(cacheHitBytes)
-	registry.MustRegister(cacheMissBytes)
-	registry.MustRegister(rateLimitAllowed)
-	registry.MustRegister(rateLimitRejected)
-	registry.MustRegister(rateLimitCurrentTokens)
+	// 初始化监控管理器
+	monitoring = NewMonitoring()
 
 	// 初始化请求限流器
 	if *rateLimitEnabled {
-		rateLimiter = NewRateLimiter(*rateLimitRate, *rateLimitBurst)
+		rateLimiter = utils.NewRateLimiter(*rateLimitRate, *rateLimitBurst)
 		log.Println(i18n.T("RateLimitEnabled", map[string]any{
 			"Rate":  *rateLimitRate,
 			"Burst": *rateLimitBurst,
@@ -345,8 +180,6 @@ func main() {
 		log.Println(i18n.T("DataIntegrityDisabled", nil))
 	}
 
-	var handler webHandler
-
 	// 初始化代理IP匹配器（如果启用了代理身份验证）
 	if *proxyAuthEnabled {
 		var err error
@@ -356,52 +189,15 @@ func main() {
 		}
 	}
 
-	handler.metricsHandler = rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
-	})
-	handler.adminHandler = authMiddleware(rateLimitAdminMiddleware(adminDashboardHandler))
-	handler.healthHandler = authMiddleware(healthCheckHandler)
-
-	handler.rootHandler = rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		// 检查是否是CONNECT方法（HTTPS代理）或代理请求
-		if proxyIsProxyRequest(r) {
-			// 代理请求需要身份验证
-			proxyAuth(handleProxyRequest, w, r)
-		} else {
-			// 非代理请求使用原有的APK缓存逻辑，不需要代理身份验证
-			proxyHandler(w, r)
-		}
-	})
-
-	log.Println(i18n.T("ServerStarted", map[string]any{"Addr": *listenAddr}))
 	log.Println(i18n.T("UpstreamServer", map[string]any{"URL": *upstreamURL}))
 	log.Println(i18n.T("CacheDirectory", map[string]any{"Path": *cachePath}))
 	if *proxyURL != "" {
 		log.Println(i18n.T("ProxyServer", map[string]any{"Proxy": *proxyURL}))
 	}
 
-	if err := http.ListenAndServe(*listenAddr, &handler); err != nil {
+	if err := http.ListenAndServe(*listenAddr, newWebHandler()); err != nil {
 		log.Fatalln(i18n.T("ServerStartFailed", map[string]any{"Error": err}))
 	}
+
+	log.Println(i18n.T("ServerStarted", map[string]any{"Addr": *listenAddr}))
 }
-
-// ServeHTTP implements http.Handler.
-func (h *webHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/metrics" {
-		h.metricsHandler.ServeHTTP(w, r)
-		return
-	}
-
-	if strings.HasPrefix(r.URL.Path, "/_admin") {
-		h.adminHandler.ServeHTTP(w, r)
-		return
-	}
-
-	if strings.HasPrefix(r.URL.Path, "/_health") {
-		h.healthHandler.ServeHTTP(w, r)
-		return
-	}
-
-	h.rootHandler.ServeHTTP(w, r)
-}
-

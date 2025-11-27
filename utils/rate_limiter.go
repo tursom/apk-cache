@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"sync"
@@ -141,19 +141,4 @@ func (rl *RateLimiter) SetCapacity(capacity float64) {
 		rl.tokens = capacity
 	}
 	rl.capacity = capacity
-}
-
-// updateRateLimitMetrics 定期更新限流器指标
-func updateRateLimitMetrics() {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		if rateLimiter != nil {
-			stats := rateLimiter.GetStats()
-			if currentTokens, ok := stats["current_tokens"].(float64); ok {
-				rateLimitCurrentTokens.Set(currentTokens)
-			}
-		}
-	}
 }
