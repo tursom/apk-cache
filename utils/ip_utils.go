@@ -44,11 +44,11 @@ func NewIPMatcher(exemptIPs, trustedProxyIPs string) (*IPMatcher, error) {
 			if ipStr == "" {
 				continue
 			}
-			ip := net.ParseIP(ipStr)
-			if ip == nil {
-				return nil, fmt.Errorf("invalid IP address '%s'", ipStr)
+			// 尝试解析为 IP 地址
+			resolvedIPs := parseIPOrHostname(ipStr)
+			if resolvedIPs != nil {
+				matcher.trustedProxies = append(matcher.trustedProxies, resolvedIPs...)
 			}
-			matcher.trustedProxies = append(matcher.trustedProxies, ip)
 		}
 	}
 
@@ -83,6 +83,24 @@ func (m *IPMatcher) IsTrustedProxy(ipStr string) bool {
 		}
 	}
 	return false
+}
+
+// parseIPOrHostname 解析 IP 地址或主机名
+func parseIPOrHostname(addr string) []net.IP {
+	// 首先尝试解析为 IP 地址
+	ip := net.ParseIP(addr)
+	if ip != nil {
+		return []net.IP{ip}
+	}
+
+	// 如果不是 IP 地址，尝试解析为主机名
+	resolvedIPs, err := net.LookupIP(addr)
+	if err != nil || len(resolvedIPs) == 0 {
+		return nil
+	}
+
+	// 使用第一个解析到的 IP 地址
+	return resolvedIPs
 }
 
 // GetRealClientIP 获取真实的客户端 IP，支持 nginx 反向代理
