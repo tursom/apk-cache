@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // startAutoCleanup 启动自动清理协程
@@ -19,7 +21,7 @@ func startAutoCleanup() {
 
 // cleanupExpiredCache 清理过期缓存
 func cleanupExpiredCache() {
-	log.Println(t("StartCleanupExpiredCache", nil))
+	log.Println(i18n.T("StartCleanupExpiredCache", nil))
 	startTime := time.Now()
 
 	var deletedCount int64
@@ -55,7 +57,7 @@ func cleanupExpiredCache() {
 		if expired {
 			size := info.Size()
 			if err := os.Remove(path); err != nil {
-				log.Println(t("DeleteExpiredFileFailed", map[string]any{"Path": path, "Error": err}))
+				log.Println(i18n.T("DeleteExpiredFileFailed", map[string]any{"Path": path, "Error": err}))
 			} else {
 				deletedCount++
 				deletedSize += size
@@ -72,7 +74,7 @@ func cleanupExpiredCache() {
 				if cacheQuota != nil {
 					cacheQuota.RemoveFile(size)
 				}
-				log.Println(t("DeletedExpiredFile", map[string]any{
+				log.Println(i18n.T("DeletedExpiredFile", map[string]any{
 					"Path": path,
 					"Size": float64(size) / (1024 * 1024),
 				}))
@@ -83,11 +85,11 @@ func cleanupExpiredCache() {
 	})
 
 	if err != nil {
-		log.Println(t("CleanupError", map[string]any{"Error": err}))
+		log.Println(i18n.T("CleanupError", map[string]any{"Error": err}))
 	}
 
 	duration := time.Since(startTime)
-	log.Println(t("CleanupComplete", map[string]any{
+	log.Println(i18n.T("CleanupComplete", map[string]any{
 		"Count":    deletedCount,
 		"Size":     float64(deletedSize) / (1024 * 1024),
 		"Duration": duration,

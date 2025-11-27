@@ -9,6 +9,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // MemoryCache 内存缓存管理器
@@ -122,7 +123,7 @@ func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, 
 
 	// 检查是否超过最大大小限制
 	if m.maxSize > 0 && size > m.maxSize {
-		log.Println(t("MemoryCacheItemTooLarge", map[string]any{
+		log.Println(i18n.T("MemoryCacheItemTooLarge", map[string]any{
 			"Key":  key,
 			"Size": size,
 			"Max":  m.maxSize,
@@ -242,14 +243,14 @@ func (m *MemoryCache) cleanup(needSize int64) bool {
 		evicted++
 
 		memCacheEvictions.Inc()
-		log.Println(t("MemoryCacheEvicted", map[string]any{
+		log.Println(i18n.T("MemoryCacheEvicted", map[string]any{
 			"Key":  entry.key,
 			"Size": entry.item.Size,
 		}))
 	}
 
 	if evicted > 0 {
-		log.Println(t("MemoryCacheCleanupComplete", map[string]any{
+		log.Println(i18n.T("MemoryCacheCleanupComplete", map[string]any{
 			"Evicted": evicted,
 			"Freed":   freed,
 		}))
@@ -289,7 +290,7 @@ func (m *MemoryCache) cleanupExpired() {
 	}
 
 	if expiredCount > 0 {
-		log.Println(t("MemoryCacheExpiredCleaned", map[string]any{
+		log.Println(i18n.T("MemoryCacheExpiredCleaned", map[string]any{
 			"Count": expiredCount,
 		}))
 		m.updateMetrics()
@@ -325,7 +326,7 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 		return false
 	}
 
-	log.Println(t("MemoryCacheHit", map[string]any{"Path": key}))
+	log.Println(i18n.T("MemoryCacheHit", map[string]any{"Path": key}))
 
 	// 复制响应头
 	for key, values := range item.Headers {
@@ -339,7 +340,7 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 
 	// 写入响应体
 	if _, err := w.Write(item.Data); err != nil {
-		log.Println(t("MemoryCacheWriteFailed", map[string]any{"Error": err}))
+		log.Println(i18n.T("MemoryCacheWriteFailed", map[string]any{"Error": err}))
 		return false
 	}
 
@@ -351,7 +352,7 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 // CacheToMemory 将数据缓存到内存
 func (m *MemoryCache) CacheToMemory(key string, data []byte, headers map[string][]string, statusCode int, modTime time.Time) {
 	if !m.Set(key, data, headers, statusCode, modTime) {
-		log.Println(t("MemoryCacheStoreFailed", map[string]any{"Key": key}))
+		log.Println(i18n.T("MemoryCacheStoreFailed", map[string]any{"Key": key}))
 	}
 }
 

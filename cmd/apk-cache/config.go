@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // Config 配置文件结构
@@ -92,7 +93,7 @@ func LoadConfig(path string) (*Config, error) {
 
 	var config Config
 	if _, err := toml.DecodeFile(path, &config); err != nil {
-		return nil, errors.New(t("ParseConfigFailed", map[string]any{"Error": err}))
+		return nil, errors.New(i18n.T("ParseConfigFailed", map[string]any{"Error": err}))
 	}
 
 	// 验证配置
@@ -137,21 +138,21 @@ func ApplyConfig(config *Config) error {
 	if config.Cache.IndexDuration != "" && !isFlagSet("index-cache") {
 		duration, err := time.ParseDuration(config.Cache.IndexDuration)
 		if err != nil {
-			return errors.New(t("InvalidIndexDuration", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidIndexDuration", map[string]any{"Error": err}))
 		}
 		*indexCacheDuration = duration
 	}
 	if config.Cache.PkgDuration != "" && !isFlagSet("pkg-cache") {
 		duration, err := time.ParseDuration(config.Cache.PkgDuration)
 		if err != nil {
-			return errors.New(t("InvalidPkgDuration", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidPkgDuration", map[string]any{"Error": err}))
 		}
 		*pkgCacheDuration = duration
 	}
 	if config.Cache.CleanupInterval != "" && !isFlagSet("cleanup-interval") {
 		duration, err := time.ParseDuration(config.Cache.CleanupInterval)
 		if err != nil {
-			return errors.New(t("InvalidCleanupInterval", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidCleanupInterval", map[string]any{"Error": err}))
 		}
 		*cleanupInterval = duration
 	}
@@ -176,7 +177,7 @@ func ApplyConfig(config *Config) error {
 	if config.Cache.MemoryCacheTTL != "" && !isFlagSet("memory-cache-ttl") {
 		duration, err := time.ParseDuration(config.Cache.MemoryCacheTTL)
 		if err != nil {
-			return errors.New(t("InvalidMemoryCacheTTL", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidMemoryCacheTTL", map[string]any{"Error": err}))
 		}
 		*memoryCacheTTL = duration
 	}
@@ -214,14 +215,14 @@ func ApplyConfig(config *Config) error {
 	if config.HealthCheck.Interval != "" && !isFlagSet("health-check-interval") {
 		duration, err := time.ParseDuration(config.HealthCheck.Interval)
 		if err != nil {
-			return errors.New(t("InvalidHealthCheckInterval", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidHealthCheckInterval", map[string]any{"Error": err}))
 		}
 		*healthCheckInterval = duration
 	}
 	if config.HealthCheck.Timeout != "" && !isFlagSet("health-check-timeout") {
 		duration, err := time.ParseDuration(config.HealthCheck.Timeout)
 		if err != nil {
-			return errors.New(t("InvalidHealthCheckTimeout", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidHealthCheckTimeout", map[string]any{"Error": err}))
 		}
 		*healthCheckTimeout = duration
 	}
@@ -247,7 +248,7 @@ func ApplyConfig(config *Config) error {
 	if config.DataIntegrity.CheckInterval != "" && !isFlagSet("data-integrity-check-interval") {
 		duration, err := time.ParseDuration(config.DataIntegrity.CheckInterval)
 		if err != nil {
-			return errors.New(t("InvalidDataIntegrityCheckInterval", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidDataIntegrityCheckInterval", map[string]any{"Error": err}))
 		}
 		*dataIntegrityCheckInterval = duration
 	}
@@ -280,7 +281,7 @@ func validateConfig(config *Config) error {
 	// 验证服务器配置
 	if config.Server.Addr != "" {
 		if !strings.Contains(config.Server.Addr, ":") {
-			return errors.New(t("InvalidServerAddr", map[string]any{"Addr": config.Server.Addr}))
+			return errors.New(i18n.T("InvalidServerAddr", map[string]any{"Addr": config.Server.Addr}))
 		}
 	}
 
@@ -292,41 +293,41 @@ func validateConfig(config *Config) error {
 			"":   true,
 		}
 		if !supportedLocales[config.Server.Locale] {
-			return errors.New(t("UnsupportedLocale", map[string]any{"Locale": config.Server.Locale}))
+			return errors.New(i18n.T("UnsupportedLocale", map[string]any{"Locale": config.Server.Locale}))
 		}
 	}
 
 	// 验证上游服务器配置
 	for i, upstream := range config.Upstreams {
 		if upstream.URL == "" {
-			return errors.New(t("UpstreamURLRequired", map[string]any{"Index": i}))
+			return errors.New(i18n.T("UpstreamURLRequired", map[string]any{"Index": i}))
 		}
 		if !strings.HasPrefix(upstream.URL, "http://") && !strings.HasPrefix(upstream.URL, "https://") {
-			return errors.New(t("InvalidUpstreamURL", map[string]any{"URL": upstream.URL}))
+			return errors.New(i18n.T("InvalidUpstreamURL", map[string]any{"URL": upstream.URL}))
 		}
 	}
 
 	// 验证缓存配置
 	if config.Cache.Dir != "" {
 		if strings.Contains(config.Cache.Dir, "..") {
-			return errors.New(t("InvalidCacheDir", map[string]any{"Dir": config.Cache.Dir}))
+			return errors.New(i18n.T("InvalidCacheDir", map[string]any{"Dir": config.Cache.Dir}))
 		}
 	}
 
 	// 验证缓存持续时间
 	if config.Cache.IndexDuration != "" {
 		if _, err := time.ParseDuration(config.Cache.IndexDuration); err != nil {
-			return errors.New(t("InvalidIndexDuration", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidIndexDuration", map[string]any{"Error": err}))
 		}
 	}
 	if config.Cache.PkgDuration != "" {
 		if _, err := time.ParseDuration(config.Cache.PkgDuration); err != nil {
-			return errors.New(t("InvalidPkgDuration", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidPkgDuration", map[string]any{"Error": err}))
 		}
 	}
 	if config.Cache.CleanupInterval != "" {
 		if _, err := time.ParseDuration(config.Cache.CleanupInterval); err != nil {
-			return errors.New(t("InvalidCleanupInterval", map[string]any{"Error": err}))
+			return errors.New(i18n.T("InvalidCleanupInterval", map[string]any{"Error": err}))
 		}
 	}
 
@@ -339,7 +340,7 @@ func validateConfig(config *Config) error {
 			"":     true,
 		}
 		if !supportedStrategies[strings.ToUpper(config.Cache.CleanStrategy)] {
-			return errors.New(t("UnsupportedCleanStrategy", map[string]any{"Strategy": config.Cache.CleanStrategy}))
+			return errors.New(i18n.T("UnsupportedCleanStrategy", map[string]any{"Strategy": config.Cache.CleanStrategy}))
 		}
 	}
 

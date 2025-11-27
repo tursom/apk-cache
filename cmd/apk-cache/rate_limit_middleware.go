@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"strings"
+
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // rateLimitMiddleware 限流中间件
@@ -24,7 +26,7 @@ func rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if !rateLimiter.Allow() {
 			rateLimitRejected.Add(1)
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, t("RateLimitExceeded", nil), http.StatusTooManyRequests)
+			http.Error(w, i18n.T("RateLimitExceeded", nil), http.StatusTooManyRequests)
 			return
 		}
 
@@ -63,7 +65,7 @@ func rateLimitAdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		// 管理员接口使用更宽松的限制
 		if !rateLimiter.Allow() {
 			w.Header().Set("Retry-After", "1")
-			http.Error(w, t("RateLimitExceeded", nil), http.StatusTooManyRequests)
+			http.Error(w, i18n.T("RateLimitExceeded", nil), http.StatusTooManyRequests)
 			return
 		}
 

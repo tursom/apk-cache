@@ -13,6 +13,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // DataIntegrityManager 数据完整性管理器
@@ -77,7 +78,7 @@ func (d *DataIntegrityManager) VerifyFileIntegrity(filePath string) (bool, error
 	// 读取文件内容
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return false, errors.New(t("ReadFileFailed", map[string]any{"Error": err}))
+		return false, errors.New(i18n.T("ReadFileFailed", map[string]any{"Error": err}))
 	}
 
 	// 计算当前哈希
@@ -103,7 +104,7 @@ func (d *DataIntegrityManager) VerifyFileIntegrity(filePath string) (bool, error
 		dataIntegrityCorruptedFiles.Inc()
 		d.mu.Unlock()
 
-		log.Println(t("FileIntegrityCheckFailed", map[string]any{
+		log.Println(i18n.T("FileIntegrityCheckFailed", map[string]any{
 			"File":     filePath,
 			"Expected": recordedHash[:16] + "...",
 			"Actual":   currentHash[:16] + "...",
@@ -116,11 +117,11 @@ func (d *DataIntegrityManager) VerifyFileIntegrity(filePath string) (bool, error
 
 // RepairCorruptedFile 修复损坏的文件
 func (d *DataIntegrityManager) RepairCorruptedFile(filePath string) error {
-	log.Println(t("RepairingCorruptedFile", map[string]any{"File": filePath}))
+	log.Println(i18n.T("RepairingCorruptedFile", map[string]any{"File": filePath}))
 
 	// 删除损坏的文件
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-		return errors.New(t("DeleteCorruptedFileFailed", map[string]any{"Error": err}))
+		return errors.New(i18n.T("DeleteCorruptedFileFailed", map[string]any{"Error": err}))
 	}
 
 	// 从哈希记录中移除
@@ -132,7 +133,7 @@ func (d *DataIntegrityManager) RepairCorruptedFile(filePath string) error {
 	dataIntegrityRepairedFiles.Inc()
 	dataIntegrityCorruptedFiles.Dec()
 
-	log.Println(t("FileRepaired", map[string]any{"File": filePath}))
+	log.Println(i18n.T("FileRepaired", map[string]any{"File": filePath}))
 	return nil
 }
 
@@ -161,7 +162,7 @@ func (d *DataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
 		// 验证文件完整性
 		valid, err := d.VerifyFileIntegrity(path)
 		if err != nil {
-			log.Println(t("FileIntegrityCheckError", map[string]any{
+			log.Println(i18n.T("FileIntegrityCheckError", map[string]any{
 				"File":  path,
 				"Error": err,
 			}))
@@ -176,7 +177,7 @@ func (d *DataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
 			// 如果启用自动修复，立即修复
 			if d.enableAutoRepair {
 				if err := d.RepairCorruptedFile(path); err != nil {
-					log.Println(t("AutoRepairFailed", map[string]any{
+					log.Println(i18n.T("AutoRepairFailed", map[string]any{
 						"File":  path,
 						"Error": err,
 					}))
@@ -198,7 +199,7 @@ func (d *DataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
 	d.lastCheckTime = time.Now()
 	d.mu.Unlock()
 
-	log.Println(t("DataIntegrityCheckComplete", map[string]any{
+	log.Println(i18n.T("DataIntegrityCheckComplete", map[string]any{
 		"Checked":   checkedCount,
 		"Corrupted": corruptedCount,
 		"Duration":  duration,
@@ -243,9 +244,9 @@ func (d *DataIntegrityManager) StartPeriodicCheck() {
 		for range ticker.C {
 			checked, corrupted, err := d.CheckAllFilesIntegrity()
 			if err != nil {
-				log.Println(t("PeriodicIntegrityCheckFailed", map[string]any{"Error": err}))
+				log.Println(i18n.T("PeriodicIntegrityCheckFailed", map[string]any{"Error": err}))
 			} else {
-				log.Println(t("PeriodicIntegrityCheckComplete", map[string]any{
+				log.Println(i18n.T("PeriodicIntegrityCheckComplete", map[string]any{
 					"Checked":   checked,
 					"Corrupted": corrupted,
 				}))
@@ -278,7 +279,7 @@ func (d *DataIntegrityManager) calculateFileHash(filePath string) (string, error
 
 // InitializeExistingFiles 初始化现有文件的哈希记录
 func (d *DataIntegrityManager) InitializeExistingFiles() error {
-	log.Println(t("InitializingFileHashes", nil))
+	log.Println(i18n.T("InitializingFileHashes", nil))
 
 	var initializedCount int
 
@@ -293,7 +294,7 @@ func (d *DataIntegrityManager) InitializeExistingFiles() error {
 
 		hash, err := d.calculateFileHash(path)
 		if err != nil {
-			log.Println(t("CalculateFileHashFailed", map[string]any{
+			log.Println(i18n.T("CalculateFileHashFailed", map[string]any{
 				"File":  path,
 				"Error": err,
 			}))
@@ -313,7 +314,7 @@ func (d *DataIntegrityManager) InitializeExistingFiles() error {
 		return err
 	}
 
-	log.Println(t("FileHashesInitialized", map[string]any{"Count": initializedCount}))
+	log.Println(i18n.T("FileHashesInitialized", map[string]any{"Count": initializedCount}))
 	return nil
 }
 
@@ -333,7 +334,7 @@ func (d *DataIntegrityManager) CleanupOrphanedHashes() int {
 	}
 
 	if cleanedCount > 0 {
-		log.Println(t("OrphanedHashesCleaned", map[string]any{"Count": cleanedCount}))
+		log.Println(i18n.T("OrphanedHashesCleaned", map[string]any{"Count": cleanedCount}))
 	}
 
 	return cleanedCount

@@ -13,11 +13,13 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // handleAPTProxy 处理APT协议代理请求
 func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
-	log.Println(t("APTProxyRequest", map[string]any{
+	log.Println(i18n.T("APTProxyRequest", map[string]any{
 		"Method": r.Method,
 		"URL":    r.URL.String(),
 		"Host":   r.Host,
@@ -70,12 +72,12 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 		} else {
 			valid, err := dataIntegrityManager.VerifyFileIntegrity(cacheFile)
 			if err != nil {
-				log.Println(t("FileIntegrityCheckError", map[string]any{
+				log.Println(i18n.T("FileIntegrityCheckError", map[string]any{
 					"File":  cacheFile,
 					"Error": err,
 				}))
 			} else if !valid {
-				log.Println(t("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
+				log.Println(i18n.T("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
 				// 文件损坏，视为缓存未命中
 				// 继续从上游获取
 			} else {
@@ -89,12 +91,12 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 	cacheMisses.Add(1)
 
 	// 缓存未命中,从上游获取
-	log.Println(t("CacheMiss", map[string]any{"Path": cacheFile}))
+	log.Println(i18n.T("CacheMiss", map[string]any{"Path": cacheFile}))
 
 	upstreamResp, err := fetchAPTFromUpstream(r)
 	if err != nil {
-		log.Println(t("FetchUpstreamFailed", map[string]any{"Error": err}))
-		http.Error(w, t("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
+		log.Println(i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}))
+		http.Error(w, i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
 		return
 	}
 	defer upstreamResp.Body.Close()
@@ -106,10 +108,10 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 
 	// 保存到缓存（带文件锁）
 	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
-		log.Println(t("SaveCacheFailed", map[string]any{"Error": err}))
+		log.Println(i18n.T("SaveCacheFailed", map[string]any{"Error": err}))
 		return
 	}
-	log.Println(t("CacheSaved", map[string]any{"Path": cacheFile}))
+	log.Println(i18n.T("CacheSaved", map[string]any{"Path": cacheFile}))
 
 	// 对于 hash 请求，必须在 updateCacheFile 调用后校验 hash，不论校验器有没有开启
 	if isHashRequest(r.URL.Path) {
@@ -117,14 +119,14 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 		valid, err := verifyHashRequest(cacheFile, r.URL.Path)
 		if err != nil {
 			// 校验出错，记录错误但保留文件
-			log.Println(t("HashVerificationFailed", map[string]any{
+			log.Println(i18n.T("HashVerificationFailed", map[string]any{
 				"File":  cacheFile,
 				"Error": err,
 			}))
 		} else if !valid {
 			// 哈希不匹配，删除损坏的缓存文件
 			if err := os.Remove(cacheFile); err != nil {
-				log.Println(t("RemoveCorruptedCacheFailed", map[string]any{
+				log.Println(i18n.T("RemoveCorruptedCacheFailed", map[string]any{
 					"File":  cacheFile,
 					"Error": err,
 				}))
@@ -139,7 +141,7 @@ func fetchAPTFromUpstream(r *http.Request) (*http.Response, error) {
 	// 转发请求
 	resp, err := proxyForwardRequest(r)
 	if err != nil {
-		return nil, errors.New(t("HTTPProxyForwardFailed", map[string]any{
+		return nil, errors.New(i18n.T("HTTPProxyForwardFailed", map[string]any{
 			"Error": err,
 		}))
 	}
@@ -224,7 +226,7 @@ func handleAPTClientConditionalRequest(w http.ResponseWriter, r *http.Request, c
 	// 客户端缓存未过期，返回304 Not Modified
 	w.WriteHeader(http.StatusNotModified)
 	cacheHits.Add(1)
-	log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
+	log.Println(i18n.T("ClientCacheValid", map[string]any{"Path": cacheFile}))
 	return true
 }
 
@@ -240,7 +242,7 @@ func handleMemoryCacheConditionalRequest(w http.ResponseWriter, r *http.Request,
 	// 解析客户端提供的修改时间
 	clientTime, err := time.Parse(http.TimeFormat, ifModifiedSince)
 	if err != nil {
-		log.Println(t("ParseIfModifiedSinceFailed", map[string]any{"Error": err}))
+		log.Println(i18n.T("ParseIfModifiedSinceFailed", map[string]any{"Error": err}))
 		return false
 	}
 
@@ -254,7 +256,7 @@ func handleMemoryCacheConditionalRequest(w http.ResponseWriter, r *http.Request,
 		// 内存缓存项未修改，返回304 Not Modified
 		w.WriteHeader(http.StatusNotModified)
 		cacheHits.Add(1)
-		log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
+		log.Println(i18n.T("ClientCacheValid", map[string]any{"Path": cacheFile}))
 		return true
 	}
 
@@ -273,14 +275,14 @@ func handleFileCacheConditionalRequest(w http.ResponseWriter, r *http.Request, c
 	// 解析客户端提供的修改时间
 	clientTime, err := time.Parse(http.TimeFormat, ifModifiedSince)
 	if err != nil {
-		log.Println(t("ParseIfModifiedSinceFailed", map[string]any{"Error": err}))
+		log.Println(i18n.T("ParseIfModifiedSinceFailed", map[string]any{"Error": err}))
 		return false
 	}
 
 	// 内存缓存未命中，检查文件缓存的修改时间
 	fileInfo, err := os.Stat(cacheFile)
 	if err != nil {
-		log.Println(t("GetFileInfoFailed", map[string]any{"File": cacheFile, "Error": err}))
+		log.Println(i18n.T("GetFileInfoFailed", map[string]any{"File": cacheFile, "Error": err}))
 		return false
 	}
 
@@ -293,7 +295,7 @@ func handleFileCacheConditionalRequest(w http.ResponseWriter, r *http.Request, c
 	// 缓存文件未修改，返回304 Not Modified
 	w.WriteHeader(http.StatusNotModified)
 	cacheHits.Add(1)
-	log.Println(t("ClientCacheValid", map[string]any{"Path": cacheFile}))
+	log.Println(i18n.T("ClientCacheValid", map[string]any{"Path": cacheFile}))
 	return true
 }
 
@@ -322,7 +324,7 @@ func parseHashFromURL(path string) (string, string, error) {
 	}
 
 	if byHashIndex == -1 || byHashIndex+2 >= len(parts) {
-		return "", "", errors.New(t("InvalidHashURLFormat", nil))
+		return "", "", errors.New(i18n.T("InvalidHashURLFormat", nil))
 	}
 
 	algorithm := parts[byHashIndex+1]
@@ -337,12 +339,12 @@ func parseHashFromURL(path string) (string, string, error) {
 	}
 
 	if !supportedAlgorithms[algorithm] {
-		return "", "", errors.New(t("UnsupportedHashAlgorithm", map[string]any{"Algorithm": algorithm}))
+		return "", "", errors.New(i18n.T("UnsupportedHashAlgorithm", map[string]any{"Algorithm": algorithm}))
 	}
 
 	// 验证哈希值格式（基本格式检查）
 	if len(hashValue) == 0 {
-		return "", "", errors.New(t("EmptyHashValue", nil))
+		return "", "", errors.New(i18n.T("EmptyHashValue", nil))
 	}
 
 	return algorithm, hashValue, nil
@@ -353,7 +355,7 @@ func verifyFileWithHash(filePath, algorithm, expectedHash string) (bool, error) 
 	// 读取文件内容
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return false, errors.New(t("ReadFileFailed", map[string]any{"Error": err}))
+		return false, errors.New(i18n.T("ReadFileFailed", map[string]any{"Error": err}))
 	}
 
 	// 根据算法计算哈希值
@@ -369,7 +371,7 @@ func verifyFileWithHash(filePath, algorithm, expectedHash string) (bool, error) 
 		hash := md5.Sum(data)
 		actualHash = hex.EncodeToString(hash[:])
 	default:
-		return false, errors.New(t("UnsupportedHashAlgorithm", map[string]any{"Algorithm": algorithm}))
+		return false, errors.New(i18n.T("UnsupportedHashAlgorithm", map[string]any{"Algorithm": algorithm}))
 	}
 
 	// 比较哈希值（不区分大小写）
@@ -381,7 +383,7 @@ func verifyHashRequest(cacheFile, path string) (bool, error) {
 	// 解析 URL 中的哈希算法和哈希值
 	algorithm, expectedHash, err := parseHashFromURL(path)
 	if err != nil {
-		log.Println(t("ParseHashFromURLFailed", map[string]any{
+		log.Println(i18n.T("ParseHashFromURLFailed", map[string]any{
 			"Path":  path,
 			"Error": err,
 		}))
@@ -391,7 +393,7 @@ func verifyHashRequest(cacheFile, path string) (bool, error) {
 	// 使用 URL 中的哈希值验证文件完整性
 	valid, err := verifyFileWithHash(cacheFile, algorithm, expectedHash)
 	if err != nil {
-		log.Println(t("HashVerificationFailed", map[string]any{
+		log.Println(i18n.T("HashVerificationFailed", map[string]any{
 			"File":  cacheFile,
 			"Error": err,
 		}))
@@ -399,7 +401,7 @@ func verifyHashRequest(cacheFile, path string) (bool, error) {
 	}
 
 	if !valid {
-		log.Println(t("HashVerificationMismatch", map[string]any{
+		log.Println(i18n.T("HashVerificationMismatch", map[string]any{
 			"Path":      path,
 			"File":      cacheFile,
 			"Algorithm": algorithm,
@@ -408,7 +410,7 @@ func verifyHashRequest(cacheFile, path string) (bool, error) {
 		return false, nil
 	}
 
-	log.Println(t("HashVerificationPassed", map[string]any{
+	log.Println(i18n.T("HashVerificationPassed", map[string]any{
 		"Path":      path,
 		"Algorithm": algorithm,
 	}))

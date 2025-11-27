@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // UpstreamServer 上游服务器配置，集成健康检查功能
@@ -144,7 +146,7 @@ func (u *UpstreamServer) checkHealth() bool {
 		u.isHealthy = true
 		u.lastError = ""
 		u.retryCount = 0
-		log.Println(t("HealthCheckUpstreamHealthy", map[string]any{
+		log.Println(i18n.T("HealthCheckUpstreamHealthy", map[string]any{
 			"URL": u.URL,
 		}))
 	} else {
@@ -153,7 +155,7 @@ func (u *UpstreamServer) checkHealth() bool {
 			u.isHealthy = false
 		}
 		u.lastError = lastError.Error()
-		log.Println(t("HealthCheckUpstreamUnhealthy", map[string]any{
+		log.Println(i18n.T("HealthCheckUpstreamUnhealthy", map[string]any{
 			"URL":   u.URL,
 			"Error": lastError,
 		}))
@@ -301,7 +303,7 @@ func (m *UpstreamManager) FetchFromUpstream(urlPath string) (*http.Response, err
 				if serverName == "" {
 					serverName = server.URL
 				}
-				log.Println(t("FallbackUpstream", map[string]any{
+				log.Println(i18n.T("FallbackUpstream", map[string]any{
 					"Index": i + 1,
 					"Name":  serverName,
 				}))
@@ -312,13 +314,13 @@ func (m *UpstreamManager) FetchFromUpstream(urlPath string) (*http.Response, err
 		// 记录错误并尝试下一个服务器
 		if err != nil {
 			lastErr = err
-			log.Println(t("UpstreamFailed", map[string]any{
+			log.Println(i18n.T("UpstreamFailed", map[string]any{
 				"URL":   server.URL,
 				"Error": err,
 			}))
 		} else {
-			lastErr = errors.New(t("UpstreamReturnedStatusCode", map[string]any{"Status": resp.StatusCode}))
-			log.Println(t("UpstreamStatusError", map[string]any{
+			lastErr = errors.New(i18n.T("UpstreamReturnedStatusCode", map[string]any{"Status": resp.StatusCode}))
+			log.Println(i18n.T("UpstreamStatusError", map[string]any{
 				"URL":    server.URL,
 				"Status": resp.StatusCode,
 			}))
@@ -327,7 +329,7 @@ func (m *UpstreamManager) FetchFromUpstream(urlPath string) (*http.Response, err
 	}
 
 	if lastErr == nil {
-		lastErr = errors.New(t("NoAvailableUpstream", nil))
+		lastErr = errors.New(i18n.T("NoAvailableUpstream", nil))
 	}
 	return nil, lastErr
 }

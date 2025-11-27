@@ -196,10 +196,6 @@ func parseCleanStrategy(strategy string) CleanStrategy {
 	}
 }
 
-func t(messageID string, templateData map[string]any) string {
-	return i18n.T(messageID, templateData)
-}
-
 func main() {
 	flag.Parse()
 
@@ -207,13 +203,13 @@ func main() {
 	if *configFile != "" {
 		config, err := LoadConfig(*configFile)
 		if err != nil {
-			log.Fatalln(t("FailedToLoadConfigFile", map[string]any{"Error": err}))
+			log.Fatalln(i18n.T("FailedToLoadConfigFile", map[string]any{"Error": err}))
 		}
 		if config != nil {
 			if err := ApplyConfig(config); err != nil {
-				log.Fatalln(t("FailedToApplyConfig", map[string]any{"Error": err}))
+				log.Fatalln(i18n.T("FailedToApplyConfig", map[string]any{"Error": err}))
 			}
-			log.Println(t("LoadedConfigFrom", map[string]any{"Path": *configFile}))
+			log.Println(i18n.T("LoadedConfigFrom", map[string]any{"Path": *configFile}))
 		}
 	}
 
@@ -232,7 +228,7 @@ func main() {
 	if *cacheMaxSize != "" {
 		maxSize, err := parseSizeString(*cacheMaxSize)
 		if err != nil {
-			log.Fatalln(t("InvalidCacheMaxSize", map[string]any{"Error": err}))
+			log.Fatalln(i18n.T("InvalidCacheMaxSize", map[string]any{"Error": err}))
 		}
 
 		strategy := parseCleanStrategy(*cacheCleanStrategy)
@@ -240,16 +236,16 @@ func main() {
 
 		// 初始化当前缓存大小
 		if err := cacheQuota.InitializeCacheSize(); err != nil {
-			log.Println(t("CacheSizeInitFailed", map[string]any{"Error": err}))
+			log.Println(i18n.T("CacheSizeInitFailed", map[string]any{"Error": err}))
 		}
 
 		if maxSize > 0 {
-			log.Println(t("CacheQuotaEnabled", map[string]any{
+			log.Println(i18n.T("CacheQuotaEnabled", map[string]any{
 				"MaxSize":  maxSize,
 				"Strategy": strategy.String(),
 			}))
 		} else {
-			log.Println(t("CacheQuotaDisabled", nil))
+			log.Println(i18n.T("CacheQuotaDisabled", nil))
 		}
 	}
 
@@ -257,23 +253,23 @@ func main() {
 	if *memoryCacheEnabled {
 		memoryMaxSize, err := parseSizeString(*memoryCacheSize)
 		if err != nil {
-			log.Fatalln(t("InvalidMemoryCacheSize", map[string]any{"Error": err}))
+			log.Fatalln(i18n.T("InvalidMemoryCacheSize", map[string]any{"Error": err}))
 		}
 
 		memoryCacheMaxFileSizeBytes, err = parseSizeString(*memoryCacheMaxFileSize)
 		if err != nil {
-			log.Fatalln(t("InvalidMemoryCacheMaxFileSize", map[string]any{"Error": err}))
+			log.Fatalln(i18n.T("InvalidMemoryCacheMaxFileSize", map[string]any{"Error": err}))
 		}
 
 		memoryCache = NewMemoryCache(memoryMaxSize, *memoryCacheMaxItems, *memoryCacheTTL)
-		log.Println(t("MemoryCacheEnabled", map[string]any{
+		log.Println(i18n.T("MemoryCacheEnabled", map[string]any{
 			"MaxSize":     memoryMaxSize,
 			"MaxItems":    *memoryCacheMaxItems,
 			"TTL":         *memoryCacheTTL,
 			"MaxFileSize": memoryCacheMaxFileSizeBytes,
 		}))
 	} else {
-		log.Println(t("MemoryCacheDisabled", nil))
+		log.Println(i18n.T("MemoryCacheDisabled", nil))
 	}
 
 	// 注册 Prometheus 指标到自定义 Registry
@@ -289,23 +285,23 @@ func main() {
 	// 初始化请求限流器
 	if *rateLimitEnabled {
 		rateLimiter = NewRateLimiter(*rateLimitRate, *rateLimitBurst)
-		log.Println(t("RateLimitEnabled", map[string]any{
+		log.Println(i18n.T("RateLimitEnabled", map[string]any{
 			"Rate":  *rateLimitRate,
 			"Burst": *rateLimitBurst,
 		}))
 	} else {
-		log.Println(t("RateLimitDisabled", nil))
+		log.Println(i18n.T("RateLimitDisabled", nil))
 	}
 
 	// 创建缓存目录
 	if err := os.MkdirAll(*cachePath, 0755); err != nil {
-		log.Fatalln(t("CreateCacheDirFailed", map[string]any{"Error": err}))
+		log.Fatalln(i18n.T("CreateCacheDirFailed", map[string]any{"Error": err}))
 	}
 
 	// 启动自动清理
 	if *cleanupInterval > 0 && *pkgCacheDuration != 0 {
 		go startAutoCleanup()
-		log.Println(t("AutoCleanupEnabled", map[string]any{"Interval": *cleanupInterval}))
+		log.Println(i18n.T("AutoCleanupEnabled", map[string]any{"Interval": *cleanupInterval}))
 	}
 
 	// 启动健康检查循环
@@ -327,9 +323,9 @@ func main() {
 		// 初始化现有文件的哈希记录（仅在配置启用时）
 		if *dataIntegrityInitializeExistingFiles {
 			if err := dataIntegrityManager.InitializeExistingFiles(); err != nil {
-				log.Println(t("DataIntegrityInitFailed", map[string]any{"Error": err}))
+				log.Println(i18n.T("DataIntegrityInitFailed", map[string]any{"Error": err}))
 			} else {
-				log.Println(t("DataIntegrityEnabled", map[string]any{
+				log.Println(i18n.T("DataIntegrityEnabled", map[string]any{
 					"Interval":                *dataIntegrityCheckInterval,
 					"AutoRepair":              *dataIntegrityAutoRepair,
 					"PeriodicCheck":           *dataIntegrityPeriodicCheck,
@@ -337,7 +333,7 @@ func main() {
 				}))
 			}
 		} else {
-			log.Println(t("DataIntegrityEnabled", map[string]any{
+			log.Println(i18n.T("DataIntegrityEnabled", map[string]any{
 				"Interval":                *dataIntegrityCheckInterval,
 				"AutoRepair":              *dataIntegrityAutoRepair,
 				"PeriodicCheck":           *dataIntegrityPeriodicCheck,
@@ -348,7 +344,7 @@ func main() {
 		// 启动定期检查
 		dataIntegrityManager.StartPeriodicCheck()
 	} else {
-		log.Println(t("DataIntegrityDisabled", nil))
+		log.Println(i18n.T("DataIntegrityDisabled", nil))
 	}
 
 	var handler webHandler
@@ -379,15 +375,15 @@ func main() {
 		}
 	})
 
-	log.Println(t("ServerStarted", map[string]any{"Addr": *listenAddr}))
-	log.Println(t("UpstreamServer", map[string]any{"URL": *upstreamURL}))
-	log.Println(t("CacheDirectory", map[string]any{"Path": *cachePath}))
+	log.Println(i18n.T("ServerStarted", map[string]any{"Addr": *listenAddr}))
+	log.Println(i18n.T("UpstreamServer", map[string]any{"URL": *upstreamURL}))
+	log.Println(i18n.T("CacheDirectory", map[string]any{"Path": *cachePath}))
 	if *proxyURL != "" {
-		log.Println(t("ProxyServer", map[string]any{"Proxy": *proxyURL}))
+		log.Println(i18n.T("ProxyServer", map[string]any{"Proxy": *proxyURL}))
 	}
 
 	if err := http.ListenAndServe(*listenAddr, &handler); err != nil {
-		log.Fatalln(t("ServerStartFailed", map[string]any{"Error": err}))
+		log.Fatalln(i18n.T("ServerStartFailed", map[string]any{"Error": err}))
 	}
 }
 

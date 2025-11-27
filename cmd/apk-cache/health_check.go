@@ -13,6 +13,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // ComponentStatus 组件状态
@@ -254,11 +255,11 @@ func (h *HealthCheckManager) PerformHealthChecks() {
 // StartHealthCheckLoop 启动健康检查循环
 func (h *HealthCheckManager) StartHealthCheckLoop() {
 	if *healthCheckInterval <= 0 {
-		log.Println(t("HealthCheckDisabled", nil))
+		log.Println(i18n.T("HealthCheckDisabled", nil))
 		return
 	}
 
-	log.Println(t("HealthCheckEnabled", map[string]any{
+	log.Println(i18n.T("HealthCheckEnabled", map[string]any{
 		"Interval": *healthCheckInterval,
 		"Timeout":  *healthCheckTimeout,
 	}))
@@ -314,7 +315,7 @@ func (h *HealthCheckManager) SelfHeal() {
 		return
 	}
 
-	log.Println(t("HealthCheckSelfHealingTriggered", map[string]any{
+	log.Println(i18n.T("HealthCheckSelfHealingTriggered", map[string]any{
 		"Component": "system",
 		"Action":    "starting self-healing process",
 	}))
@@ -334,14 +335,14 @@ func (h *HealthCheckManager) SelfHeal() {
 		h.healMemoryCache()
 	}
 
-	log.Println(t("HealthCheckSelfHealingCompleted", map[string]any{
+	log.Println(i18n.T("HealthCheckSelfHealingCompleted", map[string]any{
 		"Component": "system",
 	}))
 }
 
 // healUpstream 上游服务器自愈
 func (h *HealthCheckManager) healUpstream() {
-	log.Println(t("HealthCheckSelfHealingTriggered", map[string]any{
+	log.Println(i18n.T("HealthCheckSelfHealingTriggered", map[string]any{
 		"Component": "upstream",
 		"Action":    "attempting to recover upstream servers",
 	}))
@@ -353,14 +354,14 @@ func (h *HealthCheckManager) healUpstream() {
 
 // healFilesystem 文件系统自愈
 func (h *HealthCheckManager) healFilesystem() {
-	log.Println(t("HealthCheckSelfHealingTriggered", map[string]any{
+	log.Println(i18n.T("HealthCheckSelfHealingTriggered", map[string]any{
 		"Component": "filesystem",
 		"Action":    "repairing cache directory permissions and structure",
 	}))
 
 	// 尝试修复缓存目录权限
 	if err := os.Chmod(*cachePath, 0755); err != nil {
-		log.Println(t("HealthCheckSelfHealingFailed", map[string]any{
+		log.Println(i18n.T("HealthCheckSelfHealingFailed", map[string]any{
 			"Component": "filesystem",
 			"Error":     err,
 		}))
@@ -372,21 +373,21 @@ func (h *HealthCheckManager) healFilesystem() {
 	for _, subdir := range subdirs {
 		dir := filepath.Join(*cachePath, subdir)
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			log.Println(t("HealthCheckSelfHealingFailed", map[string]any{
+			log.Println(i18n.T("HealthCheckSelfHealingFailed", map[string]any{
 				"Component": "filesystem",
 				"Error":     fmt.Sprintf("failed to create subdirectory %s: %v", dir, err),
 			}))
 		}
 	}
 
-	log.Println(t("HealthCheckSelfHealingCompleted", map[string]any{
+	log.Println(i18n.T("HealthCheckSelfHealingCompleted", map[string]any{
 		"Component": "filesystem",
 	}))
 }
 
 // healMemoryCache 内存缓存自愈
 func (h *HealthCheckManager) healMemoryCache() {
-	log.Println(t("HealthCheckSelfHealingTriggered", map[string]any{
+	log.Println(i18n.T("HealthCheckSelfHealingTriggered", map[string]any{
 		"Component": "memory_cache",
 		"Action":    "cleaning up expired memory cache items",
 	}))
@@ -394,7 +395,7 @@ func (h *HealthCheckManager) healMemoryCache() {
 	if memoryCache != nil {
 		// 清理过期的内存缓存项
 		memoryCache.cleanupExpired()
-		log.Println(t("HealthCheckSelfHealingCompleted", map[string]any{
+		log.Println(i18n.T("HealthCheckSelfHealingCompleted", map[string]any{
 			"Component": "memory_cache",
 		}))
 	}

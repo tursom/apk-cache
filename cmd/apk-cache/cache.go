@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tursom/apk-cache/utils/i18n"
 	"golang.org/x/net/proxy"
 )
 
@@ -116,7 +117,7 @@ func (c *ClientCacheHeaders) CleanupExpired() {
 }
 
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println(t("RequestReceived", map[string]any{
+	log.Println(i18n.T("RequestReceived", map[string]any{
 		"Method": r.Method,
 		"Path":   r.URL.Path,
 	}))
@@ -137,12 +138,12 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		if dataIntegrityManager != nil {
 			valid, err := dataIntegrityManager.VerifyFileIntegrity(cacheFile)
 			if err != nil {
-				log.Println(t("FileIntegrityCheckError", map[string]any{
+				log.Println(i18n.T("FileIntegrityCheckError", map[string]any{
 					"File":  cacheFile,
 					"Error": err,
 				}))
 			} else if !valid {
-				log.Println(t("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
+				log.Println(i18n.T("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
 				// 文件损坏，视为缓存未命中
 				// 继续从上游获取
 			} else {
@@ -160,11 +161,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	cacheMisses.Add(1)
 
 	// 缓存未命中,从上游获取
-	log.Println(t("CacheMiss", map[string]any{"Path": cacheFile}))
+	log.Println(i18n.T("CacheMiss", map[string]any{"Path": cacheFile}))
 	upstreamResp, err := fetchFromUpstream(r.URL.Path)
 	if err != nil {
-		log.Println(t("FetchUpstreamFailed", map[string]any{"Error": err}))
-		http.Error(w, t("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
+		log.Println(i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}))
+		http.Error(w, i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
 		return
 	}
 	defer upstreamResp.Body.Close()
@@ -176,9 +177,9 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 保存到缓存（带文件锁）
 	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
-		log.Println(t("SaveCacheFailed", map[string]any{"Error": err}))
+		log.Println(i18n.T("SaveCacheFailed", map[string]any{"Error": err}))
 	} else {
-		log.Println(t("CacheSaved", map[string]any{"Path": cacheFile}))
+		log.Println(i18n.T("CacheSaved", map[string]any{"Path": cacheFile}))
 	}
 }
 
@@ -198,13 +199,13 @@ func cacheValid(path string) bool {
 	if isIndex {
 		// index 文件按修改时间过期
 		if isCacheExpiredByModTime(path, *indexCacheDuration) {
-			log.Println(t("IndexExpired", map[string]any{"Path": path}))
+			log.Println(i18n.T("IndexExpired", map[string]any{"Path": path}))
 			return false
 		}
 	} else {
 		// 普通包文件按访问时间过期（pkgCacheDuration > 0 时才检查）
 		if *pkgCacheDuration > 0 && isCacheExpiredByAccessTime(path, *pkgCacheDuration) {
-			log.Println(t("CacheExpired", map[string]any{"Path": path}))
+			log.Println(i18n.T("CacheExpired", map[string]any{"Path": path}))
 			return false
 		}
 	}
@@ -213,7 +214,7 @@ func cacheValid(path string) bool {
 }
 
 func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
-	log.Println(t("CacheHit", map[string]any{"Path": cacheFile}))
+	log.Println(i18n.T("CacheHit", map[string]any{"Path": cacheFile}))
 
 	// 首先尝试从内存缓存提供
 	if memoryCache != nil {
@@ -224,7 +225,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 
 	file, err := os.Open(cacheFile)
 	if err != nil {
-		http.Error(w, t("ReadCacheFailed", nil), http.StatusInternalServerError)
+		http.Error(w, i18n.T("ReadCacheFailed", nil), http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
@@ -241,7 +242,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	if memoryCache != nil && !isIndexFile(cacheFile) {
 		// 检查文件大小是否超过内存缓存限制
 		if memoryCacheMaxFileSizeBytes > 0 && stat.Size() > memoryCacheMaxFileSizeBytes {
-			log.Println(t("MemoryCacheFileTooLarge", map[string]any{
+			log.Println(i18n.T("MemoryCacheFileTooLarge", map[string]any{
 				"Path": cacheFile,
 				"Size": stat.Size(),
 				"Max":  memoryCacheMaxFileSizeBytes,
@@ -286,7 +287,7 @@ func createHTTPClientForUpstream(proxyAddr string) *http.Client {
 
 	proxyURL, err := url.Parse(proxyAddr)
 	if err != nil {
-		log.Println(t("InvalidProxy", map[string]any{
+		log.Println(i18n.T("InvalidProxy", map[string]any{
 			"Proxy": proxyAddr,
 			"Error": err,
 		}))
@@ -299,7 +300,7 @@ func createHTTPClientForUpstream(proxyAddr string) *http.Client {
 		// SOCKS5 代理
 		dialer, err := proxy.SOCKS5("tcp", proxyURL.Host, nil, proxy.Direct)
 		if err != nil {
-			log.Println(t("CreateProxyFailed", map[string]any{
+			log.Println(i18n.T("CreateProxyFailed", map[string]any{
 				"Error": err,
 			}))
 			return &http.Client{Timeout: 30 * time.Second}
@@ -335,13 +336,13 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 	// 创建缓存文件的目录
 	dir := filepath.Dir(cacheFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return errors.New(t("CreateCacheDirFailed", map[string]any{"Error": err}))
+		return errors.New(i18n.T("CreateCacheDirFailed", map[string]any{"Error": err}))
 	}
 
 	// 创建临时文件
 	tmpFile, err := os.CreateTemp(dir, "tmp-")
 	if err != nil {
-		return errors.New(t("CreateTempFileFailed", map[string]any{"Error": err}))
+		return errors.New(i18n.T("CreateTempFileFailed", map[string]any{"Error": err}))
 	}
 	tmpFileName := tmpFile.Name()
 	defer func() {
@@ -373,7 +374,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 			if cacheErr == nil {
 				if _, err := tmpFile.Write(buf[:n]); err != nil {
 					cacheErr = err
-					log.Println(t("WriteCacheFailed", map[string]any{"Error": err}))
+					log.Println(i18n.T("WriteCacheFailed", map[string]any{"Error": err}))
 				}
 			}
 
@@ -381,7 +382,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 			if clientErr == nil {
 				if _, err := w.Write(buf[:n]); err != nil {
 					clientErr = err
-					log.Println(t("WriteClientFailed", map[string]any{"Error": err}))
+					log.Println(i18n.T("WriteClientFailed", map[string]any{"Error": err}))
 				}
 			}
 
@@ -394,7 +395,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		// 检查读取错误
 		if readErr != nil {
 			if readErr != io.EOF {
-				return errors.New(t("ReadUpstreamFailed", map[string]any{"Error": readErr}))
+				return errors.New(i18n.T("ReadUpstreamFailed", map[string]any{"Error": readErr}))
 			}
 			break // EOF，正常结束
 		}
@@ -402,7 +403,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 
 	// 关闭临时文件
 	if err := tmpFile.Close(); err != nil {
-		return errors.New(t("CloseTempFileFailed", map[string]any{"Error": err}))
+		return errors.New(i18n.T("CloseTempFileFailed", map[string]any{"Error": err}))
 	}
 
 	// 检查缓存配额（仅在缓存写入成功时）
@@ -410,13 +411,13 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		// 获取临时文件大小
 		fileInfo, err := os.Stat(tmpFileName)
 		if err != nil {
-			return errors.New(t("GetFileSizeFailed", map[string]any{"Error": err}))
+			return errors.New(i18n.T("GetFileSizeFailed", map[string]any{"Error": err}))
 		}
 
 		// 检查配额
 		allowed, err := cacheQuota.CheckAndUpdateQuota(fileInfo.Size())
 		if !allowed {
-			log.Println(t("CacheQuotaRejected", map[string]any{
+			log.Println(i18n.T("CacheQuotaRejected", map[string]any{
 				"File": cacheFile,
 				"Size": fileInfo.Size(),
 			}))
@@ -427,27 +428,27 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 
 	// 只有缓存写入成功才重命名
 	if cacheErr != nil {
-		return errors.New(t("CacheWriteFailed", map[string]any{"Error": cacheErr}))
+		return errors.New(i18n.T("CacheWriteFailed", map[string]any{"Error": cacheErr}))
 	}
 
 	// 检查临时文件大小
 	ostInfo, err := os.Stat(tmpFileName)
 	if err != nil {
-		return errors.New(t("GetTempFileSizeFailed", map[string]any{"Error": err}))
+		return errors.New(i18n.T("GetTempFileSizeFailed", map[string]any{"Error": err}))
 	}
 	if ostInfo.Size() == 0 {
-		return errors.New(t("TempFileZeroSize", map[string]any{"File": tmpFileName}))
+		return errors.New(i18n.T("TempFileZeroSize", map[string]any{"File": tmpFileName}))
 	}
 
 	if err := os.Rename(tmpFileName, cacheFile); err != nil {
-		return errors.New(t("RenameCacheFileFailed", map[string]any{"Error": err}))
+		return errors.New(i18n.T("RenameCacheFileFailed", map[string]any{"Error": err}))
 	}
 
 	// 将数据存入内存缓存（仅在成功写入文件缓存且内存缓存启用时）
 	if memoryCache != nil && len(responseData) > 0 {
 		// 检查文件大小是否超过内存缓存限制
 		if memoryCacheMaxFileSizeBytes > 0 && int64(len(responseData)) > memoryCacheMaxFileSizeBytes {
-			log.Println(t("MemoryCacheFileTooLarge", map[string]any{
+			log.Println(i18n.T("MemoryCacheFileTooLarge", map[string]any{
 				"Path": cacheFile,
 				"Size": len(responseData),
 				"Max":  memoryCacheMaxFileSizeBytes,
@@ -460,7 +461,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 	// 记录文件哈希（如果数据完整性校验启用）
 	if dataIntegrityManager != nil && len(responseData) > 0 {
 		if err := dataIntegrityManager.RecordFileHash(cacheFile, responseData); err != nil {
-			log.Println(t("RecordFileHashFailed", map[string]any{
+			log.Println(i18n.T("RecordFileHashFailed", map[string]any{
 				"File":  cacheFile,
 				"Error": err,
 			}))
@@ -530,12 +531,12 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 		return true
 	case http.StatusNotModified:
 		// 304 Not Modified - 内容未修改，可以继续使用缓存
-		log.Println(t("UpstreamNotModified", map[string]any{"Path": cacheFile}))
+		log.Println(i18n.T("UpstreamNotModified", map[string]any{"Path": cacheFile}))
 
 		// 保存客户端的 If-Modified-Since 头信息
 		if ifModifiedSince := r.Header.Get("If-Modified-Since"); ifModifiedSince != "" {
 			clientCacheHeaders.Save(cacheFile, ifModifiedSince)
-			log.Println(t("ClientCacheHeaderSaved", map[string]any{
+			log.Println(i18n.T("ClientCacheHeaderSaved", map[string]any{
 				"Path":   cacheFile,
 				"Header": ifModifiedSince,
 			}))
@@ -551,11 +552,11 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 		return false
 	default:
 		// 其他错误状态码
-		log.Println(t("UpstreamReturnedError", map[string]any{
+		log.Println(i18n.T("UpstreamReturnedError", map[string]any{
 			"Status":     upstreamResp.Status,
 			"StatusCode": upstreamResp.StatusCode,
 		}))
-		http.Error(w, t("UpstreamReturnedError", map[string]any{
+		http.Error(w, i18n.T("UpstreamReturnedError", map[string]any{
 			"Status":     upstreamResp.Status,
 			"StatusCode": upstreamResp.StatusCode,
 		}), upstreamResp.StatusCode)

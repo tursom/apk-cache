@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
+	"github.com/tursom/apk-cache/utils/i18n"
 	"golang.org/x/net/proxy"
 )
 
@@ -31,7 +32,7 @@ func (cr *cacheMissReader) Read(p []byte) (int, error) {
 
 // handleProxyRequest 处理HTTP代理请求
 func handleProxyRequest(w http.ResponseWriter, r *http.Request) {
-	log.Println(t("HTTPProxyHandlerReceived", map[string]any{
+	log.Println(i18n.T("HTTPProxyHandlerReceived", map[string]any{
 		"Method": r.Method,
 		"Path":   r.URL.Path,
 	}))
@@ -47,7 +48,7 @@ func handleProxyRequest(w http.ResponseWriter, r *http.Request) {
 
 // handleProxyHTTPS 处理HTTPS代理请求（CONNECT方法）
 func handleProxyHTTPS(w http.ResponseWriter, r *http.Request) {
-	log.Println(t("HTTPSProxyRequest", map[string]any{
+	log.Println(i18n.T("HTTPSProxyRequest", map[string]any{
 		"Method": r.Method,
 		"Host":   r.Host,
 	}))
@@ -63,7 +64,7 @@ func handleProxyHTTPS(w http.ResponseWriter, r *http.Request) {
 	if !strings.Contains(host, ":") {
 		// 对于HTTPS，默认端口是443
 		host = host + ":443"
-		log.Println(t("HTTPSProxyAddedDefaultPort", map[string]any{"Target": host}))
+		log.Println(i18n.T("HTTPSProxyAddedDefaultPort", map[string]any{"Target": host}))
 	}
 
 	// 建立到目标服务器的连接
@@ -84,7 +85,7 @@ func handleProxyHTTPS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		log.Println(t("HTTPSProxyConnectFailed", map[string]any{
+		log.Println(i18n.T("HTTPSProxyConnectFailed", map[string]any{
 			"Host":  host,
 			"Error": err,
 		}))
@@ -125,7 +126,7 @@ func handleProxyHTTPS(w http.ResponseWriter, r *http.Request) {
 
 // handleProxyHTTP 处理HTTP代理请求
 func handleProxyHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Println(t("HTTPProxyRequest", map[string]any{
+	log.Println(i18n.T("HTTPProxyRequest", map[string]any{
 		"Method": r.Method,
 		"URL":    r.URL.String(),
 		"Host":   r.Host,
@@ -151,7 +152,7 @@ func proxyForwardHTTP(w http.ResponseWriter, r *http.Request) {
 	// 转发请求
 	resp, err := proxyForwardRequest(r)
 	if err != nil {
-		log.Println(t("HTTPProxyForwardFailed", map[string]any{
+		log.Println(i18n.T("HTTPProxyForwardFailed", map[string]any{
 			"Error": err,
 		}))
 		http.Error(w, fmt.Sprintf("Failed to forward request: %v", err), http.StatusBadGateway)
@@ -173,7 +174,7 @@ func proxyForwardHTTP(w http.ResponseWriter, r *http.Request) {
 	reader := &cacheMissReader{reader: resp.Body}
 	_, err = io.Copy(w, reader)
 	if err != nil {
-		log.Println(t("HTTPProxyCopyResponseFailed", map[string]any{
+		log.Println(i18n.T("HTTPProxyCopyResponseFailed", map[string]any{
 			"Error": err,
 		}))
 	}
@@ -227,7 +228,7 @@ func proxyDialHTTP(host string, proxyURL *url.URL) (net.Conn, error) {
 		return nil, fmt.Errorf("proxy returned status: %s", resp.Status)
 	}
 
-	log.Println(t("ProxyConnectionEstablished", map[string]any{
+	log.Println(i18n.T("ProxyConnectionEstablished", map[string]any{
 		"Proxy":  proxyURL.Host,
 		"Target": host,
 	}))
@@ -319,7 +320,7 @@ func proxyForwardRequest(r *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	log.Println(t("ForwardingToUpstream", map[string]any{"Method": r.Method, "URL": targetURL.String()}))
+	log.Println(i18n.T("ForwardingToUpstream", map[string]any{"Method": r.Method, "URL": targetURL.String()}))
 
 	// 创建HTTP客户端
 	client := createHTTPClientForUpstream(proxy)

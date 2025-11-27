@@ -11,6 +11,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // CacheQuota 缓存配额管理器
@@ -87,7 +88,7 @@ func (q *CacheQuota) CheckAndUpdateQuota(fileSize int64) (bool, error) {
 	}
 
 	// 空间不足，需要清理
-	log.Println(t("CacheQuotaExceeded", map[string]any{
+	log.Println(i18n.T("CacheQuotaExceeded", map[string]any{
 		"Current": q.CurrentSize,
 		"Max":     q.MaxSize,
 		"Need":    fileSize,
@@ -106,7 +107,7 @@ func (q *CacheQuota) CheckAndUpdateQuota(fileSize int64) (bool, error) {
 		return true, nil
 	}
 
-	return false, errors.New(t("CacheQuotaInsufficient", map[string]any{
+	return false, errors.New(i18n.T("CacheQuotaInsufficient", map[string]any{
 		"Current": q.CurrentSize,
 		"Max":     q.MaxSize,
 		"Need":    fileSize,
@@ -141,7 +142,7 @@ func (q *CacheQuota) GetUsage() (current int64, max int64, percentage float64) {
 
 // cleanupCache 清理缓存以释放空间
 func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
-	log.Println(t("CacheQuotaCleanup", map[string]any{
+	log.Println(i18n.T("CacheQuotaCleanup", map[string]any{
 		"NeedSize": needSize,
 		"Strategy": q.Strategy.String(),
 	}))
@@ -177,7 +178,7 @@ func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
 		}
 
 		if err := os.Remove(file.path); err != nil {
-			log.Println(t("CacheQuotaDeleteFailed", map[string]any{
+			log.Println(i18n.T("CacheQuotaDeleteFailed", map[string]any{
 				"File":  file.path,
 				"Error": err,
 			}))
@@ -191,14 +192,14 @@ func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
 		// 从访问时间跟踪器中移除
 		accessTimeTracker.Remove(file.path)
 
-		log.Println(t("CacheQuotaFileDeleted", map[string]any{
+		log.Println(i18n.T("CacheQuotaFileDeleted", map[string]any{
 			"File": file.path,
 			"Size": file.size,
 		}))
 	}
 
 	cacheQuotaBytesFreed.Add(float64(freed))
-	log.Println(t("CacheQuotaCleanupComplete", map[string]any{
+	log.Println(i18n.T("CacheQuotaCleanupComplete", map[string]any{
 		"Freed":        freed,
 		"FilesDeleted": filesDeleted,
 	}))
@@ -370,7 +371,7 @@ func (q *CacheQuota) InitializeCacheSize() error {
 	cacheQuotaFiles.Set(float64(fileCount))
 	q.updateMetrics()
 
-	log.Println(t("CacheSizeInitialized", map[string]any{
+	log.Println(i18n.T("CacheSizeInitialized", map[string]any{
 		"Size":  totalSize,
 		"Files": fileCount,
 	}))
