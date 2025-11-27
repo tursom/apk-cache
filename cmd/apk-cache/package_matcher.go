@@ -112,35 +112,41 @@ func detectPackageTypeFast(path string) PackageType {
 
 	// 单次扫描检测所有路径模式
 	// 使用更高效的字节比较
-	for i := 1; i < n; i++ {
+	for i := 1; i < n-7; i++ {
 		if path[i] != '/' {
 			continue
 		}
 
-		// 检查 "/alpine/"
-		if i+8 <= n &&
-			path[i+1] == 'a' && path[i+2] == 'l' && path[i+3] == 'p' &&
-			path[i+4] == 'i' && path[i+5] == 'n' && path[i+6] == 'e' && path[i+7] == '/' {
-			return PackageTypeAPK
-		}
-		// 检查 "/dists/"
-		if i+7 <= n &&
-			path[i+1] == 'd' && path[i+2] == 'i' && path[i+3] == 's' &&
-			path[i+4] == 't' && path[i+5] == 's' && path[i+6] == '/' {
-			return PackageTypeAPT
-		}
-		// 检查 "/pool/"
-		if i+6 <= n &&
-			path[i+1] == 'p' && path[i+2] == 'o' && path[i+3] == 'o' &&
-			path[i+4] == 'l' && path[i+5] == '/' {
-			return PackageTypeAPT
-		}
-		// 检查 "/by-hash/"
-		if i+9 <= n &&
-			path[i+1] == 'b' && path[i+2] == 'y' && path[i+3] == '-' &&
-			path[i+4] == 'h' && path[i+5] == 'a' && path[i+6] == 's' &&
-			path[i+7] == 'h' && path[i+8] == '/' {
-			return PackageTypeAPT
+		switch path[i+1] {
+		case 'a':
+			// 检查 "/alpine/"
+			if i+8 <= n &&
+				path[i+2] == 'l' && path[i+3] == 'p' && path[i+4] == 'i' &&
+				path[i+5] == 'n' && path[i+6] == 'e' && path[i+7] == '/' {
+				return PackageTypeAPK
+			}
+		case 'd':
+			// 检查 "/dists/"
+			if i+7 <= n &&
+				path[i+2] == 'i' && path[i+3] == 's' &&
+				path[i+4] == 't' && path[i+5] == 's' && path[i+6] == '/' {
+				return PackageTypeAPT
+			}
+		case 'p':
+			// 检查 "/pool/"
+			if i+6 <= n &&
+				path[i+2] == 'o' && path[i+3] == 'o' &&
+				path[i+4] == 'l' && path[i+5] == '/' {
+				return PackageTypeAPT
+			}
+		case 'b':
+			// 检查 "/by-hash/"
+			if i+9 <= n &&
+				path[i+2] == 'y' && path[i+3] == '-' &&
+				path[i+4] == 'h' && path[i+5] == 'a' && path[i+6] == 's' &&
+				path[i+7] == 'h' && path[i+8] == '/' {
+				return PackageTypeAPT
+			}
 		}
 	}
 
