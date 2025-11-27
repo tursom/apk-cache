@@ -116,50 +116,17 @@ func handleProxyHTTP(w http.ResponseWriter, r *http.Request) {
 		"Host":   r.Host,
 	}))
 
-	// 检查是否是APK包请求，如果是则使用现有的缓存逻辑
-	if isAPKRequest(r) {
-		proxyHandler(w, r)
-		return
-	}
-
-	// 检查是否是APT协议请求，如果是则使用缓存逻辑
-	if isAPTRequest(r) {
+	switch detectPackageTypeFast(r.URL.Path) {
+	case PackageTypeAPT:
+		// 检查是否是APT协议请求，如果是则使用缓存逻辑
 		handleAPTProxy(w, r)
-		return
+	case PackageTypeAPK:
+		// 检查是否是APK协议请求，如果是则使用现有的缓存逻辑
+		proxyHandler(w, r)
+	default:
+		// 对于非APK/APT请求，直接代理转发
+		proxyForwardHTTP(w, r)
 	}
-
-	// 对于非APK/APT请求，直接代理转发
-	proxyForwardHTTP(w, r)
-}
-
-// isAPKRequest 检查是否是APK包请求
-func isAPKRequest(r *http.Request) bool {
-	// 检查URL路径是否包含常见的APK包扩展名
-	path := r.URL.Path
-	return strings.HasSuffix(path, ".apk") ||
-		strings.HasSuffix(path, ".apk.gz") ||
-		strings.HasSuffix(path, ".apk.tar") ||
-		strings.HasSuffix(path, ".apk.tar.gz") ||
-		strings.HasSuffix(path, "/APKINDEX.tar.gz")
-}
-
-// isAPTRequest 检查是否是APT协议请求
-func isAPTRequest(r *http.Request) bool {
-	// 检查URL路径是否包含常见的APT协议文件扩展名
-	path := r.URL.Path
-	return strings.HasSuffix(path, ".deb") ||
-		strings.HasSuffix(path, "/Packages") ||
-		strings.HasSuffix(path, "/Packages.gz") ||
-		strings.HasSuffix(path, "/Release") ||
-		strings.HasSuffix(path, "/InRelease") ||
-		strings.HasSuffix(path, "/Sources") ||
-		strings.HasSuffix(path, "/Sources.gz") ||
-		// 检查APT diff索引文件（如 Packages.diff/...）
-		strings.Contains(path, ".diff/") ||
-		// 检查APT哈希查询请求（如 /by-hash/SHA256/...）
-		strings.Contains(path, "/by-hash/SHA256/") ||
-		strings.Contains(path, "/by-hash/SHA1/") ||
-		strings.Contains(path, "/by-hash/MD5Sum/")
 }
 
 // proxyForwardHTTP 转发HTTP请求到上游服务器
