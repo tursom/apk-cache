@@ -27,9 +27,18 @@ func init() {
 
 // detectLocale 自动检测系统语言
 func detectLocale(locale string) string {
-	// 如果命令行参数已指定，直接使用
+	// 支持的语言列表
+	supported := map[string]bool{
+		"zh": true,
+		"en": true,
+	}
+
+	// 如果命令行参数已指定，检查是否支持
 	if locale != "" {
-		return locale
+		if supported[locale] {
+			return locale
+		}
+		// 如果不支持，继续检测环境变量
 	}
 
 	// 按优先级检查环境变量
@@ -40,12 +49,6 @@ func detectLocale(locale string) string {
 			lang := strings.Split(val, ".")[0] // 去除编码部分
 			lang = strings.Split(lang, "_")[0] // 去除地区部分
 			lang = strings.ToLower(lang)
-
-			// 支持的语言列表
-			supported := map[string]bool{
-				"zh": true,
-				"en": true,
-			}
 
 			if supported[lang] {
 				return lang
@@ -67,11 +70,17 @@ func initLocale(locale string) string {
 	bundle := i18n.NewBundle(language.English)
 	bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
 
-	// 加载嵌入的翻译文件
-	bundle.MustParseMessageFileBytes(enToml, "en.toml")
-	bundle.MustParseMessageFileBytes(zhToml, "zh.toml")
 	// 自动检测语言
 	detectedLocale := detectLocale(locale)
+
+	// 只加载必要的语言文件
+	switch detectedLocale {
+	case "zh":
+		bundle.MustParseMessageFileBytes(zhToml, "zh.toml")
+	default:
+		// 默认加载英语，包括检测到英语或未知语言的情况
+		bundle.MustParseMessageFileBytes(enToml, "en.toml")
+	}
 
 	localizer = i18n.NewLocalizer(bundle, detectedLocale)
 
