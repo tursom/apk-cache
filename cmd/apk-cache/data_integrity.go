@@ -12,40 +12,112 @@ import (
 	"time"
 
 	"github.com/tursom/apk-cache/utils/i18n"
+	bolt "go.etcd.io/bbolt"
 )
 
 // DataIntegrityManager 数据完整性管理器
 type DataIntegrityManager struct {
 	mu                  sync.RWMutex
-	fileHashes          map[string]string // 文件路径 -> SHA256哈希
+	fileHashes          map[string]string // 文件路径 -> SHA256哈希（数据库的缓存，数据库不可用时作为替代）
 	corruptedFiles      map[string]bool   // 损坏文件列表
 	lastCheckTime       time.Time
 	checkInterval       time.Duration
 	enableAutoRepair    bool
 	enablePeriodicCheck bool
+	db                  *bolt.DB // BoltDB 数据库实例（主存储）
+	dbPath              string   // 数据库文件路径
 }
-
 
 // NewDataIntegrityManager 创建新的数据完整性管理器
 func NewDataIntegrityManager(checkInterval time.Duration, enableAutoRepair bool, enablePeriodicCheck bool) *DataIntegrityManager {
-	return &DataIntegrityManager{
+	dbPath := filepath.Join(*dataPath, "file_hashes.db")
+
+	// 打开 BoltDB 数据库
+	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		log.Println(i18n.T("OpenDatabaseFailed", map[string]any{"Error": err}))
+		// 如果数据库打开失败，回退到内存模式
+		return &DataIntegrityManager{
+			fileHashes:          make(map[string]string),
+			corruptedFiles:      make(map[string]bool),
+			checkInterval:       checkInterval,
+			enableAutoRepair:    enableAutoRepair,
+			enablePeriodicCheck: enablePeriodicCheck,
+			db:                  nil,
+			dbPath:              dbPath,
+		}
+	}
+
+	manager := &DataIntegrityManager{
 		fileHashes:          make(map[string]string),
 		corruptedFiles:      make(map[string]bool),
 		checkInterval:       checkInterval,
 		enableAutoRepair:    enableAutoRepair,
 		enablePeriodicCheck: enablePeriodicCheck,
+		db:                  db,
+		dbPath:              dbPath,
 	}
+
+	// 自动加载持久化的哈希数据
+	if err := manager.LoadHashes(); err != nil {
+		log.Println(i18n.T("LoadFileHashesFailed", map[string]any{"Error": err}))
+	}
+
+	return manager
 }
 
 // RecordFileHash 记录文件的哈希值
 func (d *DataIntegrityManager) RecordFileHash(filePath string, data []byte) error {
 	hash := d.calculateHash(data)
 
+	// 先更新内存缓存
+	d.setFileHash(filePath, hash)
+
+	// 如果数据库可用，保存到数据库
+	if d.db != nil {
+		if err := d.saveHashToDB(filePath, hash); err != nil {
+			log.Println(i18n.T("SaveHashesFailed", map[string]any{"Error": err}))
+		}
+	}
+
+	return nil
+}
+
+// getFileHash 获取文件哈希（线程安全）
+func (d *DataIntegrityManager) getFileHash(filePath string) (string, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	hash, exists := d.fileHashes[filePath]
+	return hash, exists
+}
+
+// setFileHash 设置文件哈希（线程安全）
+func (d *DataIntegrityManager) setFileHash(filePath, hash string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
 	d.fileHashes[filePath] = hash
-	return nil
+}
+
+// markFileAsCorrupted 标记文件为损坏（线程安全）
+func (d *DataIntegrityManager) markFileAsCorrupted(filePath string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.corruptedFiles[filePath] = true
+}
+
+// removeFileHash 移除文件哈希（线程安全）
+func (d *DataIntegrityManager) removeFileHash(filePath string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.fileHashes, filePath)
+	delete(d.corruptedFiles, filePath)
+}
+
+// updateLastCheckTime 更新最后检查时间（线程安全）
+func (d *DataIntegrityManager) updateLastCheckTime() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.lastCheckTime = time.Now()
 }
 
 // VerifyFileIntegrity 验证文件完整性
@@ -59,25 +131,35 @@ func (d *DataIntegrityManager) VerifyFileIntegrity(filePath string) (bool, error
 	// 计算当前哈希
 	currentHash := d.calculateHash(data)
 
-	// 获取记录的哈希
-	d.mu.RLock()
-	recordedHash, exists := d.fileHashes[filePath]
-	d.mu.RUnlock()
+	// 获取记录的哈希（先从内存缓存中查找）
+	recordedHash, exists := d.getFileHash(filePath)
+
+	// 如果内存中没有找到，尝试从数据库查询（如果数据库可用）
+	if !exists && d.db != nil {
+		if dbHash, err := d.getHashFromDB(filePath); err == nil && dbHash != "" {
+			recordedHash = dbHash
+			exists = true
+			// 将数据库中的哈希加载到内存缓存
+			d.setFileHash(filePath, dbHash)
+		}
+	}
 
 	if !exists {
-		// 如果没有记录哈希，记录当前哈希
-		d.mu.Lock()
-		d.fileHashes[filePath] = currentHash
-		d.mu.Unlock()
+		// 如果没有记录哈希，记录当前哈希到内存缓存
+		d.setFileHash(filePath, currentHash)
+		// 如果数据库可用，同时保存到数据库
+		if d.db != nil {
+			if err := d.saveHashToDB(filePath, currentHash); err != nil {
+				log.Println(i18n.T("SaveHashesFailed", map[string]any{"Error": err}))
+			}
+		}
 		return true, nil
 	}
 
 	// 比较哈希值
 	if currentHash != recordedHash {
-		d.mu.Lock()
-		d.corruptedFiles[filePath] = true
+		d.markFileAsCorrupted(filePath)
 		monitoring.RecordDataIntegrityCorrupted()
-		d.mu.Unlock()
 
 		log.Println(i18n.T("FileIntegrityCheckFailed", map[string]any{
 			"File":     filePath,
@@ -99,11 +181,15 @@ func (d *DataIntegrityManager) RepairCorruptedFile(filePath string) error {
 		return errors.New(i18n.T("DeleteCorruptedFileFailed", map[string]any{"Error": err}))
 	}
 
-	// 从哈希记录中移除
-	d.mu.Lock()
-	delete(d.fileHashes, filePath)
-	delete(d.corruptedFiles, filePath)
-	d.mu.Unlock()
+	// 从内存缓存中移除
+	d.removeFileHash(filePath)
+
+	// 如果数据库可用，从数据库中删除
+	if d.db != nil {
+		if err := d.deleteHashFromDB(filePath); err != nil {
+			log.Println(i18n.T("SaveHashesFailed", map[string]any{"Error": err}))
+		}
+	}
 
 	monitoring.RecordDataIntegrityRepaired()
 
@@ -168,9 +254,7 @@ func (d *DataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
 	duration := time.Since(startTime)
 	monitoring.RecordDataIntegrityCheck(duration)
 
-	d.mu.Lock()
-	d.lastCheckTime = time.Now()
-	d.mu.Unlock()
+	d.updateLastCheckTime()
 
 	log.Println(i18n.T("DataIntegrityCheckComplete", map[string]any{
 		"Checked":   checkedCount,
@@ -250,47 +334,6 @@ func (d *DataIntegrityManager) calculateFileHash(filePath string) (string, error
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
-// InitializeExistingFiles 初始化现有文件的哈希记录
-func (d *DataIntegrityManager) InitializeExistingFiles() error {
-	log.Println(i18n.T("InitializingFileHashes", nil))
-
-	var initializedCount int
-
-	err := filepath.Walk(*cachePath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if info.IsDir() || isIndexFile(path) {
-			return nil
-		}
-
-		hash, err := d.calculateFileHash(path)
-		if err != nil {
-			log.Println(i18n.T("CalculateFileHashFailed", map[string]any{
-				"File":  path,
-				"Error": err,
-			}))
-			return nil // 继续处理其他文件
-		}
-
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		d.fileHashes[path] = hash
-
-		initializedCount++
-
-		return nil
-	})
-
-	if err != nil {
-		return err
-	}
-
-	log.Println(i18n.T("FileHashesInitialized", map[string]any{"Count": initializedCount}))
-	return nil
-}
-
 // CleanupOrphanedHashes 清理孤立的哈希记录（文件已不存在但哈希记录还在）
 func (d *DataIntegrityManager) CleanupOrphanedHashes() int {
 	d.mu.Lock()
@@ -303,6 +346,13 @@ func (d *DataIntegrityManager) CleanupOrphanedHashes() int {
 			delete(d.fileHashes, filePath)
 			delete(d.corruptedFiles, filePath)
 			cleanedCount++
+
+			// 如果数据库可用，从数据库中删除
+			if d.db != nil {
+				if err := d.deleteHashFromDB(filePath); err != nil {
+					log.Println(i18n.T("SaveHashesFailed", map[string]any{"Error": err}))
+				}
+			}
 		}
 	}
 
@@ -311,4 +361,96 @@ func (d *DataIntegrityManager) CleanupOrphanedHashes() int {
 	}
 
 	return cleanedCount
+}
+
+// getHashFromDB 从数据库获取单个哈希
+func (d *DataIntegrityManager) getHashFromDB(filePath string) (string, error) {
+	if d.db == nil {
+		return "", nil // 数据库不可用，回退到内存模式
+	}
+
+	var hash string
+	err := d.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("file_hashes"))
+		if bucket == nil {
+			return nil // 桶不存在
+		}
+		data := bucket.Get([]byte(filePath))
+		if data != nil {
+			hash = string(data)
+		}
+		return nil
+	})
+	return hash, err
+}
+
+// saveHashToDB 保存单个哈希到数据库
+func (d *DataIntegrityManager) saveHashToDB(filePath string, hash string) error {
+	if d.db == nil {
+		return nil // 数据库不可用，回退到内存模式
+	}
+
+	return d.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte("file_hashes"))
+		if err != nil {
+			return errors.New(i18n.T("CreateDatabaseBucketFailed", map[string]any{"Error": err}))
+		}
+		return bucket.Put([]byte(filePath), []byte(hash))
+	})
+}
+
+// deleteHashFromDB 从数据库中删除哈希
+func (d *DataIntegrityManager) deleteHashFromDB(filePath string) error {
+	if d.db == nil {
+		return nil // 数据库不可用，回退到内存模式
+	}
+
+	return d.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("file_hashes"))
+		if bucket == nil {
+			return nil // 桶不存在，无需删除
+		}
+		return bucket.Delete([]byte(filePath))
+	})
+}
+
+// LoadHashes 从数据库加载所有文件哈希
+func (d *DataIntegrityManager) LoadHashes() error {
+	if d.db == nil {
+		return nil // 数据库不可用，回退到内存模式
+	}
+
+	return d.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket([]byte("file_hashes"))
+		if bucket == nil {
+			return nil // 桶不存在，没有数据可加载
+		}
+
+		fileHashes := make(map[string]string)
+
+		err := bucket.ForEach(func(k, v []byte) error {
+			fileHashes[string(k)] = string(v)
+			return nil
+		})
+
+		if err != nil {
+			return errors.New(i18n.T("LoadDatabaseFailed", map[string]any{"Error": err}))
+		}
+
+		// 更新管理器中的哈希数据
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		d.fileHashes = fileHashes
+
+		log.Println(i18n.T("FileHashesLoaded", map[string]any{"Count": len(fileHashes)}))
+		return nil
+	})
+}
+
+// Close 关闭数据库连接
+func (d *DataIntegrityManager) Close() error {
+	if d.db != nil {
+		return d.db.Close()
+	}
+	return nil
 }

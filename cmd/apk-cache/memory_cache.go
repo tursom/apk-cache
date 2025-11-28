@@ -32,7 +32,6 @@ type CacheItem struct {
 	StatusCode  int
 }
 
-
 // NewMemoryCache 创建新的内存缓存
 func NewMemoryCache(maxSize int64, maxItems int, ttl time.Duration) *MemoryCache {
 	cache := &MemoryCache{
@@ -56,10 +55,7 @@ func NewMemoryCache(maxSize int64, maxItems int, ttl time.Duration) *MemoryCache
 
 // Get 从内存缓存中获取数据
 func (m *MemoryCache) Get(key string) (*CacheItem, bool) {
-	m.mu.RLock()
-	item, exists := m.cache[key]
-	m.mu.RUnlock()
-
+	item, exists := m.getItem(key)
 	if !exists {
 		monitoring.RecordMemoryCacheMiss()
 		return nil, false
@@ -67,24 +63,41 @@ func (m *MemoryCache) Get(key string) (*CacheItem, bool) {
 
 	// 检查是否过期
 	if m.ttl > 0 && time.Since(item.CreateTime) > m.ttl {
-		m.mu.Lock()
-		delete(m.cache, key)
-		m.currentSize -= item.Size
-		m.mu.Unlock()
-
+		m.removeItem(key, item.Size)
 		monitoring.RecordMemoryCacheMiss()
 		monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 		return nil, false
 	}
 
 	// 更新访问时间和计数
-	m.mu.Lock()
-	item.AccessTime = time.Now()
-	item.AccessCount++
-	m.mu.Unlock()
+	m.updateItemAccess(item)
 
 	monitoring.RecordMemoryCacheHit()
 	return item, true
+}
+
+// getItem 获取缓存项（线程安全）
+func (m *MemoryCache) getItem(key string) (*CacheItem, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	item, exists := m.cache[key]
+	return item, exists
+}
+
+// removeItem 移除缓存项（线程安全）
+func (m *MemoryCache) removeItem(key string, size int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.cache, key)
+	m.currentSize -= size
+}
+
+// updateItemAccess 更新缓存项访问信息（线程安全）
+func (m *MemoryCache) updateItemAccess(item *CacheItem) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	item.AccessTime = time.Now()
+	item.AccessCount++
 }
 
 // Set 将数据存入内存缓存

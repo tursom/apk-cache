@@ -503,3 +503,53 @@ other = "Client cache header saved: {{.Path}} ({{.Header}})"
 
 [ClientCacheOutdated]
 other = "Client cache outdated: {{.Path}} (current: {{.Current}}, last valid: {{.LastValid}})"
+
+# Data persistence related translations
+[CreateDataDirFailed]
+other = "Failed to create data directory: {{.Error}}"
+
+[CreatePersistenceDirFailed]
+other = "Failed to create persistence directory: {{.Error}}"
+
+[SerializeHashesFailed]
+other = "Failed to serialize hash data: {{.Error}}"
+
+[WritePersistenceFileFailed]
+other = "Failed to write persistence file: {{.Error}}"
+
+[ReadPersistenceFileFailed]
+other = "Failed to read persistence file: {{.Error}}"
+
+[DeserializeHashesFailed]
+other = "Failed to deserialize hash data: {{.Error}}"
+
+[FileHashesLoaded]
+other = "File hashes loaded: {{.Count}} files"
+
+[LoadFileHashesFailed]
+other = "Failed to load file hashes: {{.Error}}"
+
+[SaveHashesFailed]
+other = "Failed to save file hashes: {{.Error}}"
+
+[OpenDatabaseFailed]
+other = "Failed to open database: {{.Error}}"
+
+[CreateDatabaseBucketFailed]
+other = "Failed to create database bucket: {{.Error}}"
+
+[LoadDatabaseFailed]
+other = "Failed to load database: {{.Error}}"
+
+# Graceful shutdown related translations
+[ShuttingDownServer]
+other = "Shutting down server..."
+
+[ServerShutdownFailed]
+other = "Failed to shutdown server: {{.Error}}"
+
+[CloseDataIntegrityManagerFailed]
+other = "Failed to close data integrity manager: {{.Error}}"
+
+[ServerStopped]
+other = "Server stopped"

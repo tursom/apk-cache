@@ -15,6 +15,7 @@ import (
 var (
 	listenAddr         = flag.String("addr", ":3142", "Listen address")
 	cachePath          = flag.String("cache", "./cache", "Cache directory path")
+	dataPath           = flag.String("data", "./data", "Data directory path for internal program data")
 	upstreamURL        = flag.String("upstream", "https://dl-cdn.alpinelinux.org", "Upstream server URL")
 	proxyURL           = flag.String("proxy", "", "Proxy address (e.g. socks5://127.0.0.1:1080 or http://127.0.0.1:8080)")
 	indexCacheDuration = flag.Duration("index-cache", 24*time.Hour, "APKINDEX.tar.gz cache duration")
@@ -57,8 +58,7 @@ var (
 	// 数据完整性校验相关参数
 	dataIntegrityCheckInterval           = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
 	dataIntegrityAutoRepair              = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
-	dataIntegrityPeriodicCheck           = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
-	dataIntegrityInitializeExistingFiles = flag.Bool("data-integrity-initialize-existing-files", false, "Initialize existing files hash records on startup")
+	dataIntegrityPeriodicCheck = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
 )
 
 // Config 配置文件结构
@@ -85,6 +85,7 @@ type UpstreamConfig struct {
 
 type CacheConfig struct {
 	Dir             string `toml:"dir"`
+	DataDir         string `toml:"data_dir"` // 新增：数据目录路径
 	IndexDuration   string `toml:"index_duration"`
 	PkgDuration     string `toml:"pkg_duration"`
 	CleanupInterval string `toml:"cleanup_interval"`
@@ -130,8 +131,7 @@ type RateLimitConfig struct {
 type DataIntegrityConfig struct {
 	CheckInterval           string `toml:"check_interval"`
 	AutoRepair              bool   `toml:"auto_repair"`
-	PeriodicCheck           bool   `toml:"periodic_check"`
-	InitializeExistingFiles bool   `toml:"initialize_existing_files"`
+	PeriodicCheck bool `toml:"periodic_check"`
 }
 
 // LoadConfig 加载配置文件
@@ -184,6 +184,9 @@ func ApplyConfig(config *Config) error {
 	// Cache 配置
 	if config.Cache.Dir != "" && !isFlagSet("cache") {
 		*cachePath = config.Cache.Dir
+	}
+	if config.Cache.DataDir != "" && !isFlagSet("data") {
+		*dataPath = config.Cache.DataDir
 	}
 	if config.Cache.IndexDuration != "" && !isFlagSet("index-cache") {
 		duration, err := time.ParseDuration(config.Cache.IndexDuration)
@@ -307,9 +310,6 @@ func ApplyConfig(config *Config) error {
 	}
 	if !isFlagSet("data-integrity-periodic-check") {
 		*dataIntegrityPeriodicCheck = config.DataIntegrity.PeriodicCheck
-	}
-	if !isFlagSet("data-integrity-initialize-existing-files") {
-		*dataIntegrityInitializeExistingFiles = config.DataIntegrity.InitializeExistingFiles
 	}
 
 	return nil

@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	_ "embed"
 	"flag"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
@@ -134,6 +137,11 @@ func main() {
 		log.Fatalln(i18n.T("CreateCacheDirFailed", map[string]any{"Error": err}))
 	}
 
+	// 创建数据目录
+	if err := os.MkdirAll(*dataPath, 0755); err != nil {
+		log.Fatalln(i18n.T("CreateDataDirFailed", map[string]any{"Error": err}))
+	}
+
 	// 启动自动清理
 	if *cleanupInterval > 0 && *pkgCacheDuration != 0 {
 		go startAutoCleanup()
@@ -153,26 +161,11 @@ func main() {
 			*dataIntegrityPeriodicCheck,
 		)
 
-		// 初始化现有文件的哈希记录（仅在配置启用时）
-		if *dataIntegrityInitializeExistingFiles {
-			if err := dataIntegrityManager.InitializeExistingFiles(); err != nil {
-				log.Println(i18n.T("DataIntegrityInitFailed", map[string]any{"Error": err}))
-			} else {
-				log.Println(i18n.T("DataIntegrityEnabled", map[string]any{
-					"Interval":                *dataIntegrityCheckInterval,
-					"AutoRepair":              *dataIntegrityAutoRepair,
-					"PeriodicCheck":           *dataIntegrityPeriodicCheck,
-					"InitializeExistingFiles": *dataIntegrityInitializeExistingFiles,
-				}))
-			}
-		} else {
-			log.Println(i18n.T("DataIntegrityEnabled", map[string]any{
-				"Interval":                *dataIntegrityCheckInterval,
-				"AutoRepair":              *dataIntegrityAutoRepair,
-				"PeriodicCheck":           *dataIntegrityPeriodicCheck,
-				"InitializeExistingFiles": *dataIntegrityInitializeExistingFiles,
-			}))
-		}
+		log.Println(i18n.T("DataIntegrityEnabled", map[string]any{
+			"Interval":      *dataIntegrityCheckInterval,
+			"AutoRepair":    *dataIntegrityAutoRepair,
+			"PeriodicCheck": *dataIntegrityPeriodicCheck,
+		}))
 
 		// 启动定期检查
 		dataIntegrityManager.StartPeriodicCheck()
@@ -195,9 +188,42 @@ func main() {
 		log.Println(i18n.T("ProxyServer", map[string]any{"Proxy": *proxyURL}))
 	}
 
-	if err := http.ListenAndServe(*listenAddr, newWebHandler()); err != nil {
-		log.Fatalln(i18n.T("ServerStartFailed", map[string]any{"Error": err}))
+	log.Println(i18n.T("ServerStarted", map[string]any{"Addr": *listenAddr}))
+
+	// 设置优雅关闭
+	server := &http.Server{
+		Addr:    *listenAddr,
+		Handler: newWebHandler(),
 	}
 
-	log.Println(i18n.T("ServerStarted", map[string]any{"Addr": *listenAddr}))
+	// 启动服务器
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalln(i18n.T("ServerStartFailed", map[string]any{"Error": err}))
+		}
+	}()
+
+	// 等待中断信号
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+
+	log.Println(i18n.T("ShuttingDownServer", nil))
+
+	// 优雅关闭
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(ctx); err != nil {
+		log.Println(i18n.T("ServerShutdownFailed", map[string]any{"Error": err}))
+	}
+
+	// 关闭数据完整性管理器
+	if dataIntegrityManager != nil {
+		if err := dataIntegrityManager.Close(); err != nil {
+			log.Println(i18n.T("CloseDataIntegrityManagerFailed", map[string]any{"Error": err}))
+		}
+	}
+
+	log.Println(i18n.T("ServerStopped", nil))
 }

@@ -503,3 +503,53 @@ other = "客户端缓存头已保存: {{.Path}} ({{.Header}})"
 
 [ClientCacheOutdated]
 other = "客户端缓存已过期: {{.Path}} (当前: {{.Current}}, 最后有效: {{.LastValid}})"
+
+# 数据持久化相关翻译
+[CreateDataDirFailed]
+other = "创建数据目录失败: {{.Error}}"
+
+[CreatePersistenceDirFailed]
+other = "创建持久化目录失败: {{.Error}}"
+
+[SerializeHashesFailed]
+other = "序列化哈希数据失败: {{.Error}}"
+
+[WritePersistenceFileFailed]
+other = "写入持久化文件失败: {{.Error}}"
+
+[ReadPersistenceFileFailed]
+other = "读取持久化文件失败: {{.Error}}"
+
+[DeserializeHashesFailed]
+other = "反序列化哈希数据失败: {{.Error}}"
+
+[FileHashesLoaded]
+other = "文件哈希已加载: {{.Count}} 个文件"
+
+[LoadFileHashesFailed]
+other = "加载文件哈希失败: {{.Error}}"
+
+[SaveHashesFailed]
+other = "保存文件哈希失败: {{.Error}}"
+
+[OpenDatabaseFailed]
+other = "打开数据库失败: {{.Error}}"
+
+[CreateDatabaseBucketFailed]
+other = "创建数据库桶失败: {{.Error}}"
+
+[LoadDatabaseFailed]
+other = "加载数据库失败: {{.Error}}"
+
+# 优雅关闭相关翻译
+[ShuttingDownServer]
+other = "正在关闭服务器..."
+
+[ServerShutdownFailed]
+other = "服务器关闭失败: {{.Error}}"
+
+[CloseDataIntegrityManagerFailed]
+other = "关闭数据完整性管理器失败: {{.Error}}"
+
+[ServerStopped]
+other = "服务器已停止"

@@ -11,6 +11,8 @@ import (
 
 func init() {
 	i18n.Init("zh")
+	// 初始化监控用于测试
+	monitoring = NewMonitoring()
 }
 
 func TestMemoryCacheBasicOperations(t *testing.T) {

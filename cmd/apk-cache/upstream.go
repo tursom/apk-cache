@@ -62,25 +62,32 @@ func (u *UpstreamServer) SetMaxRetries(maxRetries int) {
 
 // IsHealthy 检查上游服务器是否健康（使用缓存）
 func (u *UpstreamServer) IsHealthy() bool {
-	u.mu.RLock()
-
 	// 如果健康检查被禁用（TTL <= 0），直接返回当前状态
 	if u.healthCacheTTL <= 0 {
-		healthy := u.isHealthy
-		u.mu.RUnlock()
-		return healthy
+		return u.getHealthyStatus()
 	}
 
 	// 如果缓存未过期，直接返回缓存结果
-	if time.Since(u.lastHealthCheck) < u.healthCacheTTL {
-		healthy := u.isHealthy
-		u.mu.RUnlock()
-		return healthy
+	if u.isCacheValid() {
+		return u.getHealthyStatus()
 	}
-	u.mu.RUnlock()
 
 	// 缓存过期，执行健康检查
 	return u.checkHealth()
+}
+
+// getHealthyStatus 获取健康状态（线程安全）
+func (u *UpstreamServer) getHealthyStatus() bool {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.isHealthy
+}
+
+// isCacheValid 检查缓存是否有效（线程安全）
+func (u *UpstreamServer) isCacheValid() bool {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return time.Since(u.lastHealthCheck) < u.healthCacheTTL
 }
 
 // GetHealthStatus 获取详细的健康状态信息
