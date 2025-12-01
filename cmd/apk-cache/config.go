@@ -56,10 +56,13 @@ var (
 	enableSelfHealing   = flag.Bool("enable-self-healing", true, "Enable self-healing mechanisms")
 
 	// 数据完整性校验相关参数
-	dataIntegrityCheckInterval           = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
-	dataIntegrityAutoRepair              = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
+	dataIntegrityCheckInterval = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
+	dataIntegrityAutoRepair    = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
 	dataIntegrityPeriodicCheck = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
 )
+
+// 预处理后的限流豁免路径列表
+var rateLimitExemptPathsList []string
 
 // Config 配置文件结构
 type Config struct {
@@ -129,9 +132,9 @@ type RateLimitConfig struct {
 
 // DataIntegrityConfig 数据完整性校验配置
 type DataIntegrityConfig struct {
-	CheckInterval           string `toml:"check_interval"`
-	AutoRepair              bool   `toml:"auto_repair"`
-	PeriodicCheck bool `toml:"periodic_check"`
+	CheckInterval string `toml:"check_interval"`
+	AutoRepair    bool   `toml:"auto_repair"`
+	PeriodicCheck bool   `toml:"periodic_check"`
 }
 
 // LoadConfig 加载配置文件
@@ -297,6 +300,9 @@ func ApplyConfig(config *Config) error {
 		*rateLimitExemptPaths = config.RateLimit.ExemptPaths
 	}
 
+	// 预处理限流豁免路径
+	preprocessRateLimitExemptPaths()
+
 	// DataIntegrity 配置
 	if config.DataIntegrity.CheckInterval != "" && !isFlagSet("data-integrity-check-interval") {
 		duration, err := time.ParseDuration(config.DataIntegrity.CheckInterval)
@@ -395,4 +401,23 @@ func validateConfig(config *Config) error {
 	}
 
 	return nil
+}
+
+// preprocessRateLimitExemptPaths 预处理限流豁免路径
+func preprocessRateLimitExemptPaths() {
+	if *rateLimitExemptPaths == "" {
+		rateLimitExemptPathsList = []string{}
+		return
+	}
+
+	// 分割并清理路径
+	paths := strings.Split(*rateLimitExemptPaths, ",")
+	rateLimitExemptPathsList = make([]string, 0, len(paths))
+
+	for _, path := range paths {
+		trimmedPath := strings.TrimSpace(path)
+		if trimmedPath != "" {
+			rateLimitExemptPathsList = append(rateLimitExemptPathsList, trimmedPath)
+		}
+	}
 }

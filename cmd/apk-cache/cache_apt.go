@@ -14,8 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
+
+var supportedAlgorithms = utils.NewSetFromSlice([]string{"SHA256", "SHA1", "MD5SUM", "MD5"})
 
 // handleAPTProxy 处理APT协议代理请求
 func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +180,11 @@ func getAPTCacheFilePath(r *http.Request) string {
 
 // sanitizeHostForPath 清理host字符串，使其适合作为文件路径
 func sanitizeHostForPath(host string) string {
+	return sanitizeHostForPathOptimized(host)
+}
+
+// sanitizeHostForPathOriginal 原始实现版本
+func sanitizeHostForPathOriginal(host string) string {
 	// 替换不安全的字符
 	host = strings.ReplaceAll(host, ":", "_")
 	host = strings.ReplaceAll(host, "/", "_")
@@ -195,6 +203,38 @@ func sanitizeHostForPath(host string) string {
 	}
 
 	return host
+}
+
+// sanitizeHostForPathOptimized 优化实现版本
+func sanitizeHostForPathOptimized(host string) string {
+	// 如果host为空，使用默认值
+	if host == "" {
+		return "default"
+	}
+
+	// 使用strings.Builder进行高效字符串构建
+	var builder strings.Builder
+	builder.Grow(len(host)) // 预分配容量，避免多次分配
+
+	// 遍历字符串，替换不安全字符
+	for i := 0; i < len(host); i++ {
+		switch host[i] {
+		case ':', '/', '\\', '*', '?', '"', '<', '>', '|':
+			builder.WriteByte('_')
+		case '.':
+			// 检查是否是 ".." 序列
+			if i+1 < len(host) && host[i+1] == '.' {
+				builder.WriteByte('_')
+				i++ // 跳过下一个点
+			} else {
+				builder.WriteByte('.')
+			}
+		default:
+			builder.WriteByte(host[i])
+		}
+	}
+
+	return builder.String()
 }
 
 // handleAPTClientConditionalRequest 处理APT协议客户端的条件请求
@@ -299,44 +339,57 @@ func handleFileCacheConditionalRequest(w http.ResponseWriter, r *http.Request, c
 
 // isHashRequest 检查是否是 hash 请求
 func isHashRequest(path string) bool {
-	// 检查路径是否包含常见的 hash 请求模式
-	return strings.Contains(path, "/by-hash/SHA256/") ||
-		strings.Contains(path, "/by-hash/SHA1/") ||
-		strings.Contains(path, "/by-hash/MD5Sum/") ||
-		strings.Contains(path, "/by-hash/MD5/")
+	if len(path) < 45 {
+		return false
+	}
+
+	// 提前测试高频的 /by-hash/SHA256/3c2d4503889027ca51df58e16ec12798d6b438290662e006efab80806ddcb18c
+	if len(path) >= 80 && path[len(path)-80:len(path)-64] == "/by-hash/SHA256/" {
+		return true
+	}
+
+	// /by-hash/SHA1/
+	if len(path) >= 54 && path[len(path)-54:len(path)-40] == "/by-hash/SHA1/" {
+		return true
+	}
+
+	// /by-hash/MD5Sum/
+	if len(path) >= 48 && path[len(path)-48:len(path)-32] == "/by-hash/MD5Sum/" {
+		return true
+	}
+
+	// /by-hash/MD5/
+	if len(path) >= 45 && path[len(path)-45:len(path)-32] == "/by-hash/MD5/" {
+		return true
+	}
+
+	return false
 }
 
 // parseHashFromURL 从 URL 中解析哈希算法和哈希值
 func parseHashFromURL(path string) (string, string, error) {
 	// 解析 URL 路径，提取哈希算法和哈希值
-	// 格式: /by-hash/ALGORITHM/HASH_VALUE
-	parts := strings.Split(path, "/")
+	// 格式: /xxx/by-hash/ALGORITHM/HASH_VALUE
 
-	// 查找 "by-hash" 的位置
-	byHashIndex := -1
-	for i, part := range parts {
-		if part == "by-hash" {
-			byHashIndex = i
-			break
-		}
+	// 提前测试高频的 /by-hash/SHA256/3c2d4503889027ca51df58e16ec12798d6b438290662e006efab80806ddcb18c
+	if len(path) >= 80 && path[len(path)-80:len(path)-64] == "/by-hash/SHA256/" {
+		return "SHA256", path[len(path)-64:], nil
 	}
 
-	if byHashIndex == -1 || byHashIndex+2 >= len(parts) {
-		return "", "", errors.New(i18n.T("InvalidHashURLFormat", nil))
-	}
+	i := strings.LastIndexByte(path, '/')
+	hashValue := path[i+1:]
+	path = path[:i]
 
-	algorithm := parts[byHashIndex+1]
-	hashValue := parts[byHashIndex+2]
+	i = strings.LastIndexByte(path, '/')
+	algorithm := path[i+1:]
+	path = path[:i]
+
+	if path[len(path)-8:] != "by-hash" {
+		return "", "", errors.New(i18n.T("InvalidHashURLFormat", map[string]any{"Path": path}))
+	}
 
 	// 验证算法是否支持
-	supportedAlgorithms := map[string]bool{
-		"SHA256": true,
-		"SHA1":   true,
-		"MD5Sum": true,
-		"MD5":    true,
-	}
-
-	if !supportedAlgorithms[algorithm] {
+	if supportedAlgorithms.Contains(algorithm) {
 		return "", "", errors.New(i18n.T("UnsupportedHashAlgorithm", map[string]any{"Algorithm": algorithm}))
 	}
 

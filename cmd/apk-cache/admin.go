@@ -94,7 +94,7 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 	// 添加健康检查信息
 	healthyCount := upstreamManager.GetHealthyCount()
 	totalCount := upstreamManager.GetServerCount()
-	
+
 	// 计算整体健康状态
 	overallHealthy := healthyCount > 0
 	stats["overall_health"] = overallHealthy
@@ -115,14 +115,15 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 
 	// 添加上游服务器健康状态
 	upstreamHealth := make(map[string]any)
-	servers := upstreamManager.GetAllServers()
-	for i, server := range servers {
+	i := 0
+	for server := range upstreamManager.GetAllServers() {
 		upstreamHealth[fmt.Sprintf("upstream_%d", i)] = map[string]any{
 			"url":    server.GetURL(),
 			"proxy":  server.GetProxy(),
 			"name":   server.GetName(),
 			"health": server.IsHealthy(),
 		}
+		i++
 	}
 	stats["upstream_health"] = upstreamHealth
 
@@ -205,13 +206,9 @@ func getDirSize(path string) (int64, error) {
 
 // getUpstreamServersInfo 获取上游服务器结构化信息
 func getUpstreamServersInfo() []map[string]any {
-	servers := upstreamManager.GetAllServers()
-	if len(servers) == 0 {
-		return []map[string]any{}
-	}
-
 	var upstreamInfo []map[string]any
-	for i, server := range servers {
+	i := 0
+	for server := range upstreamManager.GetAllServers() {
 		name := server.GetName()
 		if name == "" {
 			name = fmt.Sprintf("Server %d", i+1)
@@ -225,6 +222,8 @@ func getUpstreamServersInfo() []map[string]any {
 			"index":   i,
 		}
 		upstreamInfo = append(upstreamInfo, serverInfo)
+
+		i++
 	}
 
 	return upstreamInfo

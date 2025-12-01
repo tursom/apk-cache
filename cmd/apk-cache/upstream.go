@@ -3,12 +3,15 @@ package main
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"log"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tursom/apk-cache/utils/i18n"
+	"golang.org/x/sync/singleflight"
 )
 
 // UpstreamServer 上游服务器配置，集成健康检查功能
@@ -18,20 +21,20 @@ type UpstreamServer struct {
 	Name  string
 
 	// 健康检查相关字段
-	mu              sync.RWMutex
-	lastHealthCheck time.Time
-	isHealthy       bool
-	healthCacheTTL  time.Duration
-	lastError       string
-	retryCount      int
-	maxRetries      int
+	mu               sync.RWMutex
+	lastHealthCheck  time.Time
+	isHealthy        bool
+	healthCacheTTL   time.Duration
+	lastError        string
+	retryCount       int
+	maxRetries       int
+	healthCheckGroup singleflight.Group // 用于合并并发健康检查
 }
 
 // UpstreamManager 上游服务器管理器
 type UpstreamManager struct {
-	servers []*UpstreamServer
-	mu      sync.RWMutex
-	current int
+	servers atomic.Pointer[[]*UpstreamServer] // Copy On Write 切片
+	current int32                             // 使用原子操作保证并发安全
 }
 
 // NewUpstreamServer 创建新的上游服务器实例
@@ -113,9 +116,30 @@ func (u *UpstreamServer) ForceHealthCheck() bool {
 	return u.checkHealth()
 }
 
-// checkHealth 执行实际的健康检查
+// checkHealth 执行实际的健康检查（使用 singleflight 合并并发请求）
 func (u *UpstreamServer) checkHealth() bool {
-	client := createHTTPClientForUpstream(u.Proxy)
+	// 使用 singleflight 确保对同一服务器的并发健康检查只执行一次
+	key := u.URL + "|" + u.Proxy // 唯一标识符
+	result, _, _ := u.healthCheckGroup.Do(key, func() (interface{}, error) {
+		return u.doHealthCheck(), nil
+	})
+	return result.(bool)
+}
+
+// doHealthCheck 执行实际的健康检查逻辑（无并发合并）
+func (u *UpstreamServer) doHealthCheck() bool {
+	// 使用健康检查专用超时
+	timeout := *healthCheckTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second // 默认超时
+	}
+	client := &http.Client{
+		Timeout:   timeout,
+		Transport: createHTTPClientForUpstream(u.Proxy).Transport,
+	}
+	if client.Transport == nil {
+		client.Transport = http.DefaultTransport
+	}
 
 	// 尝试多个可能的健康检查路径
 	testPaths := []string{
@@ -212,64 +236,92 @@ func (u *UpstreamServer) ResetHealth() {
 
 // NewUpstreamManager 创建上游服务器管理器
 func NewUpstreamManager() *UpstreamManager {
-	return &UpstreamManager{
-		servers: make([]*UpstreamServer, 0),
+	m := &UpstreamManager{
 		current: 0,
 	}
+	// 初始化空切片指针
+	empty := make([]*UpstreamServer, 0)
+	m.servers.Store(&empty)
+	return m
 }
 
 // AddServer 添加上游服务器
 func (m *UpstreamManager) AddServer(server *UpstreamServer) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.servers = append(m.servers, server)
+	for {
+		oldPtr := m.servers.Load()
+		var newServers []*UpstreamServer
+		if oldPtr == nil {
+			newServers = []*UpstreamServer{server}
+		} else {
+			newServers = make([]*UpstreamServer, len(*oldPtr)+1)
+			copy(newServers, *oldPtr)
+			newServers[len(*oldPtr)] = server
+		}
+		if m.servers.CompareAndSwap(oldPtr, &newServers) {
+			break
+		}
+		// CAS 失败，重试
+	}
 }
 
 // GetHealthyServer 获取健康的上游服务器（轮询）
 func (m *UpstreamManager) GetHealthyServer() *UpstreamServer {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if len(m.servers) == 0 {
+	servers := m.getServers()
+	if len(servers) == 0 {
 		return nil
 	}
 
-	// 尝试从当前位置开始查找健康服务器
-	start := m.current
-	for i := 0; i < len(m.servers); i++ {
-		index := (start + i) % len(m.servers)
-		server := m.servers[index]
+	// 原子加载当前索引
+	start := int(atomic.LoadInt32(&m.current))
+	for i := range servers {
+		index := (start + i) % len(servers)
+		server := servers[index]
 		if server.IsHealthy() {
-			m.current = (index + 1) % len(m.servers)
+			// 原子存储下一个索引
+			next := (index + 1) % len(servers)
+			atomic.StoreInt32(&m.current, int32(next))
 			return server
 		}
 	}
 
 	// 如果没有健康服务器，返回第一个（降级使用）
-	return m.servers[0]
+	return servers[0]
 }
 
 // GetAllServers 获取所有服务器
-func (m *UpstreamManager) GetAllServers() []*UpstreamServer {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.servers
+func (m *UpstreamManager) GetAllServers() iter.Seq[*UpstreamServer] {
+	servers := m.getServers()
+	if len(servers) == 0 {
+		return func(yield func(*UpstreamServer) bool) {}
+	}
+
+	return func(yield func(*UpstreamServer) bool) {
+		for _, s := range servers {
+			if !yield(s) {
+				return
+			}
+		}
+	}
 }
 
 // GetServerCount 获取服务器数量
 func (m *UpstreamManager) GetServerCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.servers)
+	ptr := m.servers.Load()
+	if ptr == nil {
+		return 0
+	}
+	return len(*ptr)
 }
 
 // GetHealthyCount 获取健康服务器数量
 func (m *UpstreamManager) GetHealthyCount() int {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
+	ptr := m.servers.Load()
+	if ptr == nil {
+		return 0
+	}
+	servers := *ptr
 	count := 0
-	for _, server := range m.servers {
+	for _, server := range servers {
 		if server.IsHealthy() {
 			count++
 		}
@@ -277,29 +329,28 @@ func (m *UpstreamManager) GetHealthyCount() int {
 	return count
 }
 
+// getServers 返回服务器切片的引用（线程安全，基于 COW 无需拷贝）
+func (m *UpstreamManager) getServers() []*UpstreamServer {
+	ptr := m.servers.Load()
+	if ptr == nil {
+		return nil
+	}
+	return *ptr
+}
+
 // ForceHealthCheckAll 强制检查所有服务器的健康状态
 func (m *UpstreamManager) ForceHealthCheckAll() {
-	m.mu.RLock()
-	servers := make([]*UpstreamServer, len(m.servers))
-	copy(servers, m.servers)
-	m.mu.RUnlock()
-
-	for _, server := range servers {
+	for _, server := range m.getServers() {
 		server.ForceHealthCheck()
 	}
 }
 
 // FetchFromUpstream 从上游服务器获取数据，支持故障转移
 func (m *UpstreamManager) FetchFromUpstream(urlPath string) (*http.Response, error) {
-	m.mu.RLock()
-	servers := make([]*UpstreamServer, len(m.servers))
-	copy(servers, m.servers)
-	m.mu.RUnlock()
-
 	var lastErr error
 
 	// 尝试所有上游服务器，直到成功或全部失败
-	for i, server := range servers {
+	for i, server := range m.getServers() {
 		client := createHTTPClientForUpstream(server.Proxy)
 		url := server.URL + urlPath
 

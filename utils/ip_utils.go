@@ -22,8 +22,7 @@ func NewIPMatcher(exemptIPs, trustedProxyIPs string) (*IPMatcher, error) {
 
 	// 解析不需要验证的 IP 网段
 	if exemptIPs != "" {
-		cidrs := strings.Split(exemptIPs, ",")
-		for _, cidr := range cidrs {
+		for cidr := range strings.SplitSeq(exemptIPs, ",") {
 			cidr = strings.TrimSpace(cidr)
 			if cidr == "" {
 				continue
@@ -38,8 +37,7 @@ func NewIPMatcher(exemptIPs, trustedProxyIPs string) (*IPMatcher, error) {
 
 	// 解析信任的反向代理 IP
 	if trustedProxyIPs != "" {
-		ips := strings.Split(trustedProxyIPs, ",")
-		for _, ipStr := range ips {
+		for ipStr := range strings.SplitSeq(trustedProxyIPs, ",") {
 			ipStr = strings.TrimSpace(ipStr)
 			if ipStr == "" {
 				continue
@@ -119,26 +117,31 @@ func (m *IPMatcher) GetRealClientIP(r *http.Request) string {
 	forwardedFor := r.Header.Get("X-Forwarded-For")
 	if forwardedFor != "" {
 		// X-Forwarded-For 格式：client, proxy1, proxy2
-		ips := strings.Split(forwardedFor, ",")
-		if len(ips) > 0 {
-			// 取第一个 IP（客户端 IP）
-			clientIP := strings.TrimSpace(ips[0])
-			// 验证整个代理链是否可信
-			remoteIP := getRemoteIP(r)
-			if m.IsTrustedProxy(remoteIP) {
-				// 检查所有中间代理是否可信
-				allProxiesTrusted := true
-				for i := 1; i < len(ips); i++ {
-					proxyIP := strings.TrimSpace(ips[i])
-					if !m.IsTrustedProxy(proxyIP) {
-						allProxiesTrusted = false
-						break
-					}
+		state := 0
+		clientIP := ""
+	FORWARDED_FOR_LOOP:
+		for ip := range strings.SplitSeq(forwardedFor, ",") {
+			switch state {
+			case 0:
+				// 取第一个 IP（客户端 IP）
+				clientIP = strings.TrimSpace(ip)
+				// 验证整个代理链是否可信
+				remoteIP := getRemoteIP(r)
+				if !m.IsTrustedProxy(remoteIP) {
+					break FORWARDED_FOR_LOOP
 				}
-				if allProxiesTrusted {
-					return clientIP
+
+				state = 1
+			case 1:
+				// 检查所有中间代理是否可信
+				if !m.IsTrustedProxy(ip) {
+					state = 2
+					break FORWARDED_FOR_LOOP
 				}
 			}
+		}
+		if state == 1 {
+			return clientIP
 		}
 	}
 

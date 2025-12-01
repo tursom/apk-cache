@@ -124,6 +124,8 @@ func main() {
 	// 初始化请求限流器
 	if *rateLimitEnabled {
 		rateLimiter = utils.NewRateLimiter(*rateLimitRate, *rateLimitBurst)
+		// 预处理限流豁免路径
+		preprocessRateLimitExemptPaths()
 		log.Println(i18n.T("RateLimitEnabled", map[string]any{
 			"Rate":  *rateLimitRate,
 			"Burst": *rateLimitBurst,

@@ -149,13 +149,12 @@ func proxyAuth(next http.HandlerFunc, w http.ResponseWriter, r *http.Request) {
 
 // rateLimitMiddleware 限流中间件
 func rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// 如果限流器未启用，直接调用下一个处理器
-		if rateLimiter == nil || !*rateLimitEnabled {
-			next(w, r)
-			return
-		}
+	// 如果限流器未启用，直接调用下一个处理器
+	if rateLimiter == nil || !*rateLimitEnabled {
+		return next
+	}
 
+	return func(w http.ResponseWriter, r *http.Request) {
 		// 检查路径是否在豁免列表中
 		if isExemptPath(r.URL.Path) {
 			next(w, r)
@@ -178,14 +177,8 @@ func rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 // isExemptPath 检查路径是否在豁免列表中
 func isExemptPath(path string) bool {
-	if *rateLimitExemptPaths == "" {
-		return false
-	}
-
-	exemptPaths := strings.Split(*rateLimitExemptPaths, ",")
-	for _, exemptPath := range exemptPaths {
-		exemptPath = strings.TrimSpace(exemptPath)
-		if exemptPath != "" && strings.HasPrefix(path, exemptPath) {
+	for _, exemptPath := range rateLimitExemptPathsList {
+		if strings.HasPrefix(path, exemptPath) {
 			return true
 		}
 	}
@@ -195,13 +188,12 @@ func isExemptPath(path string) bool {
 
 // rateLimitAdminMiddleware 管理员接口限流中间件（更宽松的限制）
 func rateLimitAdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// 如果限流器未启用，直接调用下一个处理器
-		if rateLimiter == nil || !*rateLimitEnabled {
-			next(w, r)
-			return
-		}
+	// 如果限流器未启用，直接调用下一个处理器
+	if rateLimiter == nil || !*rateLimitEnabled {
+		return next
+	}
 
+	return func(w http.ResponseWriter, r *http.Request) {
 		// 管理员接口使用更宽松的限制
 		if !rateLimiter.Allow() {
 			w.Header().Set("Retry-After", "1")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 
@@ -203,12 +204,10 @@ func (m *MemoryCache) cleanup(needSize int64) bool {
 	}
 
 	// 按访问时间排序（最早的在前）
-	for i := 0; i < len(items)-1; i++ {
-		for j := i + 1; j < len(items); j++ {
-			if items[i].item.AccessTime.After(items[j].item.AccessTime) {
-				items[i], items[j] = items[j], items[i]
-			}
-		}
+	if len(items) > 1 {
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].item.AccessTime.Before(items[j].item.AccessTime)
+		})
 	}
 
 	freed := int64(0)
