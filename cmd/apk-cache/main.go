@@ -70,6 +70,9 @@ func main() {
 	// 初始化 i18n
 	i18n.Init(*locale)
 
+	// 初始化监控管理器
+	monitoring = NewMonitoring()
+
 	// 初始化缓存配额管理器
 	if *cacheMaxSize != "" {
 		maxSize, err := utils.ParseSizeString(*cacheMaxSize)
@@ -117,9 +120,6 @@ func main() {
 	} else {
 		log.Println(i18n.T("MemoryCacheDisabled", nil))
 	}
-
-	// 初始化监控管理器
-	monitoring = NewMonitoring()
 
 	// 初始化请求限流器
 	if *rateLimitEnabled {
