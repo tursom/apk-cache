@@ -9,11 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 	"golang.org/x/net/proxy"
 )
@@ -193,7 +193,7 @@ func cacheValid(path string) bool {
 	}
 
 	// 检查是否是索引文件
-	isIndex := isIndexFile(path)
+	isIndex := utils.IsIndexFile(path)
 	if isIndex {
 		// index 文件按修改时间过期
 		if isCacheExpiredByModTime(path, *indexCacheDuration) {
@@ -229,7 +229,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	defer file.Close()
 
 	// 记录访问时间（只记录非索引文件）
-	if !isIndexFile(cacheFile) {
+	if !utils.IsIndexFile(cacheFile) {
 		accessTimeTracker.RecordAccess(cacheFile)
 	}
 
@@ -237,7 +237,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	w.Header().Set("X-Cache", "HIT")
 
 	// 如果内存缓存启用，将文件内容加载到内存缓存
-	if memoryCache != nil && !isIndexFile(cacheFile) {
+	if memoryCache != nil && !utils.IsIndexFile(cacheFile) {
 		// 检查文件大小是否超过内存缓存限制
 		if memoryCacheMaxFileSizeBytes > 0 && stat.Size() > memoryCacheMaxFileSizeBytes {
 			log.Println(i18n.T("MemoryCacheFileTooLarge", map[string]any{
@@ -262,7 +262,7 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	}
 
 	http.ServeContent(w, r, filepath.Base(cacheFile), stat.ModTime(), file)
-	monitoring.RecordCacheHit(stat.Size())
+	utils.Monitoring.RecordCacheHit(stat.Size())
 }
 
 func fetchFromUpstream(urlPath string) (*http.Response, error) {
@@ -364,8 +364,8 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 		// 读取数据
 		n, readErr := body.Read(buf)
 		if n > 0 {
-			monitoring.RecordDownloadBytes(int64(n))
-			monitoring.RecordCacheMiss(int64(n))
+			utils.Monitoring.RecordDownloadBytes(int64(n))
+			utils.Monitoring.RecordCacheMiss(int64(n))
 
 			// 写入缓存文件（只要缓存没出错就继续写）
 			if cacheErr == nil {
@@ -508,16 +508,6 @@ func isCacheExpiredByAccessTime(path string, duration time.Duration) bool {
 	return time.Since(atime) > duration
 }
 
-func isIndexFile(path string) bool {
-	return strings.HasSuffix(path, "/APKINDEX.tar.gz") ||
-		strings.HasSuffix(path, "/InRelease") ||
-		strings.HasSuffix(path, "/Release") ||
-		strings.HasSuffix(path, "/Packages") ||
-		strings.HasSuffix(path, "/Packages.gz") ||
-		strings.HasSuffix(path, "/Sources") ||
-		strings.HasSuffix(path, "/Sources.gz")
-}
-
 // handleUpstreamResponse 统一处理上游响应状态码
 // 返回 true 表示继续处理，false 表示已处理完成
 func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp *http.Response, cacheFile string) bool {
@@ -546,7 +536,7 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 		}
 		// 如果缓存不存在，返回304状态，记录缓存未命中
 		w.WriteHeader(http.StatusNotModified)
-		monitoring.RecordCacheMiss(0)
+		utils.Monitoring.RecordCacheMiss(0)
 		return false
 	default:
 		// 其他错误状态码，记录缓存未命中
@@ -558,7 +548,7 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 			"Status":     upstreamResp.Status,
 			"StatusCode": upstreamResp.StatusCode,
 		}), upstreamResp.StatusCode)
-		monitoring.RecordCacheMiss(0)
+		utils.Monitoring.RecordCacheMiss(0)
 		return false
 	}
 }

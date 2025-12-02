@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -38,7 +39,6 @@ const (
 	FIFO                      // 先进先出
 )
 
-
 // NewCacheQuota 创建新的缓存配额管理器
 func NewCacheQuota(maxSize int64, strategy CleanStrategy) *CacheQuota {
 	quota := &CacheQuota{
@@ -47,8 +47,8 @@ func NewCacheQuota(maxSize int64, strategy CleanStrategy) *CacheQuota {
 	}
 
 	// 初始化 Prometheus 指标
-	monitoring.CacheQuotaSize.WithLabelValues("max").Set(float64(maxSize))
-	monitoring.CacheQuotaSize.WithLabelValues("current").Set(0)
+	utils.Monitoring.CacheQuotaSize.WithLabelValues("max").Set(float64(maxSize))
+	utils.Monitoring.CacheQuotaSize.WithLabelValues("current").Set(0)
 
 	return quota
 }
@@ -132,7 +132,7 @@ func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
 		"Strategy": q.Strategy.String(),
 	}))
 
-	monitoring.RecordCacheQuotaCleanup(0) // 字节数稍后记录
+	utils.Monitoring.RecordCacheQuotaCleanup(0) // 字节数稍后记录
 
 	var files []fileInfo
 	var err error
@@ -183,7 +183,7 @@ func (q *CacheQuota) cleanupCache(needSize int64) (int64, error) {
 		}))
 	}
 
-	monitoring.RecordCacheQuotaCleanup(freed)
+	utils.Monitoring.RecordCacheQuotaCleanup(freed)
 	log.Println(i18n.T("CacheQuotaCleanupComplete", map[string]any{
 		"Freed":        freed,
 		"FilesDeleted": filesDeleted,
@@ -214,7 +214,7 @@ func (q *CacheQuota) getLRUFiles() ([]fileInfo, error) {
 		}
 
 		// 跳过目录和索引文件（优先保留索引文件）
-		if info.IsDir() || isIndexFile(path) {
+		if info.IsDir() || utils.IsIndexFile(path) {
 			return nil
 		}
 
@@ -267,7 +267,7 @@ func (q *CacheQuota) getFIFOFiles() ([]fileInfo, error) {
 			return err
 		}
 
-		if info.IsDir() || isIndexFile(path) {
+		if info.IsDir() || utils.IsIndexFile(path) {
 			return nil
 		}
 
@@ -314,7 +314,7 @@ func sortFilesByModTime(files []fileInfo) {
 
 // updateMetrics 更新 Prometheus 指标
 func (q *CacheQuota) updateMetrics() {
-	monitoring.UpdateCacheQuotaMetrics(q.CurrentSize, 0) // 文件数稍后更新
+	utils.Monitoring.UpdateCacheQuotaMetrics(q.CurrentSize, 0) // 文件数稍后更新
 }
 
 // String 方法返回清理策略的字符串表示
@@ -357,7 +357,7 @@ func (q *CacheQuota) InitializeCacheSize() error {
 	}
 
 	q.CurrentSize = totalSize
-	monitoring.UpdateCacheQuotaMetrics(totalSize, fileCount)
+	utils.Monitoring.UpdateCacheQuotaMetrics(totalSize, fileCount)
 	q.updateMetrics()
 
 	log.Println(i18n.T("CacheSizeInitialized", map[string]any{

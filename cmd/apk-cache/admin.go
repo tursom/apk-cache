@@ -10,6 +10,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/tursom/apk-cache/utils"
 )
 
 // html 文件内容
@@ -47,11 +48,11 @@ func serveAdminStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// 获取 Prometheus metrics
-	cacheHitsVal := getMetricValue(monitoring.CacheHits)
-	cacheMissesVal := getMetricValue(monitoring.CacheMisses)
-	downloadBytesVal := getMetricValue(monitoring.DownloadBytes)
-	cacheHitBytesVal := getMetricValue(monitoring.CacheHitBytes)
-	cacheMissBytesVal := getMetricValue(monitoring.CacheMissBytes)
+	cacheHitsVal := getMetricValue(utils.Monitoring.CacheHits)
+	cacheMissesVal := getMetricValue(utils.Monitoring.CacheMisses)
+	downloadBytesVal := getMetricValue(utils.Monitoring.DownloadBytes)
+	cacheHitBytesVal := getMetricValue(utils.Monitoring.CacheHitBytes)
+	cacheMissBytesVal := getMetricValue(utils.Monitoring.CacheMissBytes)
 
 	// 计算缓存大小
 	cacheSize, _ := getDirSize(*cachePath)

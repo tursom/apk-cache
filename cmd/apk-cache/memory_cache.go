@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -43,8 +44,8 @@ func NewMemoryCache(maxSize int64, maxItems int, ttl time.Duration) *MemoryCache
 	}
 
 	// 初始化 Prometheus 指标
-	monitoring.MemCacheSize.WithLabelValues("max").Set(float64(maxSize))
-	monitoring.UpdateMemoryCacheMetrics(0, 0)
+	utils.Monitoring.MemCacheSize.WithLabelValues("max").Set(float64(maxSize))
+	utils.Monitoring.UpdateMemoryCacheMetrics(0, 0)
 
 	// 启动定期清理过期项的 goroutine
 	if ttl > 0 {
@@ -58,22 +59,22 @@ func NewMemoryCache(maxSize int64, maxItems int, ttl time.Duration) *MemoryCache
 func (m *MemoryCache) Get(key string) (*CacheItem, bool) {
 	item, exists := m.getItem(key)
 	if !exists {
-		monitoring.RecordMemoryCacheMiss()
+		utils.Monitoring.RecordMemoryCacheMiss()
 		return nil, false
 	}
 
 	// 检查是否过期
 	if m.ttl > 0 && time.Since(item.CreateTime) > m.ttl {
 		m.removeItem(key, item.Size)
-		monitoring.RecordMemoryCacheMiss()
-		monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
+		utils.Monitoring.RecordMemoryCacheMiss()
+		utils.Monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 		return nil, false
 	}
 
 	// 更新访问时间和计数
 	m.updateItemAccess(item)
 
-	monitoring.RecordMemoryCacheHit()
+	utils.Monitoring.RecordMemoryCacheHit()
 	return item, true
 }
 
@@ -145,7 +146,7 @@ func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, 
 	m.cache[key] = item
 	m.currentSize += size
 
-	monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
+	utils.Monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 	return true
 }
 
@@ -157,7 +158,7 @@ func (m *MemoryCache) Delete(key string) {
 	if item, exists := m.cache[key]; exists {
 		m.currentSize -= item.Size
 		delete(m.cache, key)
-		monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
+		utils.Monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 	}
 }
 
@@ -168,7 +169,7 @@ func (m *MemoryCache) Clear() {
 
 	m.cache = make(map[string]*CacheItem)
 	m.currentSize = 0
-	monitoring.UpdateMemoryCacheMetrics(0, 0)
+	utils.Monitoring.UpdateMemoryCacheMetrics(0, 0)
 }
 
 // needCleanup 检查是否需要清理空间
@@ -224,7 +225,7 @@ func (m *MemoryCache) cleanup(needSize int64) bool {
 		freed += entry.item.Size
 		evicted++
 
-		monitoring.RecordMemoryCacheEviction()
+		utils.Monitoring.RecordMemoryCacheEviction()
 		log.Println(i18n.T("MemoryCacheEvicted", map[string]any{
 			"Key":  entry.key,
 			"Size": entry.item.Size,
@@ -275,7 +276,7 @@ func (m *MemoryCache) cleanupExpired() {
 		log.Println(i18n.T("MemoryCacheExpiredCleaned", map[string]any{
 			"Count": expiredCount,
 		}))
-		monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
+		utils.Monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 	}
 }
 
@@ -320,7 +321,7 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 		return false
 	}
 
-	monitoring.RecordCacheHit(int64(len(item.Data)))
+	utils.Monitoring.RecordCacheHit(int64(len(item.Data)))
 	return true
 }
 

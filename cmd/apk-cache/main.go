@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
+	"github.com/tursom/apk-cache/utils/data_integrity"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -19,33 +20,28 @@ var (
 	// 进程启动时间
 	processStartTime = time.Now()
 
+	// 监控管理器
+	monitoring = utils.Monitoring
 	// 上游服务器管理器（支持故障转移和健康检查）
-	upstreamManager *UpstreamManager
+	upstreamManager = NewUpstreamManager()
 	// 文件锁管理器
 	lockManager = utils.NewFileLockManager()
-	// 访问时间跟踪器
-	accessTimeTracker = NewAccessTimeTracker()
+	// 访问时间跟踪器（在 main 中初始化，以便 ApplyConfig 后使用正确的 dataPath）
+	accessTimeTracker AccessTimeTracker
 	// 缓存配额管理器
 	cacheQuota *CacheQuota
 	// 内存缓存管理器
 	memoryCache *MemoryCache
-	// 内存缓存最大文件大小
-	memoryCacheMaxFileSizeBytes int64
 	// 请求限流器
 	rateLimiter *utils.RateLimiter
 	// 数据完整性管理器
-	dataIntegrityManager *DataIntegrityManager
-	// 监控管理器
-	monitoring *Monitoring
+	dataIntegrityManager data_integrity.Manager
 	// IP匹配器（用于代理身份验证）
 	proxyIPMatcher *utils.IPMatcher
 )
 
 func main() {
 	flag.Parse()
-
-	// 初始化上游服务器管理器（必须在 ApplyConfig 之前初始化）
-	upstreamManager = NewUpstreamManager()
 
 	// 加载配置文件（如果指定）
 	if *configFile != "" {
@@ -69,9 +65,6 @@ func main() {
 
 	// 初始化 i18n
 	i18n.Init(*locale)
-
-	// 初始化监控管理器
-	monitoring = NewMonitoring()
 
 	// 初始化缓存配额管理器
 	if *cacheMaxSize != "" {
@@ -144,6 +137,9 @@ func main() {
 		log.Fatalln(i18n.T("CreateDataDirFailed", map[string]any{"Error": err}))
 	}
 
+	// 初始化访问时间跟踪器（必须在 ApplyConfig 后，以便使用正确的 dataPath）
+	accessTimeTracker = NewAccessTimeTracker()
+
 	// 启动自动清理
 	if *cleanupInterval > 0 && *pkgCacheDuration != 0 {
 		go startAutoCleanup()
@@ -157,7 +153,9 @@ func main() {
 
 	// 初始化数据完整性管理器
 	if *dataIntegrityCheckInterval > 0 {
-		dataIntegrityManager = NewDataIntegrityManager(
+		dataIntegrityManager = data_integrity.NewManager(
+			*cachePath,
+			*dataPath,
 			*dataIntegrityCheckInterval,
 			*dataIntegrityAutoRepair,
 			*dataIntegrityPeriodicCheck,
@@ -225,6 +223,11 @@ func main() {
 		if err := dataIntegrityManager.Close(); err != nil {
 			log.Println(i18n.T("CloseDataIntegrityManagerFailed", map[string]any{"Error": err}))
 		}
+	}
+
+	// 关闭访问时间跟踪器
+	if err := accessTimeTracker.Close(); err != nil {
+		log.Println(i18n.T("CloseAccessTimeTrackerFailed", map[string]any{"Error": err}))
 	}
 
 	log.Println(i18n.T("ServerStopped", nil))

@@ -25,7 +25,7 @@ type cacheMissReader struct {
 func (cr *cacheMissReader) Read(p []byte) (int, error) {
 	n, err := cr.reader.Read(p)
 	if n > 0 {
-		monitoring.RecordDownloadBytes(int64(n))
+		utils.Monitoring.RecordDownloadBytes(int64(n))
 	}
 	return n, err
 }
@@ -147,7 +147,7 @@ func handleProxyHTTP(w http.ResponseWriter, r *http.Request) {
 
 // proxyForwardHTTP 转发HTTP请求到上游服务器
 func proxyForwardHTTP(w http.ResponseWriter, r *http.Request) {
-	monitoring.RecordCacheMiss(0) // 记录缓存未命中次数，字节数由 cacheMissReader 记录
+	utils.Monitoring.RecordCacheMiss(0) // 记录缓存未命中次数，字节数由 cacheMissReader 记录
 
 	// 转发请求
 	resp, err := proxyForwardRequest(r)

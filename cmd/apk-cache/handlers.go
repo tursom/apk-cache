@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -20,7 +21,7 @@ type webHandler struct {
 func newWebHandler() *webHandler {
 	return &webHandler{
 		metricsHandler: rateLimitMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			promhttp.HandlerFor(monitoring.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
+			promhttp.HandlerFor(utils.Monitoring.GetRegistry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
 		}),
 		adminHandler:  authMiddleware(rateLimitAdminMiddleware(adminDashboardHandler)),
 		healthHandler: authMiddleware(healthCheckHandler),
@@ -163,14 +164,14 @@ func rateLimitMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// 检查是否允许请求
 		if !rateLimiter.Allow() {
-			monitoring.RecordRateLimitRejected()
+			utils.Monitoring.RecordRateLimitRejected()
 			w.Header().Set("Retry-After", "1")
 			http.Error(w, i18n.T("RateLimitExceeded", nil), http.StatusTooManyRequests)
 			return
 		}
 
 		// 请求被允许，继续处理
-		monitoring.RecordRateLimitAllowed()
+		utils.Monitoring.RecordRateLimitAllowed()
 		next(w, r)
 	}
 }
@@ -215,7 +216,7 @@ func updateRateLimitMetrics() {
 		if rateLimiter != nil {
 			stats := rateLimiter.GetStats()
 			if currentTokens, ok := stats["current_tokens"].(float64); ok {
-				monitoring.UpdateRateLimitMetrics(currentTokens)
+				utils.Monitoring.UpdateRateLimitMetrics(currentTokens)
 			}
 		}
 	}

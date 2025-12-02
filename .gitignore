@@ -1,5 +1,7 @@
 /cache
+/data
 /apk-cache
 /cmd/apk-cache/apk-cache
+/cmd/apk-cache/data
 /cmd/apk-cache/admin_min.html
 /cmd/apk-cache/admin_min.html.gz

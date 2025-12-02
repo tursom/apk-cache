@@ -43,6 +43,8 @@ var (
 	memoryCacheMaxItems    = flag.Int("memory-cache-max-items", 1000, "Maximum number of items in memory cache")
 	memoryCacheTTL         = flag.Duration("memory-cache-ttl", 30*time.Minute, "Memory cache TTL duration")
 	memoryCacheMaxFileSize = flag.String("memory-cache-max-file-size", "10MB", "Maximum file size to cache in memory (e.g. 1MB, 10MB)")
+	// 内存缓存最大文件大小
+	memoryCacheMaxFileSizeBytes int64
 
 	// 请求限流相关参数
 	rateLimitEnabled     = flag.Bool("rate-limit", false, "Enable request rate limiting")

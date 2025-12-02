@@ -152,3 +152,14 @@ func DetectPackageTypeFast(path string) PackageType {
 
 	return PackageTypeUnknown
 }
+
+// IsIndexFile 检查路径是否为索引文件
+func IsIndexFile(path string) bool {
+	return strings.HasSuffix(path, "/APKINDEX.tar.gz") ||
+		strings.HasSuffix(path, "/InRelease") ||
+		strings.HasSuffix(path, "/Release") ||
+		strings.HasSuffix(path, "/Packages") ||
+		strings.HasSuffix(path, "/Packages.gz") ||
+		strings.HasSuffix(path, "/Sources") ||
+		strings.HasSuffix(path, "/Sources.gz")
+}

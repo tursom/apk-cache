@@ -263,7 +263,7 @@ func handleAPTClientConditionalRequest(w http.ResponseWriter, r *http.Request, c
 
 	// 客户端缓存未过期，返回304 Not Modified
 	w.WriteHeader(http.StatusNotModified)
-	monitoring.RecordCacheHit(0)
+	utils.Monitoring.RecordCacheHit(0)
 	log.Println(i18n.T("ClientCacheValid", map[string]any{"Path": cacheFile}))
 	return true
 }
@@ -293,7 +293,7 @@ func handleMemoryCacheConditionalRequest(w http.ResponseWriter, r *http.Request,
 
 		// 内存缓存项未修改，返回304 Not Modified
 		w.WriteHeader(http.StatusNotModified)
-		monitoring.RecordCacheHit(0)
+		utils.Monitoring.RecordCacheHit(0)
 		log.Println(i18n.T("ClientCacheValid", map[string]any{"Path": cacheFile}))
 		return true
 	}
@@ -332,7 +332,7 @@ func handleFileCacheConditionalRequest(w http.ResponseWriter, r *http.Request, c
 
 	// 缓存文件未修改，返回304 Not Modified
 	w.WriteHeader(http.StatusNotModified)
-	monitoring.RecordCacheHit(0)
+	utils.Monitoring.RecordCacheHit(0)
 	log.Println(i18n.T("ClientCacheValid", map[string]any{"Path": cacheFile}))
 	return true
 }

@@ -1,4 +1,4 @@
-package main
+package utils
 
 import (
 	"time"
@@ -7,8 +7,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// Monitoring 监控管理器
-type Monitoring struct {
+// MonitoringManager 监控管理器
+type MonitoringManager struct {
 	registry *prometheus.Registry
 
 	// 缓存相关指标
@@ -19,20 +19,20 @@ type Monitoring struct {
 	CacheMissBytes prometheus.Counter
 
 	// 限流相关指标
-	RateLimitAllowed      prometheus.Counter
-	RateLimitRejected     prometheus.Counter
+	RateLimitAllowed       prometheus.Counter
+	RateLimitRejected      prometheus.Counter
 	RateLimitCurrentTokens prometheus.Gauge
 
 	// 数据完整性相关指标
-	DataIntegrityChecks        prometheus.Counter
+	DataIntegrityChecks         prometheus.Counter
 	DataIntegrityCorruptedFiles prometheus.Gauge
-	DataIntegrityRepairedFiles prometheus.Counter
-	DataIntegrityCheckDuration prometheus.Histogram
+	DataIntegrityRepairedFiles  prometheus.Counter
+	DataIntegrityCheckDuration  prometheus.Histogram
 
 	// 缓存配额相关指标
-	CacheQuotaSize     *prometheus.GaugeVec
-	CacheQuotaFiles    prometheus.Gauge
-	CacheQuotaCleanups prometheus.Counter
+	CacheQuotaSize       *prometheus.GaugeVec
+	CacheQuotaFiles      prometheus.Gauge
+	CacheQuotaCleanups   prometheus.Counter
 	CacheQuotaBytesFreed prometheus.Counter
 
 	// 内存缓存相关指标
@@ -43,10 +43,12 @@ type Monitoring struct {
 	MemCacheEvictions prometheus.Counter
 }
 
+var Monitoring = NewMonitoring()
+
 // NewMonitoring 创建新的监控管理器
-func NewMonitoring() *Monitoring {
+func NewMonitoring() *MonitoringManager {
 	registry := prometheus.NewRegistry()
-	monitoring := &Monitoring{
+	monitoring := &MonitoringManager{
 		registry: registry,
 	}
 
@@ -168,7 +170,7 @@ func NewMonitoring() *Monitoring {
 }
 
 // registerMetrics 注册所有指标到 Registry
-func (m *Monitoring) registerMetrics() {
+func (m *MonitoringManager) registerMetrics() {
 	// 注册缓存相关指标
 	m.registry.MustRegister(m.CacheHits)
 	m.registry.MustRegister(m.CacheMisses)
@@ -185,88 +187,88 @@ func (m *Monitoring) registerMetrics() {
 }
 
 // GetRegistry 获取 Prometheus Registry
-func (m *Monitoring) GetRegistry() *prometheus.Registry {
+func (m *MonitoringManager) GetRegistry() *prometheus.Registry {
 	return m.registry
 }
 
 // UpdateRateLimitMetrics 更新限流器指标
-func (m *Monitoring) UpdateRateLimitMetrics(currentTokens float64) {
+func (m *MonitoringManager) UpdateRateLimitMetrics(currentTokens float64) {
 	m.RateLimitCurrentTokens.Set(currentTokens)
 }
 
 // UpdateCacheQuotaMetrics 更新缓存配额指标
-func (m *Monitoring) UpdateCacheQuotaMetrics(currentSize int64, fileCount int) {
+func (m *MonitoringManager) UpdateCacheQuotaMetrics(currentSize int64, fileCount int) {
 	m.CacheQuotaSize.WithLabelValues("current").Set(float64(currentSize))
 	m.CacheQuotaFiles.Set(float64(fileCount))
 }
 
 // UpdateMemoryCacheMetrics 更新内存缓存指标
-func (m *Monitoring) UpdateMemoryCacheMetrics(currentSize int64, itemCount int) {
+func (m *MonitoringManager) UpdateMemoryCacheMetrics(currentSize int64, itemCount int) {
 	m.MemCacheSize.WithLabelValues("current").Set(float64(currentSize))
 	m.MemCacheItems.Set(float64(itemCount))
 }
 
 // RecordCacheHit 记录缓存命中
-func (m *Monitoring) RecordCacheHit(bytes int64) {
+func (m *MonitoringManager) RecordCacheHit(bytes int64) {
 	m.CacheHits.Add(1)
 	m.CacheHitBytes.Add(float64(bytes))
 }
 
 // RecordCacheMiss 记录缓存未命中
-func (m *Monitoring) RecordCacheMiss(bytes int64) {
+func (m *MonitoringManager) RecordCacheMiss(bytes int64) {
 	m.CacheMisses.Add(1)
 	m.CacheMissBytes.Add(float64(bytes))
 }
 
 // RecordDownloadBytes 记录下载字节数
-func (m *Monitoring) RecordDownloadBytes(bytes int64) {
+func (m *MonitoringManager) RecordDownloadBytes(bytes int64) {
 	m.DownloadBytes.Add(float64(bytes))
 }
 
 // RecordRateLimitAllowed 记录限流允许的请求
-func (m *Monitoring) RecordRateLimitAllowed() {
+func (m *MonitoringManager) RecordRateLimitAllowed() {
 	m.RateLimitAllowed.Add(1)
 }
 
 // RecordRateLimitRejected 记录限流拒绝的请求
-func (m *Monitoring) RecordRateLimitRejected() {
+func (m *MonitoringManager) RecordRateLimitRejected() {
 	m.RateLimitRejected.Add(1)
 }
 
 // RecordDataIntegrityCheck 记录数据完整性检查
-func (m *Monitoring) RecordDataIntegrityCheck(duration time.Duration) {
+func (m *MonitoringManager) RecordDataIntegrityCheck(duration time.Duration) {
 	m.DataIntegrityChecks.Add(1)
 	m.DataIntegrityCheckDuration.Observe(duration.Seconds())
 }
 
 // RecordDataIntegrityCorrupted 记录数据完整性损坏文件
-func (m *Monitoring) RecordDataIntegrityCorrupted() {
+func (m *MonitoringManager) RecordDataIntegrityCorrupted() {
 	m.DataIntegrityCorruptedFiles.Inc()
 }
 
 // RecordDataIntegrityRepaired 记录数据完整性修复文件
-func (m *Monitoring) RecordDataIntegrityRepaired() {
+func (m *MonitoringManager) RecordDataIntegrityRepaired() {
 	m.DataIntegrityRepairedFiles.Inc()
 	m.DataIntegrityCorruptedFiles.Dec()
 }
 
 // RecordCacheQuotaCleanup 记录缓存配额清理
-func (m *Monitoring) RecordCacheQuotaCleanup(bytesFreed int64) {
+func (m *MonitoringManager) RecordCacheQuotaCleanup(bytesFreed int64) {
 	m.CacheQuotaCleanups.Add(1)
 	m.CacheQuotaBytesFreed.Add(float64(bytesFreed))
 }
 
 // RecordMemoryCacheHit 记录内存缓存命中
-func (m *Monitoring) RecordMemoryCacheHit() {
+func (m *MonitoringManager) RecordMemoryCacheHit() {
 	m.MemCacheHits.Add(1)
 }
 
 // RecordMemoryCacheMiss 记录内存缓存未命中
-func (m *Monitoring) RecordMemoryCacheMiss() {
+func (m *MonitoringManager) RecordMemoryCacheMiss() {
 	m.MemCacheMisses.Add(1)
 }
 
 // RecordMemoryCacheEviction 记录内存缓存驱逐
-func (m *Monitoring) RecordMemoryCacheEviction() {
+func (m *MonitoringManager) RecordMemoryCacheEviction() {
 	m.MemCacheEvictions.Add(1)
 }

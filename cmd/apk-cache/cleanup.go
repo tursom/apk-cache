@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -41,7 +42,7 @@ func cleanupExpiredCache() {
 		}
 
 		// 检查文件是否过期
-		isIndex := isIndexFile(path)
+		isIndex := utils.IsIndexFile(path)
 
 		var expired bool
 		if isIndex {
@@ -65,7 +66,7 @@ func cleanupExpiredCache() {
 				accessTimeTracker.Remove(path)
 				// 从数据完整性管理器中移除哈希记录
 				if dataIntegrityManager != nil {
-					dataIntegrityManager.removeFileHash(path)
+					dataIntegrityManager.RemoveFileHash(path)
 				}
 				// 更新缓存配额统计
 				if cacheQuota != nil {
