@@ -355,6 +355,9 @@ other = "TLS 握手失败 {{.Host}}: {{.Error}}"
 [ProxyConnectionEstablished]
 other = "代理连接已建立: 代理 {{.Proxy}} -> 目标 {{.Target}}"
 
+[ProxyIPMatcherCreated]
+other = "代理 IP 匹配器创建成功 (豁免 CIDR: {{.ExemptCIDRs}}, 信任代理: {{.TrustedProxies}})"
+
 # APT 协议相关翻译
 [APTProxyRequest]
 other = "APT 代理请求: {{.Method}} {{.URL}} 主机: {{.Host}}"

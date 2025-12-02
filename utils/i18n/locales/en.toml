@@ -355,6 +355,9 @@ other = "TLS handshake failed {{.Host}}: {{.Error}}"
 [ProxyConnectionEstablished]
 other = "Proxy connection established: proxy {{.Proxy}} -> target {{.Target}}"
 
+[ProxyIPMatcherCreated]
+other = "Proxy IP matcher created successfully (exempt CIDRs: {{.ExemptCIDRs}}, trusted proxies: {{.TrustedProxies}})"
+
 # APT protocol related translations
 [APTProxyRequest]
 other = "APT proxy request: {{.Method}} {{.URL}} Host: {{.Host}}"

@@ -83,6 +83,17 @@ func (m *IPMatcher) IsTrustedProxy(ipStr string) bool {
 	return false
 }
 
+// DebugInfo 返回匹配器的调试信息
+func (m *IPMatcher) DebugInfo() (exemptCIDRs []string, trustedProxies []string) {
+	for _, cidr := range m.exemptCIDRs {
+		exemptCIDRs = append(exemptCIDRs, cidr.String())
+	}
+	for _, ip := range m.trustedProxies {
+		trustedProxies = append(trustedProxies, ip.String())
+	}
+	return
+}
+
 // parseIPOrHostname 解析 IP 地址或主机名
 func parseIPOrHostname(addr string) []net.IP {
 	// 首先尝试解析为 IP 地址

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -178,8 +179,22 @@ func main() {
 		var err error
 		proxyIPMatcher, err = utils.NewIPMatcher(*proxyAuthExemptIPs, *trustedReverseProxyIPs)
 		if err != nil {
-			log.Printf("Failed to create proxy IP matcher: %v", err)
+			log.Fatalf("Failed to create proxy IP matcher: %v", err)
 		}
+		// 记录解析后的数据
+		exemptCIDRs, trustedProxies := proxyIPMatcher.DebugInfo()
+		exemptStr := "none"
+		if len(exemptCIDRs) > 0 {
+			exemptStr = strings.Join(exemptCIDRs, ", ")
+		}
+		trustedStr := "none"
+		if len(trustedProxies) > 0 {
+			trustedStr = strings.Join(trustedProxies, ", ")
+		}
+		log.Println(i18n.T("ProxyIPMatcherCreated", map[string]any{
+			"ExemptCIDRs":   exemptStr,
+			"TrustedProxies": trustedStr,
+		}))
 	}
 
 	log.Println(i18n.T("UpstreamServer", map[string]any{"URL": *upstreamURL}))
