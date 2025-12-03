@@ -53,13 +53,6 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if dataIntegrityManager == nil {
-			// 数据完整性校验未启用，从缓存提供
-			serveFromCache(w, r, cacheFile)
-			return
-		}
-		// 如果数据完整性校验启用，验证文件完整性
-
 		// 对于 hash 请求，必须使用 URL 中的哈希值进行完整性校验
 		if isHashRequest(r.URL.Path) {
 			// 使用统一的哈希请求验证函数
@@ -73,18 +66,26 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			valid, err := dataIntegrityManager.VerifyFileIntegrity(cacheFile)
-			if err != nil {
-				log.Println(i18n.T("FileIntegrityCheckError", map[string]any{
-					"File":  cacheFile,
-					"Error": err,
-				}))
-			} else if !valid {
-				log.Println(i18n.T("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
-				// 文件损坏，视为缓存未命中
-				// 继续从上游获取
+			// 非 hash 请求，根据文件类型选择校验器
+			if strings.HasSuffix(cacheFile, ".deb") {
+				// 使用 APTManager 校验 .deb 文件
+				valid, err := aptIntegrityManager.VerifyFileIntegrity(cacheFile)
+				if err != nil {
+					log.Println(i18n.T("FileIntegrityCheckError", map[string]any{
+						"File":  cacheFile,
+						"Error": err,
+					}))
+				} else if !valid {
+					log.Println(i18n.T("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
+					// 文件损坏，视为缓存未命中
+					// 继续从上游获取
+				} else {
+					// 文件完整，从缓存提供
+					serveFromCache(w, r, cacheFile)
+					return
+				}
 			} else {
-				// 文件完整，从缓存提供
+				// 非 .deb 文件（如索引文件），跳过校验，直接提供缓存
 				serveFromCache(w, r, cacheFile)
 				return
 			}
@@ -466,4 +467,10 @@ func verifyHashRequest(cacheFile, path string) (bool, error) {
 		"Algorithm": algorithm,
 	}))
 	return true, nil
+}
+
+// isIndexFile 检查文件是否是 apt 索引文件（Packages 或 Sources）
+func isIndexFile(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, "Packages") || strings.HasPrefix(base, "Sources")
 }

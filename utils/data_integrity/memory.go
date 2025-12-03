@@ -5,51 +5,26 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
-// memoryDataIntegrityManager 纯内存实现
-type memoryDataIntegrityManager struct {
+// memoryManager 纯内存实现
+type memoryManager struct {
 	baseManager
+	mu             sync.RWMutex
 	fileHashes     map[string]string // 文件路径 -> SHA256哈希
 	corruptedFiles map[string]bool   // 损坏文件列表
-}
-
-// 辅助方法（线程安全） - 仅适用于 memoryDataIntegrityManager
-func (m *memoryDataIntegrityManager) getFileHash(filePath string) (string, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	hash, exists := m.fileHashes[filePath]
-	return hash, exists
-}
-
-func (m *memoryDataIntegrityManager) setFileHash(filePath, hash string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.fileHashes[filePath] = hash
-}
-
-func (m *memoryDataIntegrityManager) markFileAsCorrupted(filePath string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.corruptedFiles[filePath] = true
-}
-
-func (m *memoryDataIntegrityManager) removeFileHash(filePath string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.fileHashes, filePath)
-	delete(m.corruptedFiles, filePath)
 }
 
 // NewMemoryDataIntegrityManager 创建纯内存数据完整性管理器
 func NewMemoryDataIntegrityManager(
 	cachePath string, checkInterval time.Duration, enableAutoRepair bool, enablePeriodicCheck bool,
 ) Manager {
-	return &memoryDataIntegrityManager{
+	return &memoryManager{
 		baseManager: baseManager{
 			checkInterval:       checkInterval,
 			enableAutoRepair:    enableAutoRepair,
@@ -61,15 +36,42 @@ func NewMemoryDataIntegrityManager(
 	}
 }
 
+// 辅助方法（线程安全） - 仅适用于 memoryDataIntegrityManager
+func (m *memoryManager) getFileHash(filePath string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	hash, exists := m.fileHashes[filePath]
+	return hash, exists
+}
+
+func (m *memoryManager) setFileHash(filePath, hash string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fileHashes[filePath] = hash
+}
+
+func (m *memoryManager) markFileAsCorrupted(filePath string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.corruptedFiles[filePath] = true
+}
+
+func (m *memoryManager) removeFileHash(filePath string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.fileHashes, filePath)
+	delete(m.corruptedFiles, filePath)
+}
+
 // RecordFileHash 记录文件的哈希值（仅内存）
-func (m *memoryDataIntegrityManager) RecordFileHash(filePath string, data []byte) error {
+func (m *memoryManager) RecordFileHash(filePath string, data []byte) error {
 	hash := m.calculateHash(data)
 	m.setFileHash(filePath, hash)
 	return nil
 }
 
 // VerifyFileIntegrity 验证文件完整性（仅内存）
-func (m *memoryDataIntegrityManager) VerifyFileIntegrity(filePath string) (bool, error) {
+func (m *memoryManager) VerifyFileIntegrity(filePath string) (bool, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return false, errors.New(i18n.T("ReadFileFailed", map[string]any{"Error": err}))
@@ -100,7 +102,7 @@ func (m *memoryDataIntegrityManager) VerifyFileIntegrity(filePath string) (bool,
 }
 
 // RepairCorruptedFile 修复损坏的文件（仅内存）
-func (m *memoryDataIntegrityManager) RepairCorruptedFile(filePath string) error {
+func (m *memoryManager) RepairCorruptedFile(filePath string) error {
 	log.Println(i18n.T("RepairingCorruptedFile", map[string]any{"File": filePath}))
 
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
@@ -115,7 +117,7 @@ func (m *memoryDataIntegrityManager) RepairCorruptedFile(filePath string) error 
 }
 
 // CheckAllFilesIntegrity 检查所有文件的完整性（仅内存）
-func (m *memoryDataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
+func (m *memoryManager) CheckAllFilesIntegrity() (int, int, error) {
 	startTime := time.Now()
 
 	var checkedCount, corruptedCount int
@@ -179,7 +181,7 @@ func (m *memoryDataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) 
 }
 
 // GetCorruptedFiles 获取损坏文件列表
-func (m *memoryDataIntegrityManager) GetCorruptedFiles() []string {
+func (m *memoryManager) GetCorruptedFiles() []string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -191,18 +193,18 @@ func (m *memoryDataIntegrityManager) GetCorruptedFiles() []string {
 }
 
 // GetStats 获取统计信息
-func (m *memoryDataIntegrityManager) GetStats() (totalFiles int, corruptedFiles int, lastCheck time.Time) {
+func (m *memoryManager) GetStats() (totalFiles int, corruptedFiles int, lastCheck time.Time) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	totalFiles = len(m.fileHashes)
 	corruptedFiles = len(m.corruptedFiles)
-	lastCheck = m.lastCheckTime
+	lastCheck = m.lastCheck()
 	return
 }
 
 // StartPeriodicCheck 启动定期检查
-func (m *memoryDataIntegrityManager) StartPeriodicCheck() {
+func (m *memoryManager) StartPeriodicCheck() {
 	if !m.enablePeriodicCheck || m.checkInterval <= 0 {
 		return
 	}
@@ -226,7 +228,7 @@ func (m *memoryDataIntegrityManager) StartPeriodicCheck() {
 }
 
 // CleanupOrphanedHashes 清理孤立的哈希记录
-func (m *memoryDataIntegrityManager) CleanupOrphanedHashes() int {
+func (m *memoryManager) CleanupOrphanedHashes() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -248,12 +250,12 @@ func (m *memoryDataIntegrityManager) CleanupOrphanedHashes() int {
 }
 
 // RemoveFileHash 删除文件的哈希记录
-func (m *memoryDataIntegrityManager) RemoveFileHash(filePath string) error {
+func (m *memoryManager) RemoveFileHash(filePath string) error {
 	m.removeFileHash(filePath)
 	return nil
 }
 
 // Close 关闭（无操作）
-func (m *memoryDataIntegrityManager) Close() error {
+func (m *memoryManager) Close() error {
 	return nil
 }

@@ -160,6 +160,8 @@ func IsIndexFile(path string) bool {
 		strings.HasSuffix(path, "/Release") ||
 		strings.HasSuffix(path, "/Packages") ||
 		strings.HasSuffix(path, "/Packages.gz") ||
+		strings.HasSuffix(path, "/Packages.bz2") ||
 		strings.HasSuffix(path, "/Sources") ||
-		strings.HasSuffix(path, "/Sources.gz")
+		strings.HasSuffix(path, "/Sources.gz") ||
+		strings.HasSuffix(path, "/Sources.bz2")
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/data_integrity"
 	"github.com/tursom/apk-cache/utils/i18n"
+	bolt "go.etcd.io/bbolt"
 )
 
 var (
@@ -37,6 +39,8 @@ var (
 	rateLimiter *utils.RateLimiter
 	// 数据完整性管理器
 	dataIntegrityManager data_integrity.Manager
+	// apt 数据完整管理器
+	aptIntegrityManager *data_integrity.APTManager
 	// IP匹配器（用于代理身份验证）
 	proxyIPMatcher *utils.IPMatcher
 )
@@ -153,10 +157,17 @@ func main() {
 	}
 
 	// 初始化数据完整性管理器
+	dbPath := filepath.Join(*dataPath, "file_hashes.db")
+	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		log.Panicln(i18n.T("OpenDatabaseFailed", map[string]any{"Error": err}))
+	}
+
+	aptIntegrityManager = data_integrity.NewAPTManager(*cachePath, db)
+
 	if *dataIntegrityCheckInterval > 0 {
 		dataIntegrityManager = data_integrity.NewManager(
-			*cachePath,
-			*dataPath,
+			*cachePath, db,
 			*dataIntegrityCheckInterval,
 			*dataIntegrityAutoRepair,
 			*dataIntegrityPeriodicCheck,
@@ -192,7 +203,7 @@ func main() {
 			trustedStr = strings.Join(trustedProxies, ", ")
 		}
 		log.Println(i18n.T("ProxyIPMatcherCreated", map[string]any{
-			"ExemptCIDRs":   exemptStr,
+			"ExemptCIDRs":    exemptStr,
 			"TrustedProxies": trustedStr,
 		}))
 	}

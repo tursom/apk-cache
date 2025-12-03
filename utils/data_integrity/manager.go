@@ -3,13 +3,10 @@ package data_integrity
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
-	"log"
-	"os"
-	"sync"
+	"sync/atomic"
 	"time"
 
-	"github.com/tursom/apk-cache/utils/i18n"
+	bolt "go.etcd.io/bbolt"
 )
 
 // Manager 数据完整性管理器接口
@@ -28,8 +25,7 @@ type Manager interface {
 
 // baseManager 基础实现（用于共享通用逻辑）
 type baseManager struct {
-	mu                  sync.RWMutex
-	lastCheckTime       time.Time
+	lastCheckTime       atomic.Int64 // 存储 Unix 纳秒时间戳
 	checkInterval       time.Duration
 	enableAutoRepair    bool
 	enablePeriodicCheck bool
@@ -37,9 +33,16 @@ type baseManager struct {
 }
 
 func (b *baseManager) updateLastCheckTime() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.lastCheckTime = time.Now()
+	b.lastCheckTime.Store(time.Now().UnixNano())
+}
+
+// lastCheck 返回最近一次检查的时间（线程安全）
+func (b *baseManager) lastCheck() time.Time {
+	ns := b.lastCheckTime.Load()
+	if ns == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, ns)
 }
 
 func (b *baseManager) calculateHash(data []byte) string {
@@ -47,31 +50,10 @@ func (b *baseManager) calculateHash(data []byte) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func (b *baseManager) calculateFileHash(filePath string) (string, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		return "", err
-	}
-
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
 // NewDataIntegrityManager 创建新的数据完整性管理器（尝试持久化，失败则回退到内存）
 func NewManager(
-	cachePath, dataPath string,
+	cachePath string, db *bolt.DB,
 	checkInterval time.Duration, enableAutoRepair bool, enablePeriodicCheck bool,
 ) Manager {
-	manager, err := NewPersistentDataIntegrityManager(cachePath, dataPath, checkInterval, enableAutoRepair, enablePeriodicCheck)
-	if err != nil {
-		log.Println(i18n.T("OpenDatabaseFailed", map[string]any{"Error": err}))
-		log.Println(i18n.T("FallbackToMemoryMode", nil))
-		return NewMemoryDataIntegrityManager(cachePath, checkInterval, enableAutoRepair, enablePeriodicCheck)
-	}
-	return manager
+	return NewPersistentDataIntegrityManager(cachePath, db, checkInterval, enableAutoRepair, enablePeriodicCheck)
 }

@@ -12,15 +12,34 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// persistentDataIntegrityManager 持久化实现（使用 BoltDB）
-type persistentDataIntegrityManager struct {
+// persistentManager 持久化实现（使用 BoltDB）
+type persistentManager struct {
 	baseManager
-	db     *bolt.DB
-	dbPath string
+	db *bolt.DB
+}
+
+// NewPersistentDataIntegrityManager 创建持久化数据完整性管理器
+func NewPersistentDataIntegrityManager(cachePath string, db *bolt.DB, checkInterval time.Duration, enableAutoRepair bool, enablePeriodicCheck bool) Manager {
+	manager := &persistentManager{
+		baseManager: baseManager{
+			checkInterval:       checkInterval,
+			enableAutoRepair:    enableAutoRepair,
+			enablePeriodicCheck: enablePeriodicCheck,
+			cachePath:           cachePath,
+		},
+		db: db,
+	}
+
+	// 自动加载持久化的哈希数据
+	if err := manager.LoadHashes(); err != nil {
+		log.Println(i18n.T("LoadFileHashesFailed", map[string]any{"Error": err}))
+	}
+
+	return manager
 }
 
 // 数据库辅助方法
-func (p *persistentDataIntegrityManager) getHashFromDB(filePath string) (string, error) {
+func (p *persistentManager) getHashFromDB(filePath string) (string, error) {
 	var hash string
 	err := p.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("file_hashes"))
@@ -36,7 +55,7 @@ func (p *persistentDataIntegrityManager) getHashFromDB(filePath string) (string,
 	return hash, err
 }
 
-func (p *persistentDataIntegrityManager) saveHashToDB(filePath string, hash string) error {
+func (p *persistentManager) saveHashToDB(filePath string, hash string) error {
 	return p.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte("file_hashes"))
 		if err != nil {
@@ -46,18 +65,8 @@ func (p *persistentDataIntegrityManager) saveHashToDB(filePath string, hash stri
 	})
 }
 
-func (p *persistentDataIntegrityManager) deleteHashFromDB(filePath string) error {
-	return p.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("file_hashes"))
-		if bucket == nil {
-			return nil // 桶不存在，无需删除
-		}
-		return bucket.Delete([]byte(filePath))
-	})
-}
-
 // markFileAsCorrupted 将文件标记为损坏（存储到数据库）
-func (p *persistentDataIntegrityManager) markFileAsCorrupted(filePath string) error {
+func (p *persistentManager) markFileAsCorrupted(filePath string) error {
 	return p.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := tx.CreateBucketIfNotExists([]byte("corrupted_files"))
 		if err != nil {
@@ -69,7 +78,7 @@ func (p *persistentDataIntegrityManager) markFileAsCorrupted(filePath string) er
 }
 
 // removeFileHash 删除文件的哈希记录（从两个桶中删除）
-func (p *persistentDataIntegrityManager) removeFileHash(filePath string) error {
+func (p *persistentManager) removeFileHash(filePath string) error {
 	return p.db.Update(func(tx *bolt.Tx) error {
 		// 从 file_hashes 桶删除
 		bucket := tx.Bucket([]byte("file_hashes"))
@@ -90,7 +99,7 @@ func (p *persistentDataIntegrityManager) removeFileHash(filePath string) error {
 }
 
 // getCorruptedFilesFromDB 从数据库获取损坏文件列表
-func (p *persistentDataIntegrityManager) getCorruptedFilesFromDB() ([]string, error) {
+func (p *persistentManager) getCorruptedFilesFromDB() ([]string, error) {
 	var files []string
 	err := p.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("corrupted_files"))
@@ -106,7 +115,7 @@ func (p *persistentDataIntegrityManager) getCorruptedFilesFromDB() ([]string, er
 }
 
 // countCorruptedFilesFromDB 从数据库统计损坏文件数量
-func (p *persistentDataIntegrityManager) countCorruptedFilesFromDB() (int, error) {
+func (p *persistentManager) countCorruptedFilesFromDB() (int, error) {
 	count := 0
 	err := p.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("corrupted_files"))
@@ -120,7 +129,7 @@ func (p *persistentDataIntegrityManager) countCorruptedFilesFromDB() (int, error
 	return count, err
 }
 
-func (p *persistentDataIntegrityManager) LoadHashes() error {
+func (p *persistentManager) LoadHashes() error {
 	return p.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("file_hashes"))
 		if bucket == nil {
@@ -142,35 +151,8 @@ func (p *persistentDataIntegrityManager) LoadHashes() error {
 	})
 }
 
-// NewPersistentDataIntegrityManager 创建持久化数据完整性管理器
-func NewPersistentDataIntegrityManager(cachePath, dataPath string, checkInterval time.Duration, enableAutoRepair bool, enablePeriodicCheck bool) (Manager, error) {
-	dbPath := filepath.Join(dataPath, "file_hashes.db")
-	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		return nil, err
-	}
-
-	manager := &persistentDataIntegrityManager{
-		baseManager: baseManager{
-			checkInterval:       checkInterval,
-			enableAutoRepair:    enableAutoRepair,
-			enablePeriodicCheck: enablePeriodicCheck,
-			cachePath:           cachePath,
-		},
-		db:     db,
-		dbPath: dbPath,
-	}
-
-	// 自动加载持久化的哈希数据
-	if err := manager.LoadHashes(); err != nil {
-		log.Println(i18n.T("LoadFileHashesFailed", map[string]any{"Error": err}))
-	}
-
-	return manager, nil
-}
-
 // RecordFileHash 记录文件的哈希值（持久化到数据库）
-func (p *persistentDataIntegrityManager) RecordFileHash(filePath string, data []byte) error {
+func (p *persistentManager) RecordFileHash(filePath string, data []byte) error {
 	hash := p.calculateHash(data)
 
 	// 保存到数据库
@@ -182,7 +164,7 @@ func (p *persistentDataIntegrityManager) RecordFileHash(filePath string, data []
 }
 
 // VerifyFileIntegrity 验证文件完整性（直接读取数据库）
-func (p *persistentDataIntegrityManager) VerifyFileIntegrity(filePath string) (bool, error) {
+func (p *persistentManager) VerifyFileIntegrity(filePath string) (bool, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return false, errors.New(i18n.T("ReadFileFailed", map[string]any{"Error": err}))
@@ -221,7 +203,7 @@ func (p *persistentDataIntegrityManager) VerifyFileIntegrity(filePath string) (b
 }
 
 // RepairCorruptedFile 修复损坏的文件（从数据库删除）
-func (p *persistentDataIntegrityManager) RepairCorruptedFile(filePath string) error {
+func (p *persistentManager) RepairCorruptedFile(filePath string) error {
 	log.Println(i18n.T("RepairingCorruptedFile", map[string]any{"File": filePath}))
 
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
@@ -240,7 +222,7 @@ func (p *persistentDataIntegrityManager) RepairCorruptedFile(filePath string) er
 }
 
 // CheckAllFilesIntegrity 检查所有文件的完整性（使用持久化存储）
-func (p *persistentDataIntegrityManager) CheckAllFilesIntegrity() (int, int, error) {
+func (p *persistentManager) CheckAllFilesIntegrity() (int, int, error) {
 	startTime := time.Now()
 
 	var checkedCount, corruptedCount int
@@ -304,10 +286,7 @@ func (p *persistentDataIntegrityManager) CheckAllFilesIntegrity() (int, int, err
 }
 
 // GetCorruptedFiles 获取损坏文件列表
-func (p *persistentDataIntegrityManager) GetCorruptedFiles() []string {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
+func (p *persistentManager) GetCorruptedFiles() []string {
 	files, err := p.getCorruptedFilesFromDB()
 	if err != nil {
 		log.Println(i18n.T("LoadDatabaseFailed", map[string]any{"Error": err}))
@@ -317,10 +296,7 @@ func (p *persistentDataIntegrityManager) GetCorruptedFiles() []string {
 }
 
 // GetStats 获取统计信息
-func (p *persistentDataIntegrityManager) GetStats() (totalFiles int, corruptedFiles int, lastCheck time.Time) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
+func (p *persistentManager) GetStats() (totalFiles int, corruptedFiles int, lastCheck time.Time) {
 	// 从数据库计算总文件数
 	totalFiles = 0
 	err := p.db.View(func(tx *bolt.Tx) error {
@@ -341,12 +317,12 @@ func (p *persistentDataIntegrityManager) GetStats() (totalFiles int, corruptedFi
 	if err != nil {
 		corruptedFiles = 0
 	}
-	lastCheck = p.lastCheckTime
+	lastCheck = p.lastCheck()
 	return
 }
 
 // StartPeriodicCheck 启动定期检查
-func (p *persistentDataIntegrityManager) StartPeriodicCheck() {
+func (p *persistentManager) StartPeriodicCheck() {
 	if !p.enablePeriodicCheck || p.checkInterval <= 0 {
 		return
 	}
@@ -370,10 +346,7 @@ func (p *persistentDataIntegrityManager) StartPeriodicCheck() {
 }
 
 // CleanupOrphanedHashes 清理孤立的哈希记录（同时从数据库删除）
-func (p *persistentDataIntegrityManager) CleanupOrphanedHashes() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
+func (p *persistentManager) CleanupOrphanedHashes() int {
 	var orphanedPaths []string
 
 	// 第一次遍历：收集孤立的文件路径
@@ -428,7 +401,7 @@ func (p *persistentDataIntegrityManager) CleanupOrphanedHashes() int {
 }
 
 // RemoveFileHash 删除文件的哈希记录（同时从数据库删除）
-func (p *persistentDataIntegrityManager) RemoveFileHash(filePath string) error {
+func (p *persistentManager) RemoveFileHash(filePath string) error {
 	if err := p.removeFileHash(filePath); err != nil {
 		log.Println(i18n.T("SaveHashesFailed", map[string]any{"Error": err}))
 	}
@@ -436,7 +409,7 @@ func (p *persistentDataIntegrityManager) RemoveFileHash(filePath string) error {
 }
 
 // Close 关闭数据库连接
-func (p *persistentDataIntegrityManager) Close() error {
+func (p *persistentManager) Close() error {
 	if p.db != nil {
 		return p.db.Close()
 	}
