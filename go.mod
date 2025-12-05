@@ -4,9 +4,11 @@ go 1.25.4
 
 require (
 	github.com/BurntSushi/toml v1.5.0
+	github.com/ProtonMail/go-crypto v1.3.0
 	github.com/nicksnyder/go-i18n/v2 v2.6.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
+	github.com/ulikunitz/xz v0.5.15
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/net v0.47.0
 	golang.org/x/sync v0.18.0
@@ -14,7 +16,6 @@ require (
 )
 
 require (
-	github.com/ProtonMail/go-crypto v1.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cloudflare/circl v1.6.0 // indirect

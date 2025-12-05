@@ -30,6 +30,10 @@ type cacheHeaderEntry struct {
 	createdAt       time.Time
 }
 
+type cacheSaveHandler struct {
+	beforeCacheRename func(cacheFile string, tmpFileName string, data []byte) error
+}
+
 // 全局客户端缓存头管理器
 var clientCacheHeaders = NewClientCacheHeaders()
 
@@ -174,7 +178,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 保存到缓存（带文件锁）
-	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
+	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header, nil); err != nil {
 		log.Println(i18n.T("SaveCacheFailed", map[string]any{"Error": err}))
 	} else {
 		log.Println(i18n.T("CacheSaved", map[string]any{"Path": cacheFile}))
@@ -318,7 +322,7 @@ func createHTTPClientForUpstream(proxyAddr string) *http.Client {
 	}
 }
 
-func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.ResponseWriter, statusCode int, headers http.Header) error {
+func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.ResponseWriter, statusCode int, headers http.Header, handler *cacheSaveHandler) error {
 	// 获取该文件的锁
 	unlock := lockManager.Acquire(cacheFile)
 	defer unlock()
@@ -420,6 +424,12 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 			}))
 			// 配额不足，不保存缓存文件，但已成功服务客户端
 			return nil
+		}
+	}
+
+	if handler != nil && handler.beforeCacheRename != nil {
+		if err := handler.beforeCacheRename(cacheFile, tmpFileName, responseData); err != nil {
+			return err
 		}
 	}
 

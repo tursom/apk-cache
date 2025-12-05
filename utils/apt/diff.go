@@ -2,33 +2,36 @@ package apt
 
 import (
 	"bufio"
+	"io"
 	"iter"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
-// AptDiffEntry 表示 diff 文件中的一个包条目
-type AptDiffEntry struct {
+// File 表示 diff 文件中的一个包条目
+type File struct {
 	Package  string
 	Filename string
-	Size     string
+	Size     int64
 	SHA256   string
 }
 
+// ed 命令的正则表达式：匹配如 "51a", "100,200d", "300c" 等格式
+var edCommandRegex = regexp.MustCompile(`^\d+(,\d+)?[acd]$`)
+
 // ParseDiffReader 从 io.Reader 解析 APT diff 内容，返回条目迭代器
-func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
-	// ed 命令的正则表达式：匹配如 "51a", "100,200d", "300c" 等格式
-	edCommandRegex := regexp.MustCompile(`^(\d+)(,\d+)?[acd]$`)
+func ParseDiffReader(reader io.Reader) iter.Seq[*File] {
+	bufReader := bufio.NewReader(reader)
 
-	return func(yield func(*AptDiffEntry) bool) {
-
-		var currentEntry AptDiffEntry
+	return func(yield func(*File) bool) {
+		var currentEntry File
 		inEntry := false
 		inChecksumsSha256 := false
 		directory := ""
 		// 用于延迟输出的 checksum 条目列表
-		var pendingChecksums []*AptDiffEntry
+		var pendingChecksums []*File
 
 		// flushPendingChecksums 输出所有待处理的 checksum 条目（应用当前 directory）
 		flushPendingChecksums := func() bool {
@@ -44,8 +47,15 @@ func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
 			return true
 		}
 
-		for scanner.Scan() {
-			line := scanner.Text()
+		for {
+			line, err := bufReader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				return
+			}
+			line = strings.TrimRight(line, "\n")
 
 			// 检查是否是 ed 命令行（如 "51a", "527a"）
 			if edCommandRegex.MatchString(line) {
@@ -60,7 +70,7 @@ func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
 					}
 				}
 				// 重置状态，开始新的块
-				currentEntry = AptDiffEntry{}
+				currentEntry = File{}
 				inEntry = false
 				inChecksumsSha256 = false
 				directory = ""
@@ -78,7 +88,7 @@ func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
 						return
 					}
 				}
-				currentEntry = AptDiffEntry{}
+				currentEntry = File{}
 				inEntry = false
 				inChecksumsSha256 = false
 				directory = ""
@@ -96,7 +106,7 @@ func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
 						return
 					}
 				}
-				currentEntry = AptDiffEntry{}
+				currentEntry = File{}
 				inEntry = false
 				inChecksumsSha256 = false
 				// 保留 directory，可能后续条目也在同一目录
@@ -118,7 +128,11 @@ func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
 					inEntry = true
 					inChecksumsSha256 = false
 				case "Size":
-					currentEntry.Size = value
+					var err error
+					currentEntry.Size, err = strconv.ParseInt(value, 10, 64)
+					if err != nil {
+						currentEntry.Size = 0
+					}
 					inChecksumsSha256 = false
 				case "SHA256":
 					currentEntry.SHA256 = value
@@ -139,7 +153,7 @@ func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
 					hash := fields[0]
 					filename := fields[2]
 					// 暂存 checksum 条目，等待获取完整的 directory 后再输出
-					pendingChecksums = append(pendingChecksums, &AptDiffEntry{
+					pendingChecksums = append(pendingChecksums, &File{
 						SHA256:   hash,
 						Filename: filename,
 					})
@@ -157,6 +171,6 @@ func ParseDiffReader(scanner *bufio.Scanner) iter.Seq[*AptDiffEntry] {
 	}
 }
 
-func (entry *AptDiffEntry) IsEmpty() bool {
+func (entry *File) IsEmpty() bool {
 	return entry.Package == "" && (entry.Filename == "" || entry.SHA256 == "")
 }

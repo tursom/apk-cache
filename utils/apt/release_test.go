@@ -1,7 +1,6 @@
 package apt
 
 import (
-	"bufio"
 	"strings"
 	"testing"
 )
@@ -20,8 +19,8 @@ SHA256:
  eb31200171780aa32dd72882de861f9a8d0ecb09ba79e93804171d6f9a24e9db    10605 contrib/Contents-all.diff/Index
 `
 
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
+	scanner := strings.NewReader(input)
+	entries := make([]*File, 0)
 
 	for entry := range ParseReleaseReader(scanner) {
 		newEntry := *entry
@@ -36,8 +35,8 @@ SHA256:
 	if entries[0].Filename != "contrib/Contents-all" {
 		t.Errorf("expected Filename 'contrib/Contents-all', got '%s'", entries[0].Filename)
 	}
-	if entries[0].Size != "389489" {
-		t.Errorf("expected Size '389489', got '%s'", entries[0].Size)
+	if entries[0].Size != 389489 {
+		t.Errorf("expected Size '389489', got '%d'", entries[0].Size)
 	}
 	if entries[0].SHA256 != "9fc1b672e39c67284a935ccb159b433ed320106a924c98d4f9a86f9c660bb175" {
 		t.Errorf("incorrect SHA256 for first entry: %s", entries[0].SHA256)
@@ -47,8 +46,8 @@ SHA256:
 	if entries[1].Filename != "contrib/Contents-all.diff/Index" {
 		t.Errorf("expected Filename 'contrib/Contents-all.diff/Index', got '%s'", entries[1].Filename)
 	}
-	if entries[1].Size != "10605" {
-		t.Errorf("expected Size '10605', got '%s'", entries[1].Size)
+	if entries[1].Size != 10605 {
+		t.Errorf("expected Size '10605', got '%d'", entries[1].Size)
 	}
 	if entries[1].SHA256 != "eb31200171780aa32dd72882de861f9a8d0ecb09ba79e93804171d6f9a24e9db" {
 		t.Errorf("incorrect SHA256 for second entry: %s", entries[1].SHA256)
@@ -59,8 +58,8 @@ func TestParseReleaseReader_NoHashes(t *testing.T) {
 	input := `Origin: Debian
 Suite: stable
 `
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
+	scanner := strings.NewReader(input)
+	entries := make([]*File, 0)
 
 	for entry := range ParseReleaseReader(scanner) {
 		newEntry := *entry
@@ -81,8 +80,8 @@ SHA1:
 SHA256:
  ghi 300 file3
 `
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
+	scanner := strings.NewReader(input)
+	entries := make([]*File, 0)
 
 	for entry := range ParseReleaseReader(scanner) {
 		newEntry := *entry
@@ -97,8 +96,8 @@ SHA256:
 	if entries[0].SHA256 != "ghi" {
 		t.Errorf("expected SHA256 'ghi', got '%s'", entries[0].SHA256)
 	}
-	if entries[0].Size != "300" {
-		t.Errorf("expected Size '300', got '%s'", entries[0].Size)
+	if entries[0].Size != 300 {
+		t.Errorf("expected Size '300', got '%d'", entries[0].Size)
 	}
 	if entries[0].Filename != "file3" {
 		t.Errorf("expected Filename 'file3', got '%s'", entries[0].Filename)
@@ -121,8 +120,8 @@ iQIzBAEBCAAdFiEETLUBkCB7R1ij9zp5btDnuCZD4TEFAmkuS3QACgkQbtDnuCZD
 4THMAhAAnnxhDTMxtpX2bi/fqqATbhFRNNITD31Cd5YshMbqffqdmrqGVrididc3
 -----END PGP SIGNATURE-----
 `
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
+	scanner := strings.NewReader(input)
+	entries := make([]*File, 0)
 
 	for entry := range ParseReleaseReader(scanner) {
 		newEntry := *entry
@@ -171,8 +170,8 @@ iQIzBAEBCAAdFiEETLUBkCB7R1ij9zp5btDnuCZD4TEFAmkuS3QACgkQbtDnuCZD
 4THMAhAAnnxhDTMxtpX2bi/fqqATbhFRNNITD31Cd5YshMbqffqdmrqGVrididc3
 -----END PGP SIGNATURE-----
 `
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
+	scanner := strings.NewReader(input)
+	entries := make([]*File, 0)
 
 	for entry := range ParseReleaseReader(scanner) {
 		newEntry := *entry
@@ -188,8 +187,8 @@ iQIzBAEBCAAdFiEETLUBkCB7R1ij9zp5btDnuCZD4TEFAmkuS3QACgkQbtDnuCZD
 	if entries[0].Filename != "contrib/Contents-all" {
 		t.Errorf("expected Filename 'contrib/Contents-all', got '%s'", entries[0].Filename)
 	}
-	if entries[0].Size != "389489" {
-		t.Errorf("expected Size '389489', got '%s'", entries[0].Size)
+	if entries[0].Size != 389489 {
+		t.Errorf("expected Size '389489', got '%d'", entries[0].Size)
 	}
 	if entries[0].SHA256 != "9fc1b672e39c67284a935ccb159b433ed320106a924c98d4f9a86f9c660bb175" {
 		t.Errorf("incorrect SHA256 for first entry: %s", entries[0].SHA256)
@@ -200,8 +199,8 @@ iQIzBAEBCAAdFiEETLUBkCB7R1ij9zp5btDnuCZD4TEFAmkuS3QACgkQbtDnuCZD
 	if last.Filename != "contrib/Contents-amd64.diff/Index" {
 		t.Errorf("expected Filename 'contrib/Contents-amd64.diff/Index', got '%s'", last.Filename)
 	}
-	if last.Size != "9483" {
-		t.Errorf("expected Size '9483', got '%s'", last.Size)
+	if last.Size != 9483 {
+		t.Errorf("expected Size '9483', got '%d'", last.Size)
 	}
 	if last.SHA256 != "2be6447623d0d92bc0af3b2dd285f64a92c99b88bbd98cb1f7a23ad23d0913ad" {
 		t.Errorf("incorrect SHA256 for last entry: %s", last.SHA256)

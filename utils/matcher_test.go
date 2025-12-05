@@ -21,7 +21,7 @@ var testCases = []struct {
 	{"/debian/pool/main/g/gcc/gcc_10.2.1-1_amd64.deb", PackageTypeAPT, "DEB包文件"},
 	{"/ubuntu/dists/jammy/", PackageTypeAPT, "APT发行版路径"},
 	{"/debian/pool/contrib/", PackageTypeAPT, "APT软件池"},
-	{"/by-hash/SHA256/abc123", PackageTypeAPT, "哈希请求(默认APT)"},
+	{"/by-hash/SHA256/2a4f602eab0793435cd6b26bfcf95650efb84b10a9201c3174774fd2d919c71b", PackageTypeAPT, "哈希请求(默认APT)"},
 
 	// 未知类型
 	{"/other/file.txt", PackageTypeUnknown, "未知文件类型"},
@@ -151,6 +151,78 @@ func BenchmarkDetectPackageTypeFast(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		for _, path := range benchmarkPaths {
 			DetectPackageTypeFast(path)
+		}
+	}
+}
+
+// 索引文件测试数据
+var indexFileTestPaths = []struct {
+	path     string
+	expected bool
+	desc     string
+}{
+	// 正例
+	{"/alpine/edge/main/x86_64/APKINDEX.tar.gz", true, "APKINDEX.tar.gz"},
+	{"/debian/dists/bookworm/InRelease", true, "InRelease"},
+	{"/debian/dists/bookworm/Release", true, "Release"},
+	{"/debian/dists/bookworm/main/binary-amd64/Packages", true, "Packages"},
+	{"/debian/dists/bookworm/main/binary-amd64/Packages.gz", true, "Packages.gz"},
+	{"/debian/dists/bookworm/main/binary-amd64/Packages.bz2", true, "Packages.bz2"},
+	{"/debian/dists/bookworm/main/binary-amd64/Packages.xz", true, "Packages.xz"},
+	{"/debian/dists/bookworm/main/binary-amd64/Packages.lzma", true, "Packages.lzma"},
+	{"/debian/dists/bookworm/main/source/Sources", true, "Sources"},
+	{"/debian/dists/bookworm/main/source/Sources.gz", true, "Sources.gz"},
+	{"/debian/dists/bookworm/main/source/Sources.bz2", true, "Sources.bz2"},
+	{"/debian/dists/bookworm/main/source/Sources.xz", true, "Sources.xz"},
+	{"/debian/dists/bookworm/main/source/Sources.lzma", true, "Sources.lzma"},
+	// 负例
+	{"/alpine/edge/main/x86_64/package.apk", false, "APK包文件"},
+	{"/debian/pool/main/g/gcc/gcc_10.2.1-1_amd64.deb", false, "DEB包文件"},
+	{"/other/file.txt", false, "普通文件"},
+	{"/dists/bookworm/main/binary-amd64/", false, "目录"},
+}
+
+func TestIsIndexFile(t *testing.T) {
+	for _, tc := range indexFileTestPaths {
+		t.Run(tc.desc, func(t *testing.T) {
+			slow := isIndexFileSlow(tc.path)
+			fast := isIndexFileFast(tc.path)
+			if slow != tc.expected {
+				t.Errorf("isIndexFileSlow(%q) = %v; want %v", tc.path, slow, tc.expected)
+			}
+			if fast != tc.expected {
+				t.Errorf("isIndexFileFast(%q) = %v; want %v", tc.path, fast, tc.expected)
+			}
+			if slow != fast {
+				t.Errorf("isIndexFileSlow(%q) = %v, isIndexFileFast(%q) = %v, mismatch", tc.path, slow, tc.path, fast)
+			}
+		})
+	}
+}
+
+// 性能基准测试
+func BenchmarkIsIndexFileSlow(b *testing.B) {
+	paths := make([]string, 0, len(indexFileTestPaths))
+	for _, tc := range indexFileTestPaths {
+		paths = append(paths, tc.path)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, path := range paths {
+			isIndexFileSlow(path)
+		}
+	}
+}
+
+func BenchmarkIsIndexFileFast(b *testing.B) {
+	paths := make([]string, 0, len(indexFileTestPaths))
+	for _, tc := range indexFileTestPaths {
+		paths = append(paths, tc.path)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, path := range paths {
+			isIndexFileFast(path)
 		}
 	}
 }

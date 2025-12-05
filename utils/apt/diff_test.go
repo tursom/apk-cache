@@ -1,7 +1,6 @@
 package apt
 
 import (
-	"bufio"
 	"strings"
 	"testing"
 )
@@ -22,11 +21,9 @@ SHA256: 3b6b9485084ee9133d6aec662e6cb2bf90c840237c04c7d4a63c66760d0d7f57
 
 .
 `
+	entries := make([]*File, 0)
 
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
-
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		newEntry := *entry
 		entries = append(entries, &newEntry)
 	}
@@ -42,8 +39,8 @@ SHA256: 3b6b9485084ee9133d6aec662e6cb2bf90c840237c04c7d4a63c66760d0d7f57
 	if entry.Filename != "pool/non-free-firmware/n/nvidia-graphics-drivers/firmware-nvidia-gsp_550.163.01-4~bpo13+1_amd64.deb" {
 		t.Errorf("unexpected Filename: %s", entry.Filename)
 	}
-	if entry.Size != "37155432" {
-		t.Errorf("expected Size '37155432', got '%s'", entry.Size)
+	if entry.Size != 37155432 {
+		t.Errorf("expected Size '37155432', got '%d'", entry.Size)
 	}
 	if entry.SHA256 != "3b6b9485084ee9133d6aec662e6cb2bf90c840237c04c7d4a63c66760d0d7f57" {
 		t.Errorf("unexpected SHA256: %s", entry.SHA256)
@@ -67,11 +64,9 @@ Priority: optional
 
 .
 `
+	entries := make([]*File, 0)
 
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
-
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		newEntry := *entry
 		entries = append(entries, &newEntry)
 	}
@@ -127,11 +122,9 @@ SHA256: bbbb2222
 
 .
 `
+	entries := make([]*File, 0)
 
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
-
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		newEntry := *entry
 		entries = append(entries, &newEntry)
 	}
@@ -171,11 +164,9 @@ SHA256: hash2
 
 .
 `
+	entries := make([]*File, 0)
 
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
-
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		newEntry := *entry
 		entries = append(entries, &newEntry)
 	}
@@ -194,10 +185,9 @@ SHA256: hash2
 
 func TestParseDiffReader_EmptyInput(t *testing.T) {
 	input := ""
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
+	entries := make([]*File, 0)
 
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		newEntry := *entry
 		entries = append(entries, &newEntry)
 	}
@@ -214,11 +204,9 @@ Package: pkg-no-end
 Filename: file.deb
 SHA256: hashvalue
 `
+	entries := make([]*File, 0)
 
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
-
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		newEntry := *entry
 		entries = append(entries, &newEntry)
 	}
@@ -245,11 +233,9 @@ Checksums-Sha256:
 
 .
 `
+	entries := make([]*File, 0)
 
-	scanner := bufio.NewScanner(strings.NewReader(input))
-	entries := make([]*AptDiffEntry, 0)
-
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		newEntry := *entry
 		entries = append(entries, &newEntry)
 	}
@@ -293,11 +279,9 @@ SHA256: hash3
 
 .
 `
-
-	scanner := bufio.NewScanner(strings.NewReader(input))
 	count := 0
 
-	for entry := range ParseDiffReader(scanner) {
+	for entry := range ParseDiffReader(strings.NewReader(input)) {
 		count++
 		if entry.Package == "pkg2" {
 			break // 提前中断

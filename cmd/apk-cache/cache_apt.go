@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -10,11 +11,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
+	"github.com/tursom/apk-cache/utils/apt"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
 
@@ -54,9 +55,9 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 对于 hash 请求，必须使用 URL 中的哈希值进行完整性校验
-		if isHashRequest(r.URL.Path) {
+		if utils.IsHashRequest(r.URL.Path) {
 			// 使用统一的哈希请求验证函数
-			valid, err := verifyHashRequest(cacheFile, r.URL.Path)
+			valid, err := verifyHashRequest(cacheFile, cacheFile, r.URL.Path)
 			if err != nil || !valid {
 				// 校验出错，视为缓存未命中
 				// 哈希不匹配，视为缓存未命中
@@ -67,7 +68,7 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			// 非 hash 请求，根据文件类型选择校验器
-			if strings.HasSuffix(cacheFile, ".deb") {
+			if apt.IsDebFile(cacheFile) {
 				// 使用 APTManager 校验 .deb 文件
 				valid, err := aptIntegrityManager.VerifyFileIntegrity(cacheFile)
 				if err != nil {
@@ -109,32 +110,52 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 保存到缓存（带文件锁）
-	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header); err != nil {
+	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header, &cacheSaveHandler{
+		beforeCacheRename: func(cacheFile string, tmpFileName string, data []byte) error {
+
+			// 对于 hash 请求，必须在 updateCacheFile 调用后校验 hash，不论校验器有没有开启
+			if utils.IsHashRequest(r.URL.Path) {
+				// 使用统一的哈希请求验证函数
+				valid, err := verifyHashRequest(cacheFile, tmpFileName, r.URL.Path)
+				if err != nil {
+					// 校验出错，记录错误但保留文件
+					log.Println(i18n.T("HashVerificationFailed", map[string]any{
+						"File":  cacheFile,
+						"Error": err,
+					}))
+				} else if !valid {
+					// 哈希不匹配，删除损坏的缓存文件
+					if err := os.Remove(cacheFile); err != nil {
+						log.Println(i18n.T("RemoveCorruptedCacheFailed", map[string]any{
+							"File":  cacheFile,
+							"Error": err,
+						}))
+					}
+					return errors.New(i18n.T("HashVerificationMismatch", map[string]any{
+						"Path": r.URL.Path,
+						"File": cacheFile,
+					}))
+				}
+				// 如果验证通过，verifyHashRequest 内部已经记录了成功日志
+			} else {
+				// 对于 .deb 文件，保存前先让完整性管理器加载以便后续校验
+				if ok, err := aptIntegrityManager.VerifyDataIntegrity(cacheFile, bytes.NewReader(data)); err != nil {
+					return err
+				} else if !ok {
+					return errors.New(i18n.T("CalculateFileHashFailed", map[string]any{"File": cacheFile}))
+				}
+			}
+
+			return nil
+		},
+	}); err != nil {
 		log.Println(i18n.T("SaveCacheFailed", map[string]any{"Error": err}))
 		return
 	}
 	log.Println(i18n.T("CacheSaved", map[string]any{"Path": cacheFile}))
 
-	// 对于 hash 请求，必须在 updateCacheFile 调用后校验 hash，不论校验器有没有开启
-	if isHashRequest(r.URL.Path) {
-		// 使用统一的哈希请求验证函数
-		valid, err := verifyHashRequest(cacheFile, r.URL.Path)
-		if err != nil {
-			// 校验出错，记录错误但保留文件
-			log.Println(i18n.T("HashVerificationFailed", map[string]any{
-				"File":  cacheFile,
-				"Error": err,
-			}))
-		} else if !valid {
-			// 哈希不匹配，删除损坏的缓存文件
-			if err := os.Remove(cacheFile); err != nil {
-				log.Println(i18n.T("RemoveCorruptedCacheFailed", map[string]any{
-					"File":  cacheFile,
-					"Error": err,
-				}))
-			}
-		}
-		// 如果验证通过，verifyHashRequest 内部已经记录了成功日志
+	if aptIntegrityManager.IsIndexFile(cacheFile) {
+		go aptIntegrityManager.LoadIndexFile(cacheFile)
 	}
 }
 
@@ -155,12 +176,6 @@ func fetchAPTFromUpstream(r *http.Request) (*http.Response, error) {
 func getAPTCacheFilePath(r *http.Request) string {
 	// 获取host信息，如果没有则使用默认值
 	host := r.Host
-	if host == "" {
-		host = "default"
-	}
-
-	// 清理host中的特殊字符，使其适合作为目录名
-	host = sanitizeHostForPath(host)
 
 	// 处理URL路径，如果是代理请求且包含完整URL，提取路径部分
 	urlPath := r.URL.Path
@@ -175,67 +190,7 @@ func getAPTCacheFilePath(r *http.Request) string {
 	}
 
 	// 构建包含host的缓存路径
-	safePath := filepath.Join(*cachePath, "apt", host, urlPath)
-	return safePath
-}
-
-// sanitizeHostForPath 清理host字符串，使其适合作为文件路径
-func sanitizeHostForPath(host string) string {
-	return sanitizeHostForPathOptimized(host)
-}
-
-// sanitizeHostForPathOriginal 原始实现版本
-func sanitizeHostForPathOriginal(host string) string {
-	// 替换不安全的字符
-	host = strings.ReplaceAll(host, ":", "_")
-	host = strings.ReplaceAll(host, "/", "_")
-	host = strings.ReplaceAll(host, "\\", "_")
-	host = strings.ReplaceAll(host, "..", "_")
-	host = strings.ReplaceAll(host, "*", "_")
-	host = strings.ReplaceAll(host, "?", "_")
-	host = strings.ReplaceAll(host, "\"", "_")
-	host = strings.ReplaceAll(host, "<", "_")
-	host = strings.ReplaceAll(host, ">", "_")
-	host = strings.ReplaceAll(host, "|", "_")
-
-	// 如果host为空，使用默认值
-	if host == "" {
-		host = "default"
-	}
-
-	return host
-}
-
-// sanitizeHostForPathOptimized 优化实现版本
-func sanitizeHostForPathOptimized(host string) string {
-	// 如果host为空，使用默认值
-	if host == "" {
-		return "default"
-	}
-
-	// 使用strings.Builder进行高效字符串构建
-	var builder strings.Builder
-	builder.Grow(len(host)) // 预分配容量，避免多次分配
-
-	// 遍历字符串，替换不安全字符
-	for i := 0; i < len(host); i++ {
-		switch host[i] {
-		case ':', '/', '\\', '*', '?', '"', '<', '>', '|':
-			builder.WriteByte('_')
-		case '.':
-			// 检查是否是 ".." 序列
-			if i+1 < len(host) && host[i+1] == '.' {
-				builder.WriteByte('_')
-				i++ // 跳过下一个点
-			} else {
-				builder.WriteByte('.')
-			}
-		default:
-			builder.WriteByte(host[i])
-		}
-	}
-
-	return builder.String()
+	return apt.GetAPTCacheFilePath(*cachePath, host, urlPath)
 }
 
 // handleAPTClientConditionalRequest 处理APT协议客户端的条件请求
@@ -338,74 +293,10 @@ func handleFileCacheConditionalRequest(w http.ResponseWriter, r *http.Request, c
 	return true
 }
 
-// isHashRequest 检查是否是 hash 请求
-func isHashRequest(path string) bool {
-	if len(path) < 45 {
-		return false
-	}
-
-	// 提前测试高频的 /by-hash/SHA256/3c2d4503889027ca51df58e16ec12798d6b438290662e006efab80806ddcb18c
-	if len(path) >= 80 && path[len(path)-80:len(path)-64] == "/by-hash/SHA256/" {
-		return true
-	}
-
-	// /by-hash/SHA1/
-	if len(path) >= 54 && path[len(path)-54:len(path)-40] == "/by-hash/SHA1/" {
-		return true
-	}
-
-	// /by-hash/MD5Sum/
-	if len(path) >= 48 && path[len(path)-48:len(path)-32] == "/by-hash/MD5Sum/" {
-		return true
-	}
-
-	// /by-hash/MD5/
-	if len(path) >= 45 && path[len(path)-45:len(path)-32] == "/by-hash/MD5/" {
-		return true
-	}
-
-	return false
-}
-
-// parseHashFromURL 从 URL 中解析哈希算法和哈希值
-func parseHashFromURL(path string) (string, string, error) {
-	// 解析 URL 路径，提取哈希算法和哈希值
-	// 格式: /xxx/by-hash/ALGORITHM/HASH_VALUE
-
-	// 提前测试高频的 /by-hash/SHA256/3c2d4503889027ca51df58e16ec12798d6b438290662e006efab80806ddcb18c
-	if len(path) >= 80 && path[len(path)-80:len(path)-64] == "/by-hash/SHA256/" {
-		return "SHA256", path[len(path)-64:], nil
-	}
-
-	i := strings.LastIndexByte(path, '/')
-	hashValue := path[i+1:]
-	path = path[:i]
-
-	i = strings.LastIndexByte(path, '/')
-	algorithm := path[i+1:]
-	path = path[:i]
-
-	if path[len(path)-8:] != "by-hash" {
-		return "", "", errors.New(i18n.T("InvalidHashURLFormat", map[string]any{"Path": path}))
-	}
-
-	// 验证算法是否支持
-	if supportedAlgorithms.Contains(algorithm) {
-		return "", "", errors.New(i18n.T("UnsupportedHashAlgorithm", map[string]any{"Algorithm": algorithm}))
-	}
-
-	// 验证哈希值格式（基本格式检查）
-	if len(hashValue) == 0 {
-		return "", "", errors.New(i18n.T("EmptyHashValue", nil))
-	}
-
-	return algorithm, hashValue, nil
-}
-
 // verifyFileWithHash 使用指定的哈希算法验证文件完整性
-func verifyFileWithHash(filePath, algorithm, expectedHash string) (bool, error) {
+func verifyFileWithHash(filePath, tmpFile, algorithm, expectedHash string) (bool, error) {
 	// 读取文件内容
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(tmpFile)
 	if err != nil {
 		return false, errors.New(i18n.T("ReadFileFailed", map[string]any{"Error": err}))
 	}
@@ -431,9 +322,9 @@ func verifyFileWithHash(filePath, algorithm, expectedHash string) (bool, error) 
 }
 
 // verifyHashRequest 验证哈希请求的文件完整性
-func verifyHashRequest(cacheFile, path string) (bool, error) {
+func verifyHashRequest(cacheFile, tmpFile, path string) (bool, error) {
 	// 解析 URL 中的哈希算法和哈希值
-	algorithm, expectedHash, err := parseHashFromURL(path)
+	algorithm, expectedHash, err := utils.ParseHashFromPath(path)
 	if err != nil {
 		log.Println(i18n.T("ParseHashFromURLFailed", map[string]any{
 			"Path":  path,
@@ -443,7 +334,7 @@ func verifyHashRequest(cacheFile, path string) (bool, error) {
 	}
 
 	// 使用 URL 中的哈希值验证文件完整性
-	valid, err := verifyFileWithHash(cacheFile, algorithm, expectedHash)
+	valid, err := verifyFileWithHash(cacheFile, tmpFile, algorithm, expectedHash)
 	if err != nil {
 		log.Println(i18n.T("HashVerificationFailed", map[string]any{
 			"File":  cacheFile,
@@ -467,10 +358,4 @@ func verifyHashRequest(cacheFile, path string) (bool, error) {
 		"Algorithm": algorithm,
 	}))
 	return true, nil
-}
-
-// isIndexFile 检查文件是否是 apt 索引文件（Packages 或 Sources）
-func isIndexFile(path string) bool {
-	base := filepath.Base(path)
-	return strings.HasPrefix(base, "Packages") || strings.HasPrefix(base, "Sources")
 }

@@ -155,13 +155,124 @@ func DetectPackageTypeFast(path string) PackageType {
 
 // IsIndexFile 检查路径是否为索引文件
 func IsIndexFile(path string) bool {
+	return isIndexFileFast(path)
+}
+
+func isIndexFileSlow(path string) bool {
 	return strings.HasSuffix(path, "/APKINDEX.tar.gz") ||
 		strings.HasSuffix(path, "/InRelease") ||
 		strings.HasSuffix(path, "/Release") ||
 		strings.HasSuffix(path, "/Packages") ||
 		strings.HasSuffix(path, "/Packages.gz") ||
 		strings.HasSuffix(path, "/Packages.bz2") ||
+		strings.HasSuffix(path, "/Packages.xz") ||
+		strings.HasSuffix(path, "/Packages.lzma") ||
 		strings.HasSuffix(path, "/Sources") ||
 		strings.HasSuffix(path, "/Sources.gz") ||
-		strings.HasSuffix(path, "/Sources.bz2")
+		strings.HasSuffix(path, "/Sources.bz2") ||
+		strings.HasSuffix(path, "/Sources.xz") ||
+		strings.HasSuffix(path, "/Sources.lzma")
+}
+
+func isIndexFileFast(path string) bool {
+	n := len(path)
+	if n < 8 { // 最短的后缀是 "/Release" 长度 8
+		return false
+	}
+	last := path[n-1]
+	switch last {
+	case 'z': // .gz, .xz
+		// 检查 "/APKINDEX.tar.gz"
+		if n >= 16 && path[n-16:n-1] == "/APKINDEX.tar.g" {
+			return true
+		}
+		// 检查 "/Packages.gz"
+		if n >= 12 && path[n-12:n-1] == "/Packages.g" {
+			return true
+		}
+		// 检查 "/Sources.gz"
+		if n >= 11 && path[n-11:n-1] == "/Sources.g" {
+			return true
+		}
+		// 检查 "/Packages.xz"
+		if n >= 12 && path[n-12:n-1] == "/Packages.x" {
+			return true
+		}
+		// 检查 "/Sources.xz"
+		if n >= 11 && path[n-11:n-1] == "/Sources.x" {
+			return true
+		}
+		return false
+	case 'e': // Release, InRelease
+		// 检查 "/Release"
+		if n >= 8 && path[n-8:n-1] == "/Releas" {
+			return true
+		}
+		// 检查 "/InRelease"
+		if n >= 10 && path[n-10:n-1] == "/InReleas" {
+			return true
+		}
+		return false
+	case 's': // Packages, Sources
+		// 检查 "/Packages"
+		if n >= 9 && path[n-9:n-1] == "/Package" {
+			return true
+		}
+		// 检查 "/Sources"
+		if n >= 8 && path[n-8:n-1] == "/Source" {
+			return true
+		}
+		return false
+	case '2': // .bz2
+		// 检查 "/Packages.bz2"
+		if n >= 13 && path[n-13:n-1] == "/Packages.bz" {
+			return true
+		}
+		// 检查 "/Sources.bz2"
+		if n >= 12 && path[n-12:n-1] == "/Sources.bz" {
+			return true
+		}
+		return false
+	case 'a': // .lzma
+		// 检查 "/Packages.lzma"
+		if n >= 14 && path[n-14:n-1] == "/Packages.lzm" {
+			return true
+		}
+		// 检查 "/Sources.lzma"
+		if n >= 13 && path[n-13:n-1] == "/Sources.lzm" {
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// IsHashRequest 检查是否是 hash 请求
+func IsHashRequest(path string) bool {
+	if len(path) < 45 {
+		return false
+	}
+
+	// 提前测试高频的 /by-hash/SHA256/3c2d4503889027ca51df58e16ec12798d6b438290662e006efab80806ddcb18c
+	if len(path) >= 80 && path[len(path)-80:len(path)-64] == "/by-hash/SHA256/" {
+		return true
+	}
+
+	// /by-hash/SHA1/
+	if len(path) >= 54 && path[len(path)-54:len(path)-40] == "/by-hash/SHA1/" {
+		return true
+	}
+
+	// /by-hash/MD5Sum/
+	if len(path) >= 48 && path[len(path)-48:len(path)-32] == "/by-hash/MD5Sum/" {
+		return true
+	}
+
+	// /by-hash/MD5/
+	if len(path) >= 45 && path[len(path)-45:len(path)-32] == "/by-hash/MD5/" {
+		return true
+	}
+
+	return false
 }
