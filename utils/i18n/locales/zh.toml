@@ -7,9 +7,6 @@ other = "上游服务器: {{.URL}}"
 [CacheDirectory]
 other = "缓存目录: {{.Path}}"
 
-[SOCKS5Proxy]
-other = "SOCKS5 代理: {{.Proxy}}"
-
 [ProxyServer]
 other = "代理服务器: {{.Proxy}}"
 
@@ -36,9 +33,6 @@ other = "索引缓存已过期: {{.Path}}"
 
 [CacheExpired]
 other = "缓存已过期: {{.Path}}"
-
-[CachedByOther]
-other = "文件已被其他请求缓存: {{.Path}}"
 
 [WriteCacheFailed]
 other = "写入缓存失败: {{.Error}}"
@@ -72,12 +66,6 @@ other = "缓存写入失败: {{.Error}}"
 
 [RenameCacheFileFailed]
 other = "重命名缓存文件失败: {{.Error}}"
-
-[ParseProxyFailed]
-other = "解析代理地址失败: {{.Error}}"
-
-[CreateDialerFailed]
-other = "创建 SOCKS5 dialer 失败: {{.Error}}"
 
 [FallbackUpstream]
 other = "使用备用上游服务器 #{{.Index}}: {{.Name}}"
@@ -242,73 +230,12 @@ other = "无效的内存缓存最大文件大小: {{.Error}}"
 other = "文件过大，无法缓存到内存: {{.Path}} ({{.Size}} 字节，最大 {{.Max}} 字节)"
 
 # 健康检查相关翻译
-[HealthCheckEnabled]
-other = "健康检查已启用: 间隔 {{.Interval}}, 超时 {{.Timeout}}"
-
-[HealthCheckDisabled]
-other = "健康检查已禁用"
-
-[HealthCheckStarted]
-other = "健康检查已启动"
-
-[HealthCheckStopped]
-other = "健康检查已停止"
-
-[HealthCheckComponentHealthy]
-other = "组件 {{.Component}} 健康"
-
-[HealthCheckComponentUnhealthy]
-other = "组件 {{.Component}} 不健康: {{.Error}}"
-
 [HealthCheckUpstreamHealthy]
 other = "上游服务器 {{.URL}} 健康"
 
 [HealthCheckUpstreamUnhealthy]
 other = "上游服务器 {{.URL}} 不健康: {{.Error}}"
 
-[HealthCheckFileSystemHealthy]
-other = "文件系统健康: {{.Free}} 可用，{{.Used}} 已用"
-
-[HealthCheckFileSystemUnhealthy]
-other = "文件系统不健康: {{.Error}}"
-
-[HealthCheckMemoryCacheHealthy]
-other = "内存缓存健康: {{.Items}} 个项目，{{.Size}} 字节"
-
-[HealthCheckMemoryCacheUnhealthy]
-other = "内存缓存不健康: {{.Error}}"
-
-[HealthCheckCacheQuotaHealthy]
-other = "缓存配额健康: {{.Used}}/{{.Max}} 字节"
-
-[HealthCheckCacheQuotaUnhealthy]
-other = "缓存配额不健康: {{.Error}}"
-
-[HealthCheckSelfHealingTriggered]
-other = "组件 {{.Component}} 触发自愈机制: {{.Action}}"
-
-[HealthCheckSelfHealingCompleted]
-other = "组件 {{.Component}} 自愈完成"
-
-[HealthCheckSelfHealingFailed]
-other = "组件 {{.Component}} 自愈失败: {{.Error}}"
-
-[HealthCheckSystemHealthy]
-other = "系统健康"
-
-[HealthCheckSystemUnhealthy]
-other = "系统不健康: {{.Error}}"
-
-[HealthCheckInvalidInterval]
-other = "无效的健康检查间隔: {{.Error}}"
-
-[HealthCheckInvalidTimeout]
-other = "无效的健康检查超时: {{.Error}}"
-
-[HealthCheckPrometheusEnabled]
-other = "健康检查的 Prometheus 指标已启用"
-
-# 请求限流相关翻译
 [RateLimitEnabled]
 other = "请求限流已启用: {{.Rate}} 请求/秒，突发容量: {{.Burst}}"
 
@@ -319,21 +246,6 @@ other = "请求限流已禁用"
 other = "请求频率超过限制"
 
 # HTTP 代理相关翻译
-[HTTPProxyEnabled]
-other = "HTTP 代理功能已启用"
-
-[HTTPProxyDisabled]
-other = "HTTP 代理功能已禁用"
-
-[ProxyCacheEnabled]
-other = "代理缓存已启用"
-
-[ProxyCacheDisabled]
-other = "代理缓存已禁用"
-
-[HTTPProxyMode]
-other = "运行在 HTTP 代理模式"
-
 [HTTPSProxyRequest]
 other = "HTTPS 代理请求: {{.Method}} {{.Host}}"
 
@@ -349,9 +261,6 @@ other = "HTTP 代理转发到 {{.URL}} 失败: {{.Error}}"
 [HTTPProxyCopyResponseFailed]
 other = "HTTP 代理复制响应失败: {{.Error}}"
 
-[TLSHandshakeFailed]
-other = "TLS 握手失败 {{.Host}}: {{.Error}}"
-
 [ProxyConnectionEstablished]
 other = "代理连接已建立: 代理 {{.Proxy}} -> 目标 {{.Target}}"
 
@@ -362,21 +271,11 @@ other = "代理 IP 匹配器创建成功 (豁免 CIDR: {{.ExemptCIDRs}}, 信任�
 [APTProxyRequest]
 other = "APT 代理请求: {{.Method}} {{.URL}} 主机: {{.Host}}"
 
-[InvalidTargetURL]
-other = "无效的目标 URL: {{.Error}}"
-
-[FailedToCreateRequest]
-other = "创建请求失败: {{.Error}}"
-
-# 数据完整性相关翻译
 [DataIntegrityEnabled]
 other = "数据完整性检查已启用: 间隔 {{.Interval}}, 自动修复: {{.AutoRepair}}"
 
 [DataIntegrityDisabled]
 other = "数据完整性检查已禁用"
-
-[DataIntegrityInitFailed]
-other = "数据完整性初始化失败: {{.Error}}"
 
 [DataIntegrityCheckComplete]
 other = "数据完整性检查完成: 检查 {{.Checked}} 个文件，修复 {{.Repaired}} 个文件，耗时 {{.Duration}}"
@@ -389,12 +288,6 @@ other = "定期数据完整性检查失败: {{.Error}}"
 
 [InvalidDataIntegrityCheckInterval]
 other = "无效的数据完整性检查间隔: {{.Error}}"
-
-[InitializingFileHashes]
-other = "正在初始化文件哈希值..."
-
-[FileHashesInitialized]
-other = "文件哈希值初始化完成: {{.Count}} 个文件"
 
 [CalculateFileHashFailed]
 other = "计算文件哈希失败 {{.File}}: {{.Error}}"
@@ -428,9 +321,6 @@ other = "已清理孤立哈希记录: {{.Count}} 个"
 
 [ReadFileFailed]
 other = "读取文件失败: {{.Error}}"
-
-[NoAvailableUpstreamServer]
-other = "没有可用的上游服务器"
 
 [InvalidHealthCheckInterval]
 other = "无效的健康检查间隔: {{.Error}}"
@@ -482,9 +372,6 @@ other = "哈希验证失败 {{.File}}: {{.Error}}"
 [HashVerificationMismatch]
 other = "哈希验证不匹配 {{.Path}} (文件: {{.File}}, 算法: {{.Algorithm}}, 期望: {{.Expected}})"
 
-[CacheHitWithHashVerification]
-other = "缓存命中（哈希验证通过）: {{.Path}} (算法: {{.Algorithm}})"
-
 [InvalidHashURLFormat]
 other = "无效的哈希 URL 格式"
 
@@ -504,27 +391,8 @@ other = "哈希验证通过: {{.Path}} (算法: {{.Algorithm}})"
 [ClientCacheHeaderSaved]
 other = "客户端缓存头已保存: {{.Path}} ({{.Header}})"
 
-[ClientCacheOutdated]
-other = "客户端缓存已过期: {{.Path}} (当前: {{.Current}}, 最后有效: {{.LastValid}})"
-
-# 数据持久化相关翻译
 [CreateDataDirFailed]
 other = "创建数据目录失败: {{.Error}}"
-
-[CreatePersistenceDirFailed]
-other = "创建持久化目录失败: {{.Error}}"
-
-[SerializeHashesFailed]
-other = "序列化哈希数据失败: {{.Error}}"
-
-[WritePersistenceFileFailed]
-other = "写入持久化文件失败: {{.Error}}"
-
-[ReadPersistenceFileFailed]
-other = "读取持久化文件失败: {{.Error}}"
-
-[DeserializeHashesFailed]
-other = "反序列化哈希数据失败: {{.Error}}"
 
 [FileHashesLoaded]
 other = "文件哈希已加载: {{.Count}} 个文件"
@@ -556,3 +424,70 @@ other = "关闭数据完整性管理器失败: {{.Error}}"
 
 [ServerStopped]
 other = "服务器已停止"
+
+# APT 管理器相关翻译
+[GetAbsolutePathFailed]
+other = "警告：获取绝对路径失败 {{.Path}}：{{.Error}}"
+
+[LoadingIndexFile]
+other = "正在加载索引文件：{{.Path}}"
+
+[ParseHashFromPathFailed]
+other = "从路径解析哈希失败 {{.Path}}：{{.Error}}"
+
+[GetHashByValueFailed]
+other = "按哈希值获取失败 {{.Hash}}：{{.Error}}"
+
+[NoHashRecordFound]
+other = "未找到哈希值 {{.Hash}} 的记录"
+
+[ParseFilePathFailed]
+other = "解析文件路径失败 {{.Path}}：{{.Error}}"
+
+[ParsedIndexFile]
+other = "已解析索引文件：host={{.Host}}, path={{.Path}}, filename={{.Filename}}"
+
+[ParsingInReleaseFile]
+other = "正在解析 InRelease 文件：{{.Path}}"
+
+[ParseInReleaseFileFailed]
+other = "解析 InRelease 文件失败 {{.Path}}：{{.Error}}"
+
+[InReleaseFileLoaded]
+other = "成功加载 InRelease 文件：{{.Path}}"
+
+[ParsingPackagesFile]
+other = "正在解析 Packages 文件：{{.Path}}"
+
+[ParsePackagesFileFailed]
+other = "解析 Packages 文件失败 {{.Path}}：{{.Error}}"
+
+[PackagesFileLoaded]
+other = "成功加载 Packages 文件：{{.Path}}"
+
+[IndexFileTypeNotImplemented]
+other = "索引文件类型 {{.Filename}} 尚未实现"
+
+[StartingIntegrityVerification]
+other = "开始文件完整性验证：{{.File}}"
+
+[OpenFileFailed]
+other = "打开文件失败：{{.File}}，错误：{{.Error}}"
+
+[ComputeHashFailed]
+other = "计算文件哈希失败：{{.File}}，错误：{{.Error}}"
+
+[RetrieveStoredHashFailed]
+other = "检索存储的哈希失败：{{.File}}，错误：{{.Error}}"
+
+[NoStoredHash]
+other = "文件 {{.File}} 无存储哈希，视为有效"
+
+[FileIntegrityVerifiedSuccess]
+other = "文件完整性验证成功：{{.File}}"
+
+[FileIntegrityVerifiedFailed]
+other = "文件完整性验证失败：{{.File}}"
+
+[LastHealthCheckUpdateTime]
+other = "上次健康检查更新时间：{{.Time}}"

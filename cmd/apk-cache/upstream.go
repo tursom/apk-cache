@@ -111,11 +111,6 @@ func (u *UpstreamServer) GetHealthStatus() map[string]any {
 	}
 }
 
-// ForceHealthCheck 强制执行健康检查（忽略缓存）
-func (u *UpstreamServer) ForceHealthCheck() bool {
-	return u.checkHealth()
-}
-
 // checkHealth 执行实际的健康检查（使用 singleflight 合并并发请求）
 func (u *UpstreamServer) checkHealth() bool {
 	// 使用 singleflight 确保对同一服务器的并发健康检查只执行一次
@@ -128,6 +123,9 @@ func (u *UpstreamServer) checkHealth() bool {
 
 // doHealthCheck 执行实际的健康检查逻辑（无并发合并）
 func (u *UpstreamServer) doHealthCheck() bool {
+	// 打印上次更新时间
+	log.Println(i18n.T("LastHealthCheckUpdateTime", map[string]any{"Time": u.lastHealthCheck}))
+
 	// 使用健康检查专用超时
 	timeout := *healthCheckTimeout
 	if timeout <= 0 {
@@ -336,13 +334,6 @@ func (m *UpstreamManager) getServers() []*UpstreamServer {
 		return nil
 	}
 	return *ptr
-}
-
-// ForceHealthCheckAll 强制检查所有服务器的健康状态
-func (m *UpstreamManager) ForceHealthCheckAll() {
-	for _, server := range m.getServers() {
-		server.ForceHealthCheck()
-	}
 }
 
 // FetchFromUpstream 从上游服务器获取数据，支持故障转移

@@ -7,9 +7,6 @@ other = "Upstream server: {{.URL}}"
 [CacheDirectory]
 other = "Cache directory: {{.Path}}"
 
-[SOCKS5Proxy]
-other = "SOCKS5 proxy: {{.Proxy}}"
-
 [ProxyServer]
 other = "Proxy server: {{.Proxy}}"
 
@@ -36,9 +33,6 @@ other = "Index cache expired: {{.Path}}"
 
 [CacheExpired]
 other = "Cache expired: {{.Path}}"
-
-[CachedByOther]
-other = "File cached by another request: {{.Path}}"
 
 [WriteCacheFailed]
 other = "Write cache failed: {{.Error}}"
@@ -72,12 +66,6 @@ other = "Cache write failed: {{.Error}}"
 
 [RenameCacheFileFailed]
 other = "Failed to rename cache file: {{.Error}}"
-
-[ParseProxyFailed]
-other = "Failed to parse proxy address: {{.Error}}"
-
-[CreateDialerFailed]
-other = "Failed to create SOCKS5 dialer: {{.Error}}"
 
 [FallbackUpstream]
 other = "Using fallback upstream server #{{.Index}}: {{.Name}}"
@@ -242,73 +230,12 @@ other = "Invalid memory cache max file size: {{.Error}}"
 other = "File too large for memory cache: {{.Path}} ({{.Size}} bytes, max {{.Max}} bytes)"
 
 # Health check related translations
-[HealthCheckEnabled]
-other = "Health check enabled: interval {{.Interval}}, timeout {{.Timeout}}"
-
-[HealthCheckDisabled]
-other = "Health check disabled"
-
-[HealthCheckStarted]
-other = "Health check started"
-
-[HealthCheckStopped]
-other = "Health check stopped"
-
-[HealthCheckComponentHealthy]
-other = "Component {{.Component}} is healthy"
-
-[HealthCheckComponentUnhealthy]
-other = "Component {{.Component}} is unhealthy: {{.Error}}"
-
 [HealthCheckUpstreamHealthy]
 other = "Upstream server {{.URL}} is healthy"
 
 [HealthCheckUpstreamUnhealthy]
 other = "Upstream server {{.URL}} is unhealthy: {{.Error}}"
 
-[HealthCheckFileSystemHealthy]
-other = "File system is healthy: {{.Free}} free, {{.Used}} used"
-
-[HealthCheckFileSystemUnhealthy]
-other = "File system is unhealthy: {{.Error}}"
-
-[HealthCheckMemoryCacheHealthy]
-other = "Memory cache is healthy: {{.Items}} items, {{.Size}} bytes"
-
-[HealthCheckMemoryCacheUnhealthy]
-other = "Memory cache is unhealthy: {{.Error}}"
-
-[HealthCheckCacheQuotaHealthy]
-other = "Cache quota is healthy: {{.Used}}/{{.Max}} bytes"
-
-[HealthCheckCacheQuotaUnhealthy]
-other = "Cache quota is unhealthy: {{.Error}}"
-
-[HealthCheckSelfHealingTriggered]
-other = "Self-healing triggered for component {{.Component}}: {{.Action}}"
-
-[HealthCheckSelfHealingCompleted]
-other = "Self-healing completed for component {{.Component}}"
-
-[HealthCheckSelfHealingFailed]
-other = "Self-healing failed for component {{.Component}}: {{.Error}}"
-
-[HealthCheckSystemHealthy]
-other = "System is healthy"
-
-[HealthCheckSystemUnhealthy]
-other = "System is unhealthy: {{.Error}}"
-
-[HealthCheckInvalidInterval]
-other = "Invalid health check interval: {{.Error}}"
-
-[HealthCheckInvalidTimeout]
-other = "Invalid health check timeout: {{.Error}}"
-
-[HealthCheckPrometheusEnabled]
-other = "Prometheus metrics enabled for health checks"
-
-# Rate limiting related translations
 [RateLimitEnabled]
 other = "Rate limiting enabled: {{.Rate}} req/s, burst: {{.Burst}}"
 
@@ -319,21 +246,6 @@ other = "Rate limiting disabled"
 other = "Rate limit exceeded"
 
 # HTTP proxy related translations
-[HTTPProxyEnabled]
-other = "HTTP proxy functionality enabled"
-
-[HTTPProxyDisabled]
-other = "HTTP proxy functionality disabled"
-
-[ProxyCacheEnabled]
-other = "Proxy cache enabled"
-
-[ProxyCacheDisabled]
-other = "Proxy cache disabled"
-
-[HTTPProxyMode]
-other = "Running in HTTP proxy mode"
-
 [HTTPSProxyRequest]
 other = "HTTPS proxy request: {{.Method}} {{.Host}}"
 
@@ -349,9 +261,6 @@ other = "HTTP proxy forward failed to {{.URL}}: {{.Error}}"
 [HTTPProxyCopyResponseFailed]
 other = "HTTP proxy copy response failed: {{.Error}}"
 
-[TLSHandshakeFailed]
-other = "TLS handshake failed {{.Host}}: {{.Error}}"
-
 [ProxyConnectionEstablished]
 other = "Proxy connection established: proxy {{.Proxy}} -> target {{.Target}}"
 
@@ -362,21 +271,11 @@ other = "Proxy IP matcher created successfully (exempt CIDRs: {{.ExemptCIDRs}}, 
 [APTProxyRequest]
 other = "APT proxy request: {{.Method}} {{.URL}} Host: {{.Host}}"
 
-[InvalidTargetURL]
-other = "Invalid target URL: {{.Error}}"
-
-[FailedToCreateRequest]
-other = "Failed to create request: {{.Error}}"
-
-# Data integrity related translations
 [DataIntegrityEnabled]
 other = "Data integrity check enabled: interval {{.Interval}}, auto repair: {{.AutoRepair}}"
 
 [DataIntegrityDisabled]
 other = "Data integrity check disabled"
-
-[DataIntegrityInitFailed]
-other = "Data integrity initialization failed: {{.Error}}"
 
 [DataIntegrityCheckComplete]
 other = "Data integrity check complete: checked {{.Checked}} files, repaired {{.Repaired}} files, took {{.Duration}}"
@@ -389,12 +288,6 @@ other = "Periodic data integrity check failed: {{.Error}}"
 
 [InvalidDataIntegrityCheckInterval]
 other = "Invalid data integrity check interval: {{.Error}}"
-
-[InitializingFileHashes]
-other = "Initializing file hashes..."
-
-[FileHashesInitialized]
-other = "File hashes initialized: {{.Count}} files"
 
 [CalculateFileHashFailed]
 other = "Failed to calculate file hash {{.File}}: {{.Error}}"
@@ -428,9 +321,6 @@ other = "Orphaned hashes cleaned: {{.Count}}"
 
 [ReadFileFailed]
 other = "Failed to read file: {{.Error}}"
-
-[NoAvailableUpstreamServer]
-other = "No available upstream server"
 
 [InvalidHealthCheckInterval]
 other = "Invalid health check interval: {{.Error}}"
@@ -482,9 +372,6 @@ other = "Hash verification failed {{.File}}: {{.Error}}"
 [HashVerificationMismatch]
 other = "Hash verification mismatch {{.Path}} (file: {{.File}}, algorithm: {{.Algorithm}}, expected: {{.Expected}})"
 
-[CacheHitWithHashVerification]
-other = "Cache hit (hash verification passed): {{.Path}} (algorithm: {{.Algorithm}})"
-
 [InvalidHashURLFormat]
 other = "Invalid hash URL format"
 
@@ -504,27 +391,8 @@ other = "Hash verification passed: {{.Path}} (algorithm: {{.Algorithm}})"
 [ClientCacheHeaderSaved]
 other = "Client cache header saved: {{.Path}} ({{.Header}})"
 
-[ClientCacheOutdated]
-other = "Client cache outdated: {{.Path}} (current: {{.Current}}, last valid: {{.LastValid}})"
-
-# Data persistence related translations
 [CreateDataDirFailed]
 other = "Failed to create data directory: {{.Error}}"
-
-[CreatePersistenceDirFailed]
-other = "Failed to create persistence directory: {{.Error}}"
-
-[SerializeHashesFailed]
-other = "Failed to serialize hash data: {{.Error}}"
-
-[WritePersistenceFileFailed]
-other = "Failed to write persistence file: {{.Error}}"
-
-[ReadPersistenceFileFailed]
-other = "Failed to read persistence file: {{.Error}}"
-
-[DeserializeHashesFailed]
-other = "Failed to deserialize hash data: {{.Error}}"
 
 [FileHashesLoaded]
 other = "File hashes loaded: {{.Count}} files"
@@ -556,3 +424,70 @@ other = "Failed to close data integrity manager: {{.Error}}"
 
 [ServerStopped]
 other = "Server stopped"
+
+# APT manager related translations
+[GetAbsolutePathFailed]
+other = "WARNING: failed to get absolute path for {{.Path}}: {{.Error}}"
+
+[LoadingIndexFile]
+other = "Loading index file: {{.Path}}"
+
+[ParseHashFromPathFailed]
+other = "Failed to parse hash from path {{.Path}}: {{.Error}}"
+
+[GetHashByValueFailed]
+other = "Failed to get hash by value {{.Hash}}: {{.Error}}"
+
+[NoHashRecordFound]
+other = "No hash record found for hash value {{.Hash}}"
+
+[ParseFilePathFailed]
+other = "Failed to parse file path {{.Path}}: {{.Error}}"
+
+[ParsedIndexFile]
+other = "Parsed index file: host={{.Host}}, path={{.Path}}, filename={{.Filename}}"
+
+[ParsingInReleaseFile]
+other = "Parsing InRelease file: {{.Path}}"
+
+[ParseInReleaseFileFailed]
+other = "Failed to parse InRelease file {{.Path}}: {{.Error}}"
+
+[InReleaseFileLoaded]
+other = "Successfully loaded InRelease file: {{.Path}}"
+
+[ParsingPackagesFile]
+other = "Parsing Packages file: {{.Path}}"
+
+[ParsePackagesFileFailed]
+other = "Failed to parse Packages file {{.Path}}: {{.Error}}"
+
+[PackagesFileLoaded]
+other = "Successfully loaded Packages file: {{.Path}}"
+
+[IndexFileTypeNotImplemented]
+other = "Index file type {{.Filename}} not yet implemented"
+
+[StartingIntegrityVerification]
+other = "Starting integrity verification for file: {{.File}}"
+
+[OpenFileFailed]
+other = "Failed to open file: {{.File}}, error: {{.Error}}"
+
+[ComputeHashFailed]
+other = "Failed to compute hash for file: {{.File}}, error: {{.Error}}"
+
+[RetrieveStoredHashFailed]
+other = "Failed to retrieve stored hash for file: {{.File}}, error: {{.Error}}"
+
+[NoStoredHash]
+other = "No stored hash for file: {{.File}}, considering valid"
+
+[FileIntegrityVerifiedSuccess]
+other = "File integrity verified successfully for file: {{.File}}"
+
+[FileIntegrityVerifiedFailed]
+other = "File integrity verification failed for file: {{.File}}"
+
+[LastHealthCheckUpdateTime]
+other = "Last health check update time: {{.Time}}"

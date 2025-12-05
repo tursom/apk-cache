@@ -14,6 +14,7 @@ import (
 
 	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/apt"
+	"github.com/tursom/apk-cache/utils/i18n"
 	bolt "go.etcd.io/bbolt"
 )
 
@@ -38,7 +39,7 @@ func NewAPTManager(cachePath string, db *bolt.DB) *APTManager {
 	absCachePath, err := filepath.Abs(cachePath)
 	if err != nil {
 		// 如果无法获取绝对路径，使用原始路径并记录警告
-		log.Printf("WARNING: failed to get absolute path for %q: %v", cachePath, err)
+		log.Println(i18n.T("GetAbsolutePathFailed", map[string]any{"Path": cachePath, "Error": err}))
 		absCachePath = cachePath
 	}
 	return &APTManager{
@@ -50,12 +51,12 @@ func NewAPTManager(cachePath string, db *bolt.DB) *APTManager {
 
 // LoadIndexFile 加载一个索引文件（Packages.gz 或 Packages）到内存中
 func (a *APTManager) LoadIndexFile(indexFilePath string) error {
-	log.Printf("Loading index file: %s", indexFilePath)
+	log.Println(i18n.T("LoadingIndexFile", map[string]any{"Path": indexFilePath}))
 
 	// 将 indexFilePath 转换为绝对路径以便比较
 	absIndexPath, err := filepath.Abs(indexFilePath)
 	if err != nil {
-		log.Printf("WARNING: failed to get absolute path for %q: %v", indexFilePath, err)
+		log.Println(i18n.T("GetAbsolutePathFailed", map[string]any{"Path": indexFilePath, "Error": err}))
 		absIndexPath = indexFilePath
 	}
 
@@ -63,24 +64,24 @@ func (a *APTManager) LoadIndexFile(indexFilePath string) error {
 	if utils.IsHashRequest(indexFilePath) {
 		_, hashValue, err := utils.ParseHashFromPath(indexFilePath)
 		if err != nil {
-			log.Printf("Failed to parse hash from path %s: %v", indexFilePath, err)
+			log.Println(i18n.T("ParseHashFromPathFailed", map[string]any{"Path": indexFilePath, "Error": err}))
 			return nil
 		}
 
 		hash, err := a.getHashByValue(hashValue)
 		if err != nil {
-			log.Printf("Failed to get hash by value %s: %v", hashValue, err)
+			log.Println(i18n.T("GetHashByValueFailed", map[string]any{"Hash": hashValue, "Error": err}))
 			return nil
 		}
 		if hash == nil {
-			log.Printf("No hash record found for hash value %s", hashValue)
+			log.Println(i18n.T("NoHashRecordFound", map[string]any{"Hash": hashValue}))
 			return nil
 		}
 
 		// 使用存储的文件路径解析 host、path、filename
 		host, path, filename, err = a.parseFilePath(hash.FilePath)
 		if err != nil {
-			log.Printf("Failed to parse file path %s: %v", absIndexPath, err)
+			log.Println(i18n.T("ParseFilePathFailed", map[string]any{"Path": absIndexPath, "Error": err}))
 			return err
 		}
 
@@ -89,33 +90,33 @@ func (a *APTManager) LoadIndexFile(indexFilePath string) error {
 	} else {
 		host, path, filename, err = a.parseFilePath(absIndexPath)
 		if err != nil {
-			log.Printf("Failed to parse file path %s: %v", absIndexPath, err)
+			log.Println(i18n.T("ParseFilePathFailed", map[string]any{"Path": absIndexPath, "Error": err}))
 			return err
 		}
 	}
 
-	log.Printf("Parsed index file: host=%s, path=%s, filename=%s", host, path, filename)
+	log.Println(i18n.T("ParsedIndexFile", map[string]any{"Host": host, "Path": path, "Filename": filename}))
 	if filename == "InRelease" {
-		log.Printf("Parsing InRelease file: %s", absIndexPath)
+		log.Println(i18n.T("ParsingInReleaseFile", map[string]any{"Path": absIndexPath}))
 		err := a.parseInRelease(absIndexPath, host, path)
 		if err != nil {
-			log.Printf("Failed to parse InRelease file %s: %v", absIndexPath, err)
+			log.Println(i18n.T("ParseInReleaseFileFailed", map[string]any{"Path": absIndexPath, "Error": err}))
 		} else {
-			log.Printf("Successfully loaded InRelease file: %s", absIndexPath)
+			log.Println(i18n.T("InReleaseFileLoaded", map[string]any{"Path": absIndexPath}))
 		}
 		return err
 	} else if strings.HasPrefix(filename, "Packages") {
-		log.Printf("Parsing Packages file: %s", absIndexPath)
+		log.Println(i18n.T("ParsingPackagesFile", map[string]any{"Path": absIndexPath}))
 		err := a.parsePackages(absIndexPath, filename, host, suite)
 		if err != nil {
-			log.Printf("Failed to parse Packages file %s: %v", absIndexPath, err)
+			log.Println(i18n.T("ParsePackagesFileFailed", map[string]any{"Path": absIndexPath, "Error": err}))
 		} else {
-			log.Printf("Successfully loaded Packages file: %s", absIndexPath)
+			log.Println(i18n.T("PackagesFileLoaded", map[string]any{"Path": absIndexPath}))
 		}
 		return err
 	}
 	// TODO
-	log.Printf("Index file type %s not yet implemented", filename)
+	log.Println(i18n.T("IndexFileTypeNotImplemented", map[string]any{"Filename": filename}))
 	return nil
 }
 
@@ -163,11 +164,11 @@ func (a *APTManager) LoadIndexDirectory(dir string) error {
 // VerifyFileIntegrity 验证 APT 包文件的完整性
 // 如果文件不是 .deb 文件，返回错误
 func (a *APTManager) VerifyFileIntegrity(filePath string) (bool, error) {
-	log.Printf("Starting integrity verification for file: %s", filePath) // 添加日志
+	log.Println(i18n.T("StartingIntegrityVerification", map[string]any{"File": filePath})) // 添加日志
 	// Open the file to compute its hash
 	file, err := os.Open(filePath)
 	if err != nil {
-		log.Printf("Failed to open file: %s, error: %v", filePath, err) // 添加日志
+		log.Println(i18n.T("OpenFileFailed", map[string]any{"File": filePath, "Error": err})) // 添加日志
 		return false, err
 	}
 	defer file.Close()
@@ -178,12 +179,12 @@ func (a *APTManager) VerifyFileIntegrity(filePath string) (bool, error) {
 // VerifyFileIntegrity 验证 APT 包文件的完整性
 // 如果文件不是 .deb 文件，返回错误
 func (a *APTManager) VerifyDataIntegrity(filePath string, data io.Reader) (bool, error) {
-	log.Printf("Starting integrity verification for file: %s", filePath) // 添加日志
+	log.Println(i18n.T("StartingIntegrityVerification", map[string]any{"File": filePath})) // 添加日志
 
 	// Compute the SHA256 hash of the file
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, data); err != nil {
-		log.Printf("Failed to compute hash for file: %s, error: %v", filePath, err) // 添加日志
+		log.Println(i18n.T("ComputeHashFailed", map[string]any{"File": filePath, "Error": err})) // 添加日志
 		return false, err
 	}
 	computedHash := hasher.Sum(nil)
@@ -192,20 +193,20 @@ func (a *APTManager) VerifyDataIntegrity(filePath string, data io.Reader) (bool,
 	// Retrieve the stored hash record using getHashByPath
 	record, err := a.getHashByPath(filePath)
 	if err != nil {
-		log.Printf("Failed to retrieve stored hash for file: %s, error: %v", filePath, err) // 添加日志
+		log.Println(i18n.T("RetrieveStoredHashFailed", map[string]any{"File": filePath, "Error": err})) // 添加日志
 		return false, err
 	}
 	if record == nil {
-		log.Printf("No stored hash for file: %s, considering valid", filePath) // 添加日志
+		log.Println(i18n.T("NoStoredHash", map[string]any{"File": filePath})) // 添加日志
 		return true, nil
 	}
 
 	// Compare hash strings (case-insensitive)
 	result := strings.EqualFold(computedHashHex, record.Hash)
 	if result {
-		log.Printf("File integrity verified successfully for file: %s", filePath) // 添加日志
+		log.Println(i18n.T("FileIntegrityVerifiedSuccess", map[string]any{"File": filePath})) // 添加日志
 	} else {
-		log.Printf("File integrity verification failed for file: %s", filePath) // 添加日志
+		log.Println(i18n.T("FileIntegrityVerifiedFailed", map[string]any{"File": filePath})) // 添加日志
 	}
 	return result, nil
 }
@@ -348,7 +349,7 @@ func (a *APTManager) IsIndexFile(filePath string) bool {
 		if err == nil {
 			record, err := a.getHashByValue(hash)
 			if err != nil {
-				log.Printf("Failed to get hash by value %s: %v", hash, err)
+				log.Println(i18n.T("GetHashByValueFailed", map[string]any{"Hash": hash, "Error": err}))
 				return false
 			}
 			if record != nil {

@@ -7,3 +7,4 @@
 /cmd/apk-cache/admin_min.html
 /cmd/apk-cache/admin_min.html.gz
 .vscode/
+config.toml

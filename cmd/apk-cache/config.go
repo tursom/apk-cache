@@ -173,19 +173,6 @@ func ApplyConfig(config *Config) error {
 		*locale = config.Server.Locale
 	}
 
-	// Upstreams 配置
-	if len(config.Upstreams) > 0 && !isFlagSet("upstream") {
-		// 从配置文件加载上游服务器列表（仅在命令行未指定时）
-		for _, upstream := range config.Upstreams {
-			server := NewUpstreamServer(upstream.URL, upstream.Proxy, upstream.Name)
-			upstreamManager.AddServer(server)
-		}
-	} else if upstreamManager.GetServerCount() == 0 && !isFlagSet("upstream") {
-		// 如果配置文件中没有 upstreams，也没有命令行参数，使用默认值
-		server := NewUpstreamServer(*upstreamURL, *proxyURL, "default")
-		upstreamManager.AddServer(server)
-	}
-
 	// Cache 配置
 	if config.Cache.Dir != "" && !isFlagSet("cache") {
 		*cachePath = config.Cache.Dir
@@ -318,6 +305,19 @@ func ApplyConfig(config *Config) error {
 	}
 	if !isFlagSet("data-integrity-periodic-check") {
 		*dataIntegrityPeriodicCheck = config.DataIntegrity.PeriodicCheck
+	}
+
+	// Upstreams 配置
+	if len(config.Upstreams) > 0 && !isFlagSet("upstream") {
+		// 从配置文件加载上游服务器列表（仅在命令行未指定时）
+		for _, upstream := range config.Upstreams {
+			server := NewUpstreamServer(upstream.URL, upstream.Proxy, upstream.Name)
+			upstreamManager.AddServer(server)
+		}
+	} else if upstreamManager.GetServerCount() == 0 && !isFlagSet("upstream") {
+		// 如果配置文件中没有 upstreams，也没有命令行参数，使用默认值
+		server := NewUpstreamServer(*upstreamURL, *proxyURL, "default")
+		upstreamManager.AddServer(server)
 	}
 
 	return nil
