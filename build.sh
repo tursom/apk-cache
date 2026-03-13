@@ -309,13 +309,26 @@ echo ""
 echo $(t "GO_BUILD_START")
 
 # 检查Go是否安装
-if ! command -v go &> /dev/null; then
+GO_CMD=""
+if command -v go &> /dev/null; then
+    GO_CMD="go"
+else
+    # 尝试从已知路径查找
+    for go_path in "$HOME/go/bin/go" "/usr/local/go/bin/go" "/opt/hostedtoolcache/go/1.25/x64/bin/go" "/opt/hostedtoolcache/go/1.25.7/x64/bin/go"; do
+        if [ -x "$go_path" ]; then
+            GO_CMD="$go_path"
+            break
+        fi
+    done
+fi
+
+if [ -z "$GO_CMD" ]; then
     echo $(t "ERROR_NO_GO")
     exit 1
 fi
 
 # 构建Go命令
-GO_BUILD_CMD="go build -ldflags=\"-s -w\""
+GO_BUILD_CMD="$GO_CMD build -ldflags=\"-s -w\""
 if [ "$TRIMPATH_ENABLED" = "true" ]; then
     GO_BUILD_CMD="$GO_BUILD_CMD -trimpath"
 fi
