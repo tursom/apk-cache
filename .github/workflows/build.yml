@@ -46,25 +46,25 @@ jobs:
           CGO_ENABLED: 0
         run: |
           cd cmd/apk-cache
-          
+
           # Compress admin.html
           ADMIN_HTML="admin.html"
           ADMIN_MIN_HTML="admin_min.html"
-          
+
           if [ -f "$ADMIN_HTML" ]; then
-            # Simple compression using sed
-            sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' -e 's>[[:space:]]*</></g' "$ADMIN_HTML" > "$ADMIN_MIN_HTML"
-            
+            # Simple compression using perl
+            perl -pe 's/^\s+//g; s/\s+$//g; s/>\s+</></g' "$ADMIN_HTML" > "$ADMIN_MIN_HTML"
+
             # Create gzip version
             gzip -9 -c "$ADMIN_MIN_HTML" > "${ADMIN_MIN_HTML}.gz"
           fi
-          
+
           # Build
           EXT=""
           if [ "$GOOS" = "windows" ]; then
             EXT=".exe"
           fi
-          
+
           OUTPUT_NAME="apk-cache-${GOOS}-${GOARCH}${EXT}"
           go build -ldflags="-s -w" -trimpath -o "$OUTPUT_NAME" .
 
