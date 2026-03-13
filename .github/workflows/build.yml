@@ -107,6 +107,11 @@ jobs:
       - name: Install html-minifier
         run: npm install -g html-minifier
 
+      - name: Set up Go for build.sh
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
       - name: Build Docker image (no push)
         uses: docker/build-push-action@v5
         with:
