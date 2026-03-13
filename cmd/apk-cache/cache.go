@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
@@ -554,18 +553,11 @@ func isCacheExpiredByAccessTime(path string, duration time.Duration) bool {
 		return time.Since(memAccessTime) > duration
 	}
 
-	// 如果内存中没有记录，从文件系统获取访问时间
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		// 如果无法获取访问时间，回退到进程启动时间
-		// 这样可以避免程序启动后立即清理旧缓存
-		return time.Since(processStartTime) > duration
-	}
+	// 如果内存中没有记录，使用修改时间作为后备
+	// 这是最跨平台兼容的方法
+	atime := info.ModTime()
 
-	// 访问时间
-	atime := time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
-
-	// 如果文件的访问时间早于进程启动时间，使用进程启动时间
+	// 如果文件的修改时间早于进程启动时间，使用进程启动时间
 	// 这表示文件在程序启动前就存在，我们假设它在启动时被"访问"
 	if atime.Before(processStartTime) {
 		return time.Since(processStartTime) > duration

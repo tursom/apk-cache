@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
@@ -223,12 +222,8 @@ func (q *CacheQuota) getLRUFiles() ([]fileInfo, error) {
 		if memAtime, ok := accessTimeTracker.GetAccessTime(path); ok {
 			atime = memAtime
 		} else {
-			// 从文件系统获取
-			if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-				atime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec)
-			} else {
-				atime = info.ModTime() // 回退到修改时间
-			}
+			// 从文件系统获取，使用修改时间作为后备（跨平台兼容）
+			atime = info.ModTime()
 		}
 
 		files = append(files, fileInfo{
