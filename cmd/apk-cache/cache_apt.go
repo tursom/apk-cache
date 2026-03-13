@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -18,8 +19,6 @@ import (
 	"github.com/tursom/apk-cache/utils/apt"
 	"github.com/tursom/apk-cache/utils/i18n"
 )
-
-var supportedAlgorithms = utils.NewSetFromSlice([]string{"SHA256", "SHA1", "MD5SUM", "MD5"})
 
 // handleAPTProxy 处理APT协议代理请求
 func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
@@ -71,16 +70,28 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 			if apt.IsDebFile(cacheFile) {
 				// 使用 APTManager 校验 .deb 文件
 				valid, err := aptIntegrityManager.VerifyFileIntegrity(cacheFile)
-				if err != nil {
-					log.Println(i18n.T("FileIntegrityCheckError", map[string]any{
+		if err != nil {
+				log.Println(i18n.T("FileIntegrityCheckError", map[string]any{
+					"File":  cacheFile,
+					"Error": err,
+				}))
+				// 校验出错，删除损坏的缓存文件
+				if err := os.Remove(cacheFile); err != nil {
+					log.Println(i18n.T("RemoveCorruptedCacheFailed", map[string]any{
 						"File":  cacheFile,
 						"Error": err,
 					}))
-				} else if !valid {
-					log.Println(i18n.T("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
-					// 文件损坏，视为缓存未命中
-					// 继续从上游获取
-				} else {
+				}
+			} else if !valid {
+				log.Println(i18n.T("CacheFileCorrupted", map[string]any{"Path": cacheFile}))
+				// 文件损坏，删除缓存文件，视为缓存未命中
+				if err := os.Remove(cacheFile); err != nil {
+					log.Println(i18n.T("RemoveCorruptedCacheFailed", map[string]any{
+						"File":  cacheFile,
+						"Error": err,
+					}))
+				}
+			} else {
 					// 文件完整，从缓存提供
 					serveFromCache(w, r, cacheFile)
 					return
@@ -112,7 +123,6 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 	// 保存到缓存（带文件锁）
 	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header, &cacheSaveHandler{
 		beforeCacheRename: func(cacheFile string, tmpFileName string, data []byte) error {
-
 			// 对于 hash 请求，必须在 updateCacheFile 调用后校验 hash，不论校验器有没有开启
 			if utils.IsHashRequest(r.URL.Path) {
 				// 使用统一的哈希请求验证函数
@@ -137,16 +147,32 @@ func handleAPTProxy(w http.ResponseWriter, r *http.Request) {
 					}))
 				}
 				// 如果验证通过，verifyHashRequest 内部已经记录了成功日志
-			} else {
-				// 对于 .deb 文件，保存前先让完整性管理器加载以便后续校验
-				if ok, err := aptIntegrityManager.VerifyDataIntegrity(cacheFile, bytes.NewReader(data)); err != nil {
-					return err
-				} else if !ok {
-					return errors.New(i18n.T("CalculateFileHashFailed", map[string]any{"File": cacheFile}))
-				}
+		} else {
+			// 对于 .deb 文件，保存前先校验临时文件的完整性
+			if ok, err := aptIntegrityManager.VerifyDataIntegrity(tmpFileName, bytes.NewReader(data)); err != nil {
+				return err
+			} else if !ok {
+				return errors.New(i18n.T("CalculateFileHashFailed", map[string]any{"File": tmpFileName}))
 			}
+		}
 
 			return nil
+		},
+		recover: func(position int) (io.Reader, error) {
+			upstreamResp, err := fetchAPTFromUpstream(r)
+			if err != nil {
+				log.Println(i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}))
+				http.Error(w, i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
+				return nil, err
+			}
+			defer upstreamResp.Body.Close()
+
+			// 使用统一的函数处理上游响应状态码
+			if !handleUpstreamResponse(w, r, upstreamResp, cacheFile) {
+				return nil, errors.New("upstream response handling failed")
+			}
+
+			return upstreamResp.Body, nil
 		},
 	}); err != nil {
 		log.Println(i18n.T("SaveCacheFailed", map[string]any{"Error": err}))

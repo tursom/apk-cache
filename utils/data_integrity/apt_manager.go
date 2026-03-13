@@ -86,6 +86,10 @@ func (a *APTManager) LoadIndexFile(indexFilePath string) error {
 		}
 
 		suiteIndex := strings.Index(path, "/dists")
+		if suiteIndex == -1 {
+			log.Println(i18n.T("NoDistsInPath", map[string]any{"Path": path}))
+			return nil
+		}
 		suite = path[:suiteIndex]
 	} else {
 		host, path, filename, err = a.parseFilePath(absIndexPath)
@@ -198,6 +202,7 @@ func (a *APTManager) VerifyDataIntegrity(filePath string, data io.Reader) (bool,
 	}
 	if record == nil {
 		log.Println(i18n.T("NoStoredHash", map[string]any{"File": filePath})) // 添加日志
+		// 没有哈希记录时跳过验证，等后续加载索引文件获取哈希后再校验
 		return true, nil
 	}
 
