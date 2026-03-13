@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -32,6 +33,7 @@ type cacheHeaderEntry struct {
 
 type cacheSaveHandler struct {
 	beforeCacheRename func(cacheFile string, tmpFileName string, data []byte) error
+	recover           func(position int) (io.Reader, error)
 }
 
 // 全局客户端缓存头管理器
@@ -164,7 +166,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 缓存未命中,从上游获取
 	log.Println(i18n.T("CacheMiss", map[string]any{"Path": cacheFile}))
-	upstreamResp, err := fetchFromUpstream(r.URL.Path)
+	upstreamResp, err := fetchFromUpstream(r.URL.Path, 0)
 	if err != nil {
 		log.Println(i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}))
 		http.Error(w, i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}), http.StatusBadGateway)
@@ -178,7 +180,27 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 保存到缓存（带文件锁）
-	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header, nil); err != nil {
+	if err := updateCacheFile(cacheFile, upstreamResp.Body, r, w, upstreamResp.StatusCode, upstreamResp.Header, &cacheSaveHandler{
+		recover: func(position int) (io.Reader, error) {
+			log.Println(i18n.T("AttemptingRecovery", map[string]any{
+				"Position": position,
+				"Path":     r.URL.Path,
+			}))
+			upstreamResp, err := fetchFromUpstream(r.URL.Path, position)
+			if err != nil {
+				log.Println(i18n.T("FetchUpstreamFailed", map[string]any{"Error": err}))
+				return nil, err
+			}
+			defer upstreamResp.Body.Close()
+
+			// 检查响应状态码
+			if upstreamResp.StatusCode != http.StatusOK && upstreamResp.StatusCode != http.StatusPartialContent {
+				return nil, fmt.Errorf("upstream returned status: %d", upstreamResp.StatusCode)
+			}
+
+			return upstreamResp.Body, nil
+		},
+	}); err != nil {
 		log.Println(i18n.T("SaveCacheFailed", map[string]any{"Error": err}))
 	} else {
 		log.Println(i18n.T("CacheSaved", map[string]any{"Path": cacheFile}))
@@ -269,9 +291,14 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	utils.Monitoring.RecordCacheHit(stat.Size())
 }
 
-func fetchFromUpstream(urlPath string) (*http.Response, error) {
+func fetchFromUpstream(urlPath string, downloadedBytes int) (*http.Response, error) {
 	// 使用上游管理器获取响应
-	resp, err := upstreamManager.FetchFromUpstream(urlPath)
+	resp, err := upstreamManager.FetchFromUpstream(urlPath, func(req *http.Request) {
+		// 如果已经下载了部分内容，设置 Range 头进行断点续传
+		if downloadedBytes > 0 {
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-", downloadedBytes))
+		}
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -363,6 +390,7 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 	buf := make([]byte, 32*1024)
 	var cacheErr, clientErr error
 	var responseData []byte
+	var writtenBytes int64
 
 	for {
 		// 读取数据
@@ -376,6 +404,8 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 				if _, err := tmpFile.Write(buf[:n]); err != nil {
 					cacheErr = err
 					log.Println(i18n.T("WriteCacheFailed", map[string]any{"Error": err}))
+				} else {
+					writtenBytes += int64(n)
 				}
 			}
 
@@ -395,10 +425,36 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 
 		// 检查读取错误
 		if readErr != nil {
-			if readErr != io.EOF {
-				return errors.New(i18n.T("ReadUpstreamFailed", map[string]any{"Error": readErr}))
+			// 如果是 EOF，正常结束
+			if readErr == io.EOF {
+				break
 			}
-			break // EOF，正常结束
+
+			// 如果发生错误且提供了 recover 回调，尝试恢复
+			if handler != nil && handler.recover != nil && (cacheErr != nil || clientErr != nil) {
+				log.Println(i18n.T("ReadErrorAttemptingRecovery", map[string]any{
+					"Error":        readErr,
+					"WrittenBytes": writtenBytes,
+				}))
+
+				// 调用 recover 获取新的 body
+				newBody, err := handler.recover(int(writtenBytes))
+				if err != nil {
+					return errors.New(i18n.T("RecoveryFailed", map[string]any{"Error": err}))
+				}
+				if newBody == nil {
+					return errors.New(i18n.T("RecoveryReturnedNil", nil))
+				}
+
+				// 重置错误状态，继续读取
+				body = newBody
+				cacheErr = nil
+				clientErr = nil
+				continue
+			}
+
+			// 没有 recover 回调或恢复失败，返回错误
+			return errors.New(i18n.T("ReadUpstreamFailed", map[string]any{"Error": readErr}))
 		}
 	}
 
@@ -439,11 +495,11 @@ func updateCacheFile(cacheFile string, body io.Reader, r *http.Request, w http.R
 	}
 
 	// 检查临时文件大小
-	ostInfo, err := os.Stat(tmpFileName)
+	fileInfo, err := os.Stat(tmpFileName)
 	if err != nil {
 		return errors.New(i18n.T("GetTempFileSizeFailed", map[string]any{"Error": err}))
 	}
-	if ostInfo.Size() == 0 {
+	if fileInfo.Size() == 0 {
 		return errors.New(i18n.T("TempFileZeroSize", map[string]any{"File": tmpFileName}))
 	}
 
@@ -523,7 +579,7 @@ func isCacheExpiredByAccessTime(path string, duration time.Duration) bool {
 func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp *http.Response, cacheFile string) bool {
 	// 细化处理上游响应状态码
 	switch upstreamResp.StatusCode {
-	case http.StatusOK:
+	case http.StatusOK, http.StatusPartialContent:
 		// 正常响应，继续处理
 		return true
 	case http.StatusNotModified:
