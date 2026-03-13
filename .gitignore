@@ -8,3 +8,5 @@
 /cmd/apk-cache/admin_min.html.gz
 .vscode/
 config.toml
+/i18n-analyzer
+/i18n-analyzer.exe

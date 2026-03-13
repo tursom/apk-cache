@@ -509,3 +509,27 @@ other = "没有健康的上游服务器可用，回退到 {{.Fallback}}（共 {{
 
 [FetchingFromUpstream]
 other = "从上游获取：路径={{.Path}}，服务器数={{.ServerCount}}"
+
+[CloseAccessTimeTrackerFailed]
+other = "关闭访问时间追踪器失败：{{.Error}}"
+
+[CreateBucketFailed]
+other = "创建数据库 bucket 失败：{{.Error}}"
+
+[DeleteAccessTimeFailed]
+other = "删除 {{.Path}} 的访问时间失败：{{.Error}}"
+
+[FallingBackToMemoryTracker]
+other = "回退到内存访问时间追踪器"
+
+[InvalidDebPath]
+other = "无效的 Debian 包路径：{{.Path}}"
+
+[NoDistsInPath]
+other = "在路径中未找到发行版：{{.Path}}"
+
+[OpenAccessTimeDBFailed]
+other = "打开访问时间数据库失败：{{.Error}}"
+
+[SaveAccessTimeFailed]
+other = "保存 {{.Path}} 的访问时间失败：{{.Error}}"

@@ -509,3 +509,27 @@ other = "No healthy upstream servers available, falling back to {{.Fallback}} ({
 
 [FetchingFromUpstream]
 other = "Fetching from upstream: path={{.Path}}, servers={{.ServerCount}}"
+
+[CloseAccessTimeTrackerFailed]
+other = "Failed to close access time tracker: {{.Error}}"
+
+[CreateBucketFailed]
+other = "Failed to create database bucket: {{.Error}}"
+
+[DeleteAccessTimeFailed]
+other = "Failed to delete access time for {{.Path}}: {{.Error}}"
+
+[FallingBackToMemoryTracker]
+other = "Falling back to memory-based access time tracker"
+
+[InvalidDebPath]
+other = "Invalid Debian package path: {{.Path}}"
+
+[NoDistsInPath]
+other = "No distributions found in path: {{.Path}}"
+
+[OpenAccessTimeDBFailed]
+other = "Failed to open access time database: {{.Error}}"
+
+[SaveAccessTimeFailed]
+other = "Failed to save access time for {{.Path}}: {{.Error}}"
