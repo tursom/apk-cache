@@ -37,6 +37,7 @@ t() {
                 STEP1_DONE) echo "✅ build.sh 执行完成" ;;
                 STEP2_TITLE) echo "步骤2: 构建 Docker 镜像" ;;
                 STEP2_BUILDING) echo "正在构建 Docker 镜像..." ;;
+                STEP2_SKIP) echo "跳过 Docker 镜像构建 (使用指定镜像)" ;;
                 STEP2_DONE) echo "✅ Docker 镜像构建完成: $2" ;;
                 STEP3_TITLE) echo "步骤3: 启动 apk-cache 服务" ;;
                 STEP3_STARTING) echo "正在启动服务..." ;;
@@ -66,6 +67,7 @@ t() {
                 ERR_UNKNOWN_OPTION) echo "❌ 未知选项: $1" ;;
                 ERR_USE_HELP) echo "使用 $0 --help 查看可用选项" ;;
                 HELP_TITLE) echo "用法: $0 [选项]" ;;
+                HELP_IMAGE) echo "  --image <name>               设置要测试的 Docker 镜像名称" ;;
                 HELP_GOPROXY) echo "  --goproxy <value>             设置GOPROXY（用于go build拉取依赖）" ;;
                 HELP_ALPINE_MIRROR) echo "  --alpine-apk-mirror <url>   Docker构建/本地构建时使用的Alpine源（例: http://mirror/alpine）" ;;
                 HELP_APK_MIRROR) echo "  --apk-mirror <url>          同 --alpine-apk-mirror" ;;
@@ -82,6 +84,7 @@ t() {
                 STEP1_DONE) echo "✅ build.sh completed" ;;
                 STEP2_TITLE) echo "Step 2: Build Docker image" ;;
                 STEP2_BUILDING) echo "Building Docker image..." ;;
+                STEP2_SKIP) echo "Skipping Docker build (using specified image)" ;;
                 STEP2_DONE) echo "✅ Docker image built: $2" ;;
                 STEP3_TITLE) echo "Step 3: Start apk-cache service" ;;
                 STEP3_STARTING) echo "Starting service..." ;;
@@ -111,6 +114,7 @@ t() {
                 ERR_UNKNOWN_OPTION) echo "❌ Unknown option: $1" ;;
                 ERR_USE_HELP) echo "Run $0 --help for usage" ;;
                 HELP_TITLE) echo "Usage: $0 [options]" ;;
+                HELP_IMAGE) echo "  --image <name>               Set Docker image name to test" ;;
                 HELP_GOPROXY) echo "  --goproxy <value>             Set GOPROXY (for go build)" ;;
                 HELP_ALPINE_MIRROR) echo "  --alpine-apk-mirror <url>   Alpine mirror for build (e.g. http://mirror/alpine)" ;;
                 HELP_APK_MIRROR) echo "  --apk-mirror <url>          Alias for --alpine-apk-mirror" ;;
@@ -133,10 +137,20 @@ PORT=3142
 
 CUSTOM_GOPROXY=""
 ALPINE_APK_MIRROR=""
+USE_CUSTOM_IMAGE=""
 
 # 解析命令行参数
 while [ $# -gt 0 ]; do
     case $1 in
+        --image)
+            if [ $# -lt 2 ]; then
+                echo $(t "ERR_ARG_REQUIRES" "$1")
+                exit 1
+            fi
+            IMAGE_NAME="$2"
+            USE_CUSTOM_IMAGE="true"
+            shift 2
+            ;;
         --goproxy)
             if [ $# -lt 2 ]; then
                 echo $(t "ERR_ARG_REQUIRES" "$1")
@@ -165,6 +179,7 @@ while [ $# -gt 0 ]; do
             echo $(t "HELP_TITLE")
             echo ""
             echo "Options:"
+            echo $(t "HELP_IMAGE")
             echo $(t "HELP_GOPROXY")
             echo $(t "HELP_ALPINE_MIRROR")
             echo $(t "HELP_APK_MIRROR")
@@ -202,7 +217,10 @@ cleanup() {
     echo $(t "CLEANUP")
     docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
     docker rm -f "$TEST_CONTAINER_NAME" 2>/dev/null || true
-    docker rmi "$IMAGE_NAME" 2>/dev/null || true
+    # Only remove the image if we built it ourselves
+    if [ "$USE_CUSTOM_IMAGE" != "true" ]; then
+        docker rmi "$IMAGE_NAME" 2>/dev/null || true
+    fi
 }
 
 # 确保清理
@@ -231,18 +249,22 @@ else
 fi
 echo $(t "STEP1_DONE")
 
-# 步骤2: 构建 Docker 镜像
+# 步骤2: 构建 Docker 镜像 (如果未指定自定义镜像)
 echo ""
 echo "========================================"
-echo $(t "STEP2_TITLE")
-echo "========================================"
-echo $(t "STEP2_BUILDING")
-if [ -n "$DOCKER_BUILD_ARGS" ]; then
-    eval "docker build $DOCKER_BUILD_ARGS -t \"$IMAGE_NAME\" ."
+if [ "$USE_CUSTOM_IMAGE" = "true" ]; then
+    echo $(t "STEP2_SKIP")
 else
-    docker build -t "$IMAGE_NAME" .
+    echo $(t "STEP2_TITLE")
+    echo "========================================"
+    echo $(t "STEP2_BUILDING")
+    if [ -n "$DOCKER_BUILD_ARGS" ]; then
+        eval "docker build $DOCKER_BUILD_ARGS -t \"$IMAGE_NAME\" ."
+    else
+        docker build -t "$IMAGE_NAME" .
+    fi
+    echo $(t "STEP2_DONE" "$IMAGE_NAME")
 fi
-echo $(t "STEP2_DONE" "$IMAGE_NAME")
 
 # 创建缓存目录
 mkdir -p "$CACHE_DIR"
