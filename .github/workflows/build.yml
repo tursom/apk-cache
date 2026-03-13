@@ -43,7 +43,7 @@ jobs:
       - name: Install Node.js and html-minifier
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install html-minifier
         run: npm install -g html-minifier
@@ -102,7 +102,7 @@ jobs:
       - name: Install Node.js for build.sh
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install html-minifier
         run: npm install -g html-minifier
