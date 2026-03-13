@@ -491,3 +491,21 @@ other = "文件完整性验证失败：{{.File}}"
 
 [LastHealthCheckUpdateTime]
 other = "上次健康检查更新时间：{{.Time}}"
+
+[ReadErrorAttemptingRecovery]
+other = "读取发生错误，正在尝试恢复：错误={{.Error}}，已写入字节：{{.WrittenBytes}}"
+
+[RecoveryFailed]
+other = "恢复失败：{{.Error}}"
+
+[RecoveryReturnedNil]
+other = "恢复返回了空 body"
+
+[AttemptingRecovery]
+other = "正在尝试从位置 {{.Position}} 恢复路径：{{.Path}}"
+
+[NoHealthyUpstream]
+other = "没有健康的上游服务器可用，回退到 {{.Fallback}}（共 {{.Count}} 个服务器）"
+
+[FetchingFromUpstream]
+other = "从上游获取：路径={{.Path}}，服务器数={{.ServerCount}}"

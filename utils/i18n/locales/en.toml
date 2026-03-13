@@ -491,3 +491,21 @@ other = "File integrity verification failed for file: {{.File}}"
 
 [LastHealthCheckUpdateTime]
 other = "Last health check update time: {{.Time}}"
+
+[ReadErrorAttemptingRecovery]
+other = "Read error occurred, attempting recovery: {{.Error}}, written bytes: {{.WrittenBytes}}"
+
+[RecoveryFailed]
+other = "Recovery failed: {{.Error}}"
+
+[RecoveryReturnedNil]
+other = "Recovery returned nil body"
+
+[AttemptingRecovery]
+other = "Attempting recovery from position {{.Position}} for path: {{.Path}}"
+
+[NoHealthyUpstream]
+other = "No healthy upstream servers available, falling back to {{.Fallback}} ({{.Count}} servers total)"
+
+[FetchingFromUpstream]
+other = "Fetching from upstream: path={{.Path}}, servers={{.ServerCount}}"
