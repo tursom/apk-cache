@@ -123,9 +123,6 @@ func (u *UpstreamServer) checkHealth() bool {
 
 // doHealthCheck 执行实际的健康检查逻辑（无并发合并）
 func (u *UpstreamServer) doHealthCheck() bool {
-	// 打印上次更新时间
-	log.Println(i18n.T("LastHealthCheckUpdateTime", map[string]any{"Time": u.lastHealthCheck}))
-
 	// 使用健康检查专用超时
 	timeout := *healthCheckTimeout
 	if timeout <= 0 {
@@ -189,6 +186,9 @@ func (u *UpstreamServer) doHealthCheck() bool {
 			"Error": lastError,
 		}))
 	}
+
+	// 打印健康检查更新时间
+	log.Println(i18n.T("LastHealthCheckUpdateTime", map[string]any{"Time": u.lastHealthCheck}))
 
 	return u.isHealthy
 }
@@ -282,8 +282,15 @@ func (m *UpstreamManager) GetHealthyServer() *UpstreamServer {
 		}
 	}
 
-	// 如果没有健康服务器，返回第一个（降级使用）
-	return servers[0]
+	// 如果没有健康服务器，记录警告并返回第一个（降级使用）
+	if len(servers) > 0 {
+		log.Println(i18n.T("NoHealthyUpstream", map[string]any{
+			"Count":   len(servers),
+			"Fallback": servers[0].URL,
+		}))
+		return servers[0]
+	}
+	return nil
 }
 
 // GetAllServers 获取所有服务器
@@ -337,16 +344,31 @@ func (m *UpstreamManager) getServers() []*UpstreamServer {
 }
 
 // FetchFromUpstream 从上游服务器获取数据，支持故障转移
-func (m *UpstreamManager) FetchFromUpstream(urlPath string) (*http.Response, error) {
+// 注意：此方法不使用健康检查结果，而是直接遍历所有服务器尝试请求
+// 如果提供了 requestModifier，它将被调用来修改 HTTP 请求
+func (m *UpstreamManager) FetchFromUpstream(urlPath string, requestModifier func(*http.Request)) (*http.Response, error) {
 	var lastErr error
 
 	// 尝试所有上游服务器，直到成功或全部失败
+	log.Println(i18n.T("FetchingFromUpstream", map[string]any{"Path": urlPath, "ServerCount": len(m.getServers())}))
 	for i, server := range m.getServers() {
 		client := createHTTPClientForUpstream(server.Proxy)
 		url := server.URL + urlPath
 
-		resp, err := client.Get(url)
-		if err == nil && resp.StatusCode == http.StatusOK {
+		// 创建请求
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		// 调用 requestModifier 修改请求（如果提供了）
+		if requestModifier != nil {
+			requestModifier(req)
+		}
+
+		resp, err := client.Do(req)
+		if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
 			if i > 0 {
 				serverName := server.Name
 				if serverName == "" {
