@@ -38,7 +38,7 @@ docker run -d \
   --name apk-cache \
   -p 3142:3142 \
   -v ./cache:/app/cache \
-  tursom/apk-cache:latest
+  ghcr.io/tursom/apk-cache:latest
 ```
 
 Visit http://localhost:3142/_admin/ to view the management interface.
@@ -184,7 +184,7 @@ Main configuration sections include:
 version: '3.8'
 services:
   apk-cache:
-    image: tursom/apk-cache:latest
+    image: ghcr.io/tursom/apk-cache:latest
     ports:
       - "3142:3142"
     volumes:
@@ -335,6 +335,10 @@ When issues are detected, the system automatically attempts repairs:
 
 **Data Integrity Errors**: Check disk space and filesystem integrity
 
+## Development
+
+See [DEV.md](DEV.md) for development guidelines and build instructions.
+
 ## License
 
 GPLv3 License
@@ -347,4 +351,5 @@ See [ROADMAP.md](ROADMAP.md) for future development directions and improvement p
 
 - GitHub: https://github.com/tursom/apk-cache
 - Docker Hub: https://hub.docker.com/r/tursom/apk-cache
+- GitHub Container Registry: https://ghcr.io/tursom/apk-cache
 - Issue Tracker: https://github.com/tursom/apk-cache/issues
