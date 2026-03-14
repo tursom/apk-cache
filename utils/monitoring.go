@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // MonitoringManager 监控管理器
@@ -27,7 +26,7 @@ type MonitoringManager struct {
 	DataIntegrityChecks         prometheus.Counter
 	DataIntegrityCorruptedFiles prometheus.Gauge
 	DataIntegrityRepairedFiles  prometheus.Counter
-	DataIntegrityCheckDuration  prometheus.Histogram
+	DataIntegrityCheckDuration prometheus.Histogram
 
 	// 缓存配额相关指标
 	CacheQuotaSize       *prometheus.GaugeVec
@@ -98,76 +97,76 @@ func NewMonitoring() *MonitoringManager {
 	})
 
 	// 初始化数据完整性相关指标
-	monitoring.DataIntegrityChecks = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.DataIntegrityChecks = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_data_integrity_checks_total",
 		Help: "Total number of data integrity checks performed",
 	})
 
-	monitoring.DataIntegrityCorruptedFiles = promauto.NewGauge(prometheus.GaugeOpts{
+	monitoring.DataIntegrityCorruptedFiles = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "apk_cache_data_integrity_corrupted_files_total",
 		Help: "Total number of corrupted files detected",
 	})
 
-	monitoring.DataIntegrityRepairedFiles = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.DataIntegrityRepairedFiles = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_data_integrity_repaired_files_total",
 		Help: "Total number of corrupted files repaired",
 	})
 
-	monitoring.DataIntegrityCheckDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+	monitoring.DataIntegrityCheckDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
 		Name:    "apk_cache_data_integrity_check_duration_seconds",
 		Help:    "Duration of data integrity checks",
 		Buckets: prometheus.DefBuckets,
 	})
 
 	// 初始化缓存配额相关指标
-	monitoring.CacheQuotaSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	monitoring.CacheQuotaSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "apk_cache_quota_size_bytes",
 		Help: "Cache quota size information",
 	}, []string{"type"})
 
-	monitoring.CacheQuotaFiles = promauto.NewGauge(prometheus.GaugeOpts{
+	monitoring.CacheQuotaFiles = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "apk_cache_quota_files_total",
 		Help: "Total number of files in cache",
 	})
 
-	monitoring.CacheQuotaCleanups = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.CacheQuotaCleanups = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_quota_cleanups_total",
 		Help: "Total number of cache quota cleanups performed",
 	})
 
-	monitoring.CacheQuotaBytesFreed = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.CacheQuotaBytesFreed = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_quota_bytes_freed_total",
 		Help: "Total bytes freed by cache quota cleanups",
 	})
 
 	// 初始化内存缓存相关指标
-	monitoring.MemCacheHits = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.MemCacheHits = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_memory_hits_total",
 		Help: "Total number of memory cache hits",
 	})
 
-	monitoring.MemCacheMisses = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.MemCacheMisses = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_memory_misses_total",
 		Help: "Total number of memory cache misses",
 	})
 
-	monitoring.MemCacheSize = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	monitoring.MemCacheSize = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "apk_cache_memory_size_bytes",
 		Help: "Memory cache size information",
 	}, []string{"type"})
 
-	monitoring.MemCacheItems = promauto.NewGauge(prometheus.GaugeOpts{
+	monitoring.MemCacheItems = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "apk_cache_memory_items_total",
 		Help: "Total number of items in memory cache",
 	})
 
-	monitoring.MemCacheEvictions = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.MemCacheEvictions = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_memory_evictions_total",
 		Help: "Total number of memory cache evictions",
 	})
 
 	// 初始化细粒度缓存策略相关指标
-	monitoring.PolicyAdjustments = promauto.NewCounter(prometheus.CounterOpts{
+	monitoring.PolicyAdjustments = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_policy_adjustments_total",
 		Help: "Total number of cache policy adjustments",
 	})
@@ -192,7 +191,27 @@ func (m *MonitoringManager) registerMetrics() {
 	m.registry.MustRegister(m.RateLimitRejected)
 	m.registry.MustRegister(m.RateLimitCurrentTokens)
 
-	// 数据完整性、缓存配额和内存缓存指标使用 promauto 自动注册
+	// 注册数据完整性相关指标
+	m.registry.MustRegister(m.DataIntegrityChecks)
+	m.registry.MustRegister(m.DataIntegrityCorruptedFiles)
+	m.registry.MustRegister(m.DataIntegrityRepairedFiles)
+	m.registry.MustRegister(m.DataIntegrityCheckDuration)
+
+	// 注册缓存配额相关指标
+	m.registry.MustRegister(m.CacheQuotaSize)
+	m.registry.MustRegister(m.CacheQuotaFiles)
+	m.registry.MustRegister(m.CacheQuotaCleanups)
+	m.registry.MustRegister(m.CacheQuotaBytesFreed)
+
+	// 注册内存缓存相关指标
+	m.registry.MustRegister(m.MemCacheHits)
+	m.registry.MustRegister(m.MemCacheMisses)
+	m.registry.MustRegister(m.MemCacheSize)
+	m.registry.MustRegister(m.MemCacheItems)
+	m.registry.MustRegister(m.MemCacheEvictions)
+
+	// 注册细粒度缓存策略相关指标
+	m.registry.MustRegister(m.PolicyAdjustments)
 }
 
 // GetRegistry 获取 Prometheus Registry

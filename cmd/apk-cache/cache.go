@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,8 +128,13 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		"Path":   r.URL.Path,
 	}))
 
-	// 生成缓存文件路径
-	cacheFile := getCacheFilePath(r.URL.Path)
+	// 生成缓存文件路径（带安全检查）
+	cacheFile, err := getCacheFilePath(r.URL.Path)
+	if err != nil {
+		log.Println(i18n.T("InvalidCachePath", map[string]any{"Error": err}))
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
 
 	// 首先检查内存缓存
 	if memoryCache != nil {
@@ -206,9 +212,41 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getCacheFilePath(urlPath string) string {
-	safePath := filepath.Join(*cachePath, urlPath)
-	return safePath
+func getCacheFilePath(urlPath string) (string, error) {
+	// 清理 URL 路径，防止路径遍历攻击
+	// 移除潜在的恶意路径组件
+	cleanPath := filepath.Clean(urlPath)
+
+	// 检查是否包含路径遍历组件
+	if strings.Contains(cleanPath, "..") {
+		return "", errors.New("invalid path: path traversal not allowed")
+	}
+
+	// 确保路径不以绝对路径开始
+	if filepath.IsAbs(cleanPath) {
+		return "", errors.New("invalid path: absolute path not allowed")
+	}
+
+	// 生成缓存文件路径
+	cacheFile := filepath.Join(*cachePath, cleanPath)
+
+	// 验证最终路径仍在缓存目录内（防止符号链接攻击）
+	absCachePath, err := filepath.Abs(*cachePath)
+	if err != nil {
+		return "", errors.New("failed to resolve cache path")
+	}
+	absCacheFile, err := filepath.Abs(cacheFile)
+	if err != nil {
+		return "", errors.New("failed to resolve cache file path")
+	}
+
+	// 确保缓存文件路径以缓存目录路径开始
+	if !strings.HasPrefix(absCacheFile, absCachePath+string(filepath.Separator)) &&
+		absCacheFile != absCachePath {
+		return "", errors.New("invalid path: path outside cache directory")
+	}
+
+	return cacheFile, nil
 }
 
 func cacheValid(path string) bool {
