@@ -24,6 +24,7 @@ A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP pro
 - 🩺 **Health Check** - Upstream server status monitoring and self-healing mechanisms
 - 🚦 **Request Rate Limiting** - Token bucket algorithm for request frequency limiting
 - 🔍 **Data Integrity** - SHA-256 file checksum validation and automatic repair
+- 🎯 **Fine-grained Cache Policy** - Adaptive caching based on size/type/access frequency
 - 🔐 **Authentication** - Support for proxy authentication and management interface authentication
 - 📈 **Failover Support** - Multiple upstream servers support and automatic failover
 - 🛡️ **Security Enhancements** - IP whitelisting, reverse proxy support and path security validation
@@ -154,6 +155,14 @@ Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 | `-data-integrity-auto-repair` | `true` | Enable automatic repair of corrupted files |
 | `-data-integrity-periodic-check` | `true` | Enable periodic data integrity checks |
 | `-data-integrity-initialize-existing-files` | `false` | Initialize existing files hash records on startup |
+| `-cache-policy` | `default` | Fine-grained cache policy (default/size/type/frequency/adaptive) |
+| `-cache-policy-size-small` | `1MB` | Small file threshold |
+| `-cache-policy-size-medium` | `10MB` | Medium file threshold |
+| `-cache-policy-size-large` | `100MB` | Large file threshold |
+| `-cache-policy-hot-threshold` | `100` | Hot file threshold (accesses per day) |
+| `-cache-policy-cold-threshold` | `1` | Cold file threshold (accesses per day) |
+| `-cache-policy-adaptive` | `false` | Enable adaptive policy adjustment |
+| `-cache-policy-adjust-interval` | `1h` | Adaptive policy adjustment interval |
 
 ## Configuration File Example
 
@@ -177,6 +186,7 @@ Main configuration sections include:
 - `[health_check]` - Health check configuration
 - `[rate_limit]` - Request rate limiting configuration
 - `[data_integrity]` - Data integrity verification configuration
+- `[fine_grained_policy]` - Fine-grained cache policy configuration
 
 ## Docker Compose Example
 
@@ -264,6 +274,107 @@ Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 - `apk_cache_data_integrity_corrupted_files_total` - Number of corrupted files
 - `apk_cache_data_integrity_repaired_files_total` - Number of data integrity repairs
 - `apk_cache_data_integrity_check_duration_seconds` - Data integrity check duration
+
+## Fine-grained Cache Policy
+
+### Overview
+
+Fine-grained cache policy allows applying different caching rules to different types of files, optimizing cache efficiency and resource utilization. The following policy types are supported:
+
+### Policy Types
+
+#### 1. default
+No fine-grained policy is applied. Uses global configuration (`index-cache`, `pkg-cache`) to control cache duration.
+
+#### 2. size (Size-based Policy)
+Applies different caching rules based on file size:
+
+| File Type | Size Range | Priority | Memory Cache | Default TTL |
+|-----------|------------|----------|--------------|-------------|
+| Small | < size_small | High | Enabled | 1 day |
+| Medium | size_small ~ size_medium | Normal | Enabled | 7 days |
+| Large | >= size_medium | Low | Disabled | 30 days |
+
+Default thresholds: `size_small=1MB`, `size_medium=10MB`, `size_large=100MB`
+
+#### 3. type (Type-based Policy)
+Applies different caching rules based on filename pattern (regular expression):
+
+```toml
+[[fine_grained_policy.type_rules]]
+pattern = "^linux-lts.*\\.apk$"    # Kernel related packages
+priority = "high"                    # High priority
+ttl = "7d"                          # 7 days TTL
+memory_cache = true                  # Enable memory cache
+preload = true                      # Allow preload
+
+[[fine_grained_policy.type_rules]]
+pattern = ".*-debug$"               # Debug packages
+priority = "low"                    # Low priority
+ttl = "30d"                         # 30 days TTL
+```
+
+#### 4. frequency (Frequency-based Policy)
+Dynamically adjusts caching policy based on file access frequency (daily access count):
+
+| File Type | Daily Access Count | Priority | Memory Cache |
+|-----------|-------------------|----------|--------------|
+| Hot | > hot_threshold | High | Enabled |
+| Normal | cold_threshold ~ hot_threshold | Normal | Normal |
+| Cold | <= cold_threshold | Low | Disabled |
+
+Default thresholds: `hot_threshold=100`, `cold_threshold=1`
+
+#### 5. adaptive (Adaptive Policy)
+Comprehensively applies size, type, and frequency policies, and automatically adjusts based on actual access patterns:
+
+- Periodically (default 1 hour) analyzes access patterns
+- Automatically identifies hot files and boosts their priority
+- Dynamically adjusts caching policy to optimize hit rate
+
+### Configuration Example
+
+```toml
+[fine_grained_policy]
+# Use adaptive policy
+policy = "adaptive"
+
+# Custom size thresholds
+size_small = "512KB"
+size_medium = "20MB"
+size_large = "500MB"
+
+# Access frequency thresholds
+hot_threshold = 50
+cold_threshold = 0
+
+# Enable adaptive adjustment
+adaptive = true
+adjust_interval = "30m"
+
+# Custom type rules
+[[fine_grained_policy.type_rules]]
+pattern = "^apk-tools.*\\.apk$"
+priority = "high"
+ttl = "1d"
+memory_cache = true
+
+[[fine_grained_policy.type_rules]]
+pattern = ".*-doc.*\\.apk$"
+priority = "low"
+ttl = "30d"
+```
+
+### How Policies Affect Caching Behavior
+
+1. **TTL (Cache Duration)**: Determines how long files need to be revalidated
+2. **Priority**: When cache space is insufficient, lower priority files are cleared earlier
+3. **Memory Cache**: Higher priority files are more likely to be cached in memory for faster access
+4. **Preload**: Higher priority files can be pre-loaded into cache
+
+### Prometheus Metrics
+
+- `apk_cache_policy_adjustments_total` - Policy adjustment count
 
 ## Health Check and Self-Healing Mechanism
 

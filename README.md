@@ -24,6 +24,7 @@
 - 🩺 **健康检查** - 上游服务器状态监控和自愈机制
 - 🚦 **请求限流** - 基于令牌桶算法的请求频率限制
 - 🔍 **数据完整性** - SHA-256 文件校验和验证和自动修复
+- 🎯 **细粒度缓存策略** - 基于大小/类型/访问频率的自适应缓存策略
 - 🔐 **身份验证** - 支持代理身份验证和管理界面认证
 - 📈 **故障转移** - 多上游服务器支持和自动故障转移
 - 🛡️ **安全增强** - IP 白名单、反向代理支持和路径安全验证
@@ -154,6 +155,14 @@ Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 | `-data-integrity-auto-repair` | `true` | 启用损坏文件自动修复 |
 | `-data-integrity-periodic-check` | `true` | 启用定期数据完整性检查 |
 | `-data-integrity-initialize-existing-files` | `false` | 启动时初始化现有文件的哈希记录 |
+| `-cache-policy` | `default` | 细粒度缓存策略 (default/size/type/frequency/adaptive) |
+| `-cache-policy-size-small` | `1MB` | 小文件阈值 |
+| `-cache-policy-size-medium` | `10MB` | 中等文件阈值 |
+| `-cache-policy-size-large` | `100MB` | 大文件阈值 |
+| `-cache-policy-hot-threshold` | `100` | 热门文件阈值（每天访问次数） |
+| `-cache-policy-cold-threshold` | `1` | 冷门文件阈值（每天访问次数） |
+| `-cache-policy-adaptive` | `false` | 启用自适应策略调整 |
+| `-cache-policy-adjust-interval` | `1h` | 自适应策略调整间隔 |
 
 ## 配置文件示例
 
@@ -177,6 +186,7 @@ vim config.toml
 - `[health_check]` - 健康检查配置
 - `[rate_limit]` - 请求限流配置
 - `[data_integrity]` - 数据完整性校验配置
+- `[fine_grained_policy]` - 细粒度缓存策略配置
 
 ## Docker Compose 示例
 
@@ -264,6 +274,107 @@ services:
 - `apk_cache_data_integrity_corrupted_files_total` - 损坏文件数量
 - `apk_cache_data_integrity_repaired_files_total` - 数据完整性修复次数
 - `apk_cache_data_integrity_check_duration_seconds` - 数据完整性检查耗时
+
+## 细粒度缓存策略
+
+### 概述
+
+细粒度缓存策略允许对不同类型的文件应用不同的缓存规则，优化缓存效率和资源利用。支持以下策略类型：
+
+### 策略类型
+
+#### 1. default（默认策略）
+不应用任何细粒度策略，使用全局配置（`index-cache`、`pkg-cache`）控制缓存时间。
+
+#### 2. size（基于大小的策略）
+根据文件大小应用不同的缓存规则：
+
+| 文件类型 | 大小范围 | 优先级 | 内存缓存 | 默认 TTL |
+|----------|----------|--------|----------|----------|
+| 小文件 | < size_small | 高 | 启用 | 1 天 |
+| 中等文件 | size_small ~ size_medium | 正常 | 启用 | 7 天 |
+| 大文件 | >= size_medium | 低 | 禁用 | 30 天 |
+
+默认阈值：`size_small=1MB`，`size_medium=10MB`，`size_large=100MB`
+
+#### 3. type（基于类型的策略）
+根据文件名模式（正则表达式）匹配应用不同的缓存规则：
+
+```toml
+[[fine_grained_policy.type_rules]]
+pattern = "^linux-lts.*\\.apk$"    # 内核相关包
+priority = "high"                    # 高优先级
+ttl = "7d"                          # 7天TTL
+memory_cache = true                  # 启用内存缓存
+preload = true                      # 允许预加载
+
+[[fine_grained_policy.type_rules]]
+pattern = ".*-debug$"               # 调试包
+priority = "low"                    # 低优先级
+ttl = "30d"                         # 30天TTL
+```
+
+#### 4. frequency（基于访问频率的策略）
+根据文件的访问频率（每天访问次数）动态调整缓存策略：
+
+| 文件类型 | 每天访问次数 | 优先级 | 内存缓存 |
+|----------|--------------|--------|----------|
+| 热门文件 | > hot_threshold | 高 | 启用 |
+| 正常文件 | cold_threshold ~ hot_threshold | 正常 | 正常 |
+| 冷门文件 | <= cold_threshold | 低 | 禁用 |
+
+默认阈值：`hot_threshold=100`，`cold_threshold=1`
+
+#### 5. adaptive（自适应策略）
+综合应用大小、类型、频率三种策略，并根据实际访问模式自动调整：
+
+- 定期（默认1小时）分析访问模式
+- 自动识别热门文件并提升优先级
+- 动态调整缓存策略以优化命中率
+
+### 配置示例
+
+```toml
+[fine_grained_policy]
+# 使用自适应策略
+policy = "adaptive"
+
+# 自定义大小阈值
+size_small = "512KB"
+size_medium = "20MB"
+size_large = "500MB"
+
+# 访问频率阈值
+hot_threshold = 50
+cold_threshold = 0
+
+# 启用自适应调整
+adaptive = true
+adjust_interval = "30m"
+
+# 自定义类型规则
+[[fine_grained_policy.type_rules]]
+pattern = "^apk-tools.*\\.apk$"
+priority = "high"
+ttl = "1d"
+memory_cache = true
+
+[[fine_grained_policy.type_rules]]
+pattern = ".*-doc.*\\.apk$"
+priority = "low"
+ttl = "30d"
+```
+
+### 策略如何影响缓存行为
+
+1. **TTL（缓存时间）**：决定文件多久后需要重新验证
+2. **优先级**：在缓存空间不足时，低优先级文件更早被清除
+3. **内存缓存**：高优先级文件更可能被缓存在内存中以加快访问速度
+4. **预加载**：高优先级文件可以提前加载到缓存
+
+### Prometheus 指标
+
+- `apk_cache_policy_adjustments_total` - 策略调整次数
 
 ## 健康检查和自愈机制
 

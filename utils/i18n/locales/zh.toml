@@ -229,6 +229,19 @@ other = "无效的内存缓存最大文件大小: {{.Error}}"
 [MemoryCacheFileTooLarge]
 other = "文件过大，无法缓存到内存: {{.Path}} ({{.Size}} 字节，最大 {{.Max}} 字节)"
 
+[MemoryCachePolicySkip]
+other = "策略跳过内存缓存: {{.Path}} ({{.Reason}})"
+
+# 细粒度缓存策略相关翻译
+[FineGrainedPolicyEnabled]
+other = "细粒度缓存策略已启用: {{.Policy}}"
+
+[FineGrainedPolicyAdjusted]
+other = "细粒度策略已调整: 跟踪了 {{.TotalFiles}} 个文件, {{.HotFiles}} 个热门文件"
+
+[InvalidCachePolicyAdjustInterval]
+other = "无效的缓存策略调整间隔: {{.Error}}"
+
 # 健康检查相关翻译
 [HealthCheckUpstreamHealthy]
 other = "上游服务器 {{.URL}} 健康"

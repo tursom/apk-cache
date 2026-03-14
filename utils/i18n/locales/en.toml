@@ -229,6 +229,19 @@ other = "Invalid memory cache max file size: {{.Error}}"
 [MemoryCacheFileTooLarge]
 other = "File too large for memory cache: {{.Path}} ({{.Size}} bytes, max {{.Max}} bytes)"
 
+[MemoryCachePolicySkip]
+other = "Memory cache skipped by policy: {{.Path}} ({{.Reason}})"
+
+# Fine-grained cache policy related translations
+[FineGrainedPolicyEnabled]
+other = "Fine-grained cache policy enabled: {{.Policy}}"
+
+[FineGrainedPolicyAdjusted]
+other = "Fine-grained policy adjusted: {{.TotalFiles}} files tracked, {{.HotFiles}} hot files"
+
+[InvalidCachePolicyAdjustInterval]
+other = "Invalid cache policy adjust interval: {{.Error}}"
+
 # Health check related translations
 [HealthCheckUpstreamHealthy]
 other = "Upstream server {{.URL}} is healthy"

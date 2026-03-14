@@ -256,6 +256,10 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 	// 记录访问时间（只记录非索引文件）
 	if !utils.IsIndexFile(cacheFile) {
 		accessTimeTracker.RecordAccess(cacheFile)
+		// 记录细粒度策略访问统计
+		if fineGrainedPolicy != nil {
+			fineGrainedPolicy.RecordAccess(cacheFile)
+		}
 	}
 
 	stat, _ := file.Stat()
@@ -263,13 +267,26 @@ func serveFromCache(w http.ResponseWriter, r *http.Request, cacheFile string) {
 
 	// 如果内存缓存启用，将文件内容加载到内存缓存
 	if memoryCache != nil && !utils.IsIndexFile(cacheFile) {
+		// 使用细粒度策略判断是否应该缓存到内存
+		shouldCacheInMemory := true
+		if fineGrainedPolicy != nil {
+			shouldCacheInMemory = fineGrainedPolicy.ShouldCacheInMemory(cacheFile, stat.Size())
+		}
+
 		// 检查文件大小是否超过内存缓存限制
-		if memoryCacheMaxFileSizeBytes > 0 && stat.Size() > memoryCacheMaxFileSizeBytes {
-			log.Println(i18n.T("MemoryCacheFileTooLarge", map[string]any{
-				"Path": cacheFile,
-				"Size": stat.Size(),
-				"Max":  memoryCacheMaxFileSizeBytes,
-			}))
+		if !shouldCacheInMemory || (memoryCacheMaxFileSizeBytes > 0 && stat.Size() > memoryCacheMaxFileSizeBytes) {
+			if !shouldCacheInMemory {
+				log.Println(i18n.T("MemoryCachePolicySkip", map[string]any{
+					"Path": cacheFile,
+					"Reason": "policy",
+				}))
+			} else {
+				log.Println(i18n.T("MemoryCacheFileTooLarge", map[string]any{
+					"Path": cacheFile,
+					"Size": stat.Size(),
+					"Max":  memoryCacheMaxFileSizeBytes,
+				}))
+			}
 		} else {
 			// 读取文件内容
 			data, err := os.ReadFile(cacheFile)

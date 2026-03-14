@@ -61,6 +61,16 @@ var (
 	dataIntegrityCheckInterval = flag.Duration("data-integrity-check-interval", time.Hour, "Data integrity check interval (0 = disabled)")
 	dataIntegrityAutoRepair    = flag.Bool("data-integrity-auto-repair", true, "Enable automatic repair of corrupted files")
 	dataIntegrityPeriodicCheck = flag.Bool("data-integrity-periodic-check", true, "Enable periodic data integrity checks")
+
+	// 细粒度缓存策略相关参数
+	cachePolicy             = flag.String("cache-policy", "default", "Cache policy (default, size, type, frequency, adaptive)")
+	cachePolicySizeSmall   = flag.String("cache-policy-size-small", "1MB", "Small file threshold (e.g. 1MB, 512KB)")
+	cachePolicySizeMedium  = flag.String("cache-policy-size-medium", "10MB", "Medium file threshold (e.g. 10MB, 50MB)")
+	cachePolicySizeLarge   = flag.String("cache-policy-size-large", "100MB", "Large file threshold (e.g. 100MB, 1GB)")
+	cachePolicyHotThreshold = flag.Int("cache-policy-hot-threshold", 100, "Hot file threshold (accesses per day)")
+	cachePolicyColdThreshold = flag.Int("cache-policy-cold-threshold", 1, "Cold file threshold (accesses per day)")
+	cachePolicyAdaptive    = flag.Bool("cache-policy-adaptive", false, "Enable adaptive policy adjustment")
+	cachePolicyAdjustInterval = flag.Duration("cache-policy-adjust-interval", time.Hour, "Adaptive policy adjustment interval")
 )
 
 // 预处理后的限流豁免路径列表
@@ -68,13 +78,14 @@ var rateLimitExemptPathsList []string
 
 // Config 配置文件结构
 type Config struct {
-	Server        ServerConfig        `toml:"server"`
-	Upstreams     []UpstreamConfig    `toml:"upstreams"`
-	Cache         CacheConfig         `toml:"cache"`
-	Security      SecurityConfig      `toml:"security"`
-	HealthCheck   HealthCheckConfig   `toml:"health_check"`
-	RateLimit     RateLimitConfig     `toml:"rate_limit"`
-	DataIntegrity DataIntegrityConfig `toml:"data_integrity"`
+	Server            ServerConfig              `toml:"server"`
+	Upstreams        []UpstreamConfig           `toml:"upstreams"`
+	Cache            CacheConfig                `toml:"cache"`
+	Security         SecurityConfig             `toml:"security"`
+	HealthCheck      HealthCheckConfig          `toml:"health_check"`
+	RateLimit        RateLimitConfig            `toml:"rate_limit"`
+	DataIntegrity    DataIntegrityConfig        `toml:"data_integrity"`
+	FineGrainedPolicy FineGrainedPolicyConfig   `toml:"fine_grained_policy"`
 }
 
 type ServerConfig struct {
@@ -137,6 +148,19 @@ type DataIntegrityConfig struct {
 	CheckInterval string `toml:"check_interval"`
 	AutoRepair    bool   `toml:"auto_repair"`
 	PeriodicCheck bool   `toml:"periodic_check"`
+}
+
+// FineGrainedPolicyConfig 细粒度缓存策略配置
+type FineGrainedPolicyConfig struct {
+	Policy         string              `toml:"policy"`
+	SizeSmall      string              `toml:"size_small"`
+	SizeMedium     string              `toml:"size_medium"`
+	SizeLarge      string              `toml:"size_large"`
+	HotThreshold   int                 `toml:"hot_threshold"`
+	ColdThreshold  int                 `toml:"cold_threshold"`
+	Adaptive       bool                `toml:"adaptive"`
+	AdjustInterval string              `toml:"adjust_interval"`
+	TypeRules      []TypeRuleConfig    `toml:"type_rules"`
 }
 
 // LoadConfig 加载配置文件
@@ -306,6 +330,39 @@ func ApplyConfig(config *Config) error {
 	if !isFlagSet("data-integrity-periodic-check") {
 		*dataIntegrityPeriodicCheck = config.DataIntegrity.PeriodicCheck
 	}
+
+	// FineGrainedPolicy 配置
+	if config.FineGrainedPolicy.Policy != "" && !isFlagSet("cache-policy") {
+		*cachePolicy = config.FineGrainedPolicy.Policy
+	}
+	if config.FineGrainedPolicy.SizeSmall != "" && !isFlagSet("cache-policy-size-small") {
+		*cachePolicySizeSmall = config.FineGrainedPolicy.SizeSmall
+	}
+	if config.FineGrainedPolicy.SizeMedium != "" && !isFlagSet("cache-policy-size-medium") {
+		*cachePolicySizeMedium = config.FineGrainedPolicy.SizeMedium
+	}
+	if config.FineGrainedPolicy.SizeLarge != "" && !isFlagSet("cache-policy-size-large") {
+		*cachePolicySizeLarge = config.FineGrainedPolicy.SizeLarge
+	}
+	if config.FineGrainedPolicy.HotThreshold > 0 && !isFlagSet("cache-policy-hot-threshold") {
+		*cachePolicyHotThreshold = config.FineGrainedPolicy.HotThreshold
+	}
+	if config.FineGrainedPolicy.ColdThreshold > 0 && !isFlagSet("cache-policy-cold-threshold") {
+		*cachePolicyColdThreshold = config.FineGrainedPolicy.ColdThreshold
+	}
+	if !isFlagSet("cache-policy-adaptive") {
+		*cachePolicyAdaptive = config.FineGrainedPolicy.Adaptive
+	}
+	if config.FineGrainedPolicy.AdjustInterval != "" && !isFlagSet("cache-policy-adjust-interval") {
+		duration, err := time.ParseDuration(config.FineGrainedPolicy.AdjustInterval)
+		if err != nil {
+			return errors.New(i18n.T("InvalidCachePolicyAdjustInterval", map[string]any{"Error": err}))
+		}
+		*cachePolicyAdjustInterval = duration
+	}
+
+	// 加载细粒度策略类型规则
+	globalTypeRules = config.FineGrainedPolicy.TypeRules
 
 	// Upstreams 配置
 	if len(config.Upstreams) > 0 && !isFlagSet("upstream") {

@@ -41,6 +41,9 @@ type MonitoringManager struct {
 	MemCacheSize      *prometheus.GaugeVec
 	MemCacheItems     prometheus.Gauge
 	MemCacheEvictions prometheus.Counter
+
+	// 细粒度缓存策略相关指标
+	PolicyAdjustments prometheus.Counter
 }
 
 var Monitoring = NewMonitoring()
@@ -163,6 +166,12 @@ func NewMonitoring() *MonitoringManager {
 		Help: "Total number of memory cache evictions",
 	})
 
+	// 初始化细粒度缓存策略相关指标
+	monitoring.PolicyAdjustments = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_policy_adjustments_total",
+		Help: "Total number of cache policy adjustments",
+	})
+
 	// 注册所有指标到自定义 Registry
 	monitoring.registerMetrics()
 
@@ -271,4 +280,9 @@ func (m *MonitoringManager) RecordMemoryCacheMiss() {
 // RecordMemoryCacheEviction 记录内存缓存驱逐
 func (m *MonitoringManager) RecordMemoryCacheEviction() {
 	m.MemCacheEvictions.Add(1)
+}
+
+// RecordPolicyAdjustment 记录缓存策略调整
+func (m *MonitoringManager) RecordPolicyAdjustment(policyType string, affectedFiles int64) {
+	m.PolicyAdjustments.Inc()
 }

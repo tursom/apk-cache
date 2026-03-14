@@ -99,3 +99,30 @@ exempt_paths = "/_health,/metrics"
 # periodic_check = true
 # 是否在启动时初始化现有文件的哈希记录（默认为 false）
 # initialize_existing_files = false
+
+# 细粒度缓存策略配置
+[fine_grained_policy]
+# 策略类型: default(默认) / size(基于大小) / type(基于类型) / frequency(基于频率) / adaptive(自适应)
+# policy = "default"
+# 小文件阈值（小于此大小的文件被视为小文件）
+# size_small = "1MB"
+# 中等文件阈值（小于此大小的文件被视为中等文件）
+# size_medium = "10MB"
+# 大文件阈值（大于等于此大小的文件被视为大文件）
+# size_large = "100MB"
+# 热门文件阈值（每天访问次数超过此值被视为热门文件）
+# hot_threshold = 100
+# 冷门文件阈值（每天访问次数低于等于此值被视为冷门文件）
+# cold_threshold = 1
+# 是否启用自适应策略调整
+# adaptive = false
+# 自适应策略调整间隔
+# adjust_interval = "1h"
+
+# 类型规则（仅在 policy 为 type 或 adaptive 时生效）
+# [[fine_grained_policy.type_rules]]
+# pattern = "^apk-tools.*\\.apk$"  # 文件名匹配模式（正则表达式）
+# priority = "high"               # 优先级: low / normal / high
+# ttl = "7d"                       # 缓存时间
+# memory_cache = true              # 是否启用内存缓存
+# preload = true                   # 是否预加载

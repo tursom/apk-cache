@@ -27,6 +27,8 @@ var (
 	monitoring = utils.Monitoring
 	// 上游服务器管理器（支持故障转移和健康检查）
 	upstreamManager = NewUpstreamManager()
+	// 细粒度缓存策略类型规则（从配置文件加载）
+	globalTypeRules []TypeRuleConfig
 	// 文件锁管理器
 	lockManager = utils.NewFileLockManager()
 	// 访问时间跟踪器（在 main 中初始化，以便 ApplyConfig 后使用正确的 dataPath）
@@ -118,6 +120,29 @@ func main() {
 	} else {
 		log.Println(i18n.T("MemoryCacheDisabled", nil))
 	}
+
+	// 初始化细粒度缓存策略
+	policyConfig := CachePolicyConfig{
+		Policy: CachePolicy(*cachePolicy),
+		SizeThresholds: SizeThresholdConfig{
+			Small:  *cachePolicySizeSmall,
+			Medium: *cachePolicySizeMedium,
+			Large:  *cachePolicySizeLarge,
+		},
+		FrequencyThresholds: FrequencyThresholdConfig{
+			Hot:  *cachePolicyHotThreshold,
+			Cold: *cachePolicyColdThreshold,
+		},
+		AdaptiveConfig: AdaptivePolicyConfig{
+			Enabled:        *cachePolicyAdaptive,
+			AdjustInterval: (*cachePolicyAdjustInterval).String(),
+		},
+		TypeRules:      globalTypeRules,
+	}
+	fineGrainedPolicy = NewFineGrainedCachePolicy(policyConfig)
+	log.Println(i18n.T("FineGrainedPolicyEnabled", map[string]any{
+		"Policy": *cachePolicy,
+	}))
 
 	// 初始化请求限流器
 	if *rateLimitEnabled {
