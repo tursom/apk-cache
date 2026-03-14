@@ -222,8 +222,10 @@ func getCacheFilePath(urlPath string) (string, error) {
 		return "", errors.New("invalid path: path traversal not allowed")
 	}
 
-	// 确保路径不以绝对路径开始
-	if filepath.IsAbs(cleanPath) {
+	// 在Unix系统上，filepath.IsAbs会把所有以/开头的路径当作绝对路径
+	// 但URL路径如 /alpine/v3.23/ 是合法的，应该允许
+	// 只拒绝Windows风格的绝对路径如 C:\, D:\ 等
+	if isWindowsAbsolutePath(cleanPath) {
 		return "", errors.New("invalid path: absolute path not allowed")
 	}
 
@@ -247,6 +249,21 @@ func getCacheFilePath(urlPath string) (string, error) {
 	}
 
 	return cacheFile, nil
+}
+
+// isWindowsAbsolutePath 检查是否是Windows风格的绝对路径
+// 如 C:\, D:\ 等
+// Unix系统的 / 开头的路径在Unix上是合法的，不应该被拒绝
+func isWindowsAbsolutePath(path string) bool {
+	if len(path) >= 2 {
+		// 检查第一个字符是否是字母盘符，第二个字符是否是冒号
+		if (path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z') {
+			if path[1] == ':' {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func cacheValid(path string) bool {

@@ -55,6 +55,7 @@ t() {
                 STEP5_APT_UPDATE) echo "--- 执行 apt-get update ---" ;;
                 STEP5_APT_DONE) echo "✅ apt-get update 成功!" ;;
                 RESULT_TITLE) echo "🎉 所有测试步骤完成!" ;;
+                RESULT_ERRORS_TITLE) echo "❌ 测试错误:" ;;
                 RESULT_BUILD) echo "  - build.sh 打包: ✅ 成功" ;;
                 RESULT_DOCKER) echo "  - Docker 镜像构建: ✅ 成功" ;;
                 RESULT_SERVICE) echo "  - 服务启动: ✅ 成功" ;;
@@ -72,6 +73,7 @@ t() {
                 HELP_ALPINE_MIRROR) echo "  --alpine-apk-mirror <url>   Docker构建/本地构建时使用的Alpine源（例: http://mirror/alpine）" ;;
                 HELP_APK_MIRROR) echo "  --apk-mirror <url>          同 --alpine-apk-mirror" ;;
                 HELP_LANG) echo "  --lang <zh|en>               设置语言（默认自动检测）" ;;
+                HELP_PROXY) echo "  --proxy <url>                设置上游HTTP/SOCKS5代理" ;;
                 HELP_HELP) echo "  -h, --help                   显示此帮助信息" ;;
                 *) echo "$1" ;;
             esac
@@ -102,6 +104,7 @@ t() {
                 STEP5_APT_UPDATE) echo "--- Running apt-get update ---" ;;
                 STEP5_APT_DONE) echo "✅ apt-get update succeeded!" ;;
                 RESULT_TITLE) echo "🎉 All tests completed!" ;;
+                RESULT_ERRORS_TITLE) echo "❌ Test Errors:" ;;
                 RESULT_BUILD) echo "  - build.sh: ✅ Success" ;;
                 RESULT_DOCKER) echo "  - Docker image: ✅ Success" ;;
                 RESULT_SERVICE) echo "  - Service start: ✅ Success" ;;
@@ -119,6 +122,7 @@ t() {
                 HELP_ALPINE_MIRROR) echo "  --alpine-apk-mirror <url>   Alpine mirror for build (e.g. http://mirror/alpine)" ;;
                 HELP_APK_MIRROR) echo "  --apk-mirror <url>          Alias for --alpine-apk-mirror" ;;
                 HELP_LANG) echo "  --lang <zh|en>               Set language (default: auto-detect)" ;;
+                HELP_PROXY) echo "  --proxy <url>                Set upstream HTTP/SOCKS5 proxy" ;;
                 HELP_HELP) echo "  -h, --help                   Show this help message" ;;
                 *) echo "$1" ;;
             esac
@@ -135,9 +139,18 @@ TEST_CONTAINER_NAME="apk-cache-client"
 CACHE_DIR="/tmp/apk-cache-test-cache"
 PORT=3142
 
+# 错误记录
+ERRORS=()
+
+# 记录错误的函数
+record_error() {
+    ERRORS+=("$1")
+}
+
 CUSTOM_GOPROXY=""
 ALPINE_APK_MIRROR=""
 USE_CUSTOM_IMAGE=""
+CUSTOM_PROXY=""
 
 # 解析命令行参数
 while [ $# -gt 0 ]; do
@@ -175,6 +188,14 @@ while [ $# -gt 0 ]; do
             CURRENT_LANG="$2"
             shift 2
             ;;
+        --proxy)
+            if [ $# -lt 2 ]; then
+                echo $(t "ERR_ARG_REQUIRES" "$1")
+                exit 1
+            fi
+            CUSTOM_PROXY="$2"
+            shift 2
+            ;;
         -h|--help)
             echo $(t "HELP_TITLE")
             echo ""
@@ -184,6 +205,7 @@ while [ $# -gt 0 ]; do
             echo $(t "HELP_ALPINE_MIRROR")
             echo $(t "HELP_APK_MIRROR")
             echo $(t "HELP_LANG")
+            echo $(t "HELP_PROXY")
             echo $(t "HELP_HELP")
             echo ""
             exit 0
@@ -275,13 +297,25 @@ echo "========================================"
 echo $(t "STEP3_TITLE")
 echo "========================================"
 echo $(t "STEP3_STARTING")
-docker run -d \
-    --name "$CONTAINER_NAME" \
-    -p "${PORT}:3142" \
-    -v "$CACHE_DIR:/app/cache" \
-    -e "ADDR=:3142" \
-    -e "CACHE_DIR=/app/cache" \
-    "$IMAGE_NAME"
+
+# 构建 docker run 命令
+DOCKER_RUN_ARGS="docker run -d \
+    --name \"$CONTAINER_NAME\" \
+    -p \"${PORT}:3142\" \
+    -v \"$CACHE_DIR:/app/cache\" \
+    -e \"ADDR=:3142\" \
+    -e \"CACHE_DIR=/app/cache\""
+
+# 如果指定了代理，添加到环境变量
+if [ -n "$CUSTOM_PROXY" ]; then
+    DOCKER_RUN_ARGS="$DOCKER_RUN_ARGS \
+    -e \"PROXY=$CUSTOM_PROXY\""
+fi
+
+DOCKER_RUN_ARGS="$DOCKER_RUN_ARGS \"$IMAGE_NAME\""
+
+# 执行 docker run
+eval "$DOCKER_RUN_ARGS"
 
 echo $(t "STEP3_DONE" "$CONTAINER_NAME")
 
@@ -303,6 +337,7 @@ echo $(t "STEP4_TITLE")
 echo "========================================"
 
 # 启动测试容器并执行 apk update
+# apk-cache 返回错误时应该直接报错，而不是掩盖问题
 docker run --rm \
     --name "$TEST_CONTAINER_NAME" \
     --link "$CONTAINER_NAME" \
@@ -315,10 +350,36 @@ docker run --rm \
         cat /etc/apk/repositories
         echo ''
         echo '$(t STEP4_ALPINE_UPDATE)'
-        apk update
+        
+        # 捕获 apk update 的输出和退出码
+        APK_UPDATE_OUTPUT=\$(apk update 2>&1)
+        APK_UPDATE_EXIT=\$?
+        echo \"\$APK_UPDATE_OUTPUT\"
+        
+        # 检查是否有错误，记录错误标记供宿主机捕获
+        if [ \$APK_UPDATE_EXIT -ne 0 ]; then
+            echo 'ERROR:APK_UPDATE_EXIT_CODE:\$APK_UPDATE_EXIT'
+        fi
+        
+        # 检查输出中是否包含错误关键词
+        if echo \"\$APK_UPDATE_OUTPUT\" | grep -qiE 'HTTP [45]|error|failed|unable|unavailable'; then
+            echo 'ERROR:APK_UPDATE_CONTAINS_ERROR'
+        fi
+        
         echo ''
         echo '$(t STEP4_ALPINE_DONE)'
     "
+
+# 检查 apk update 是否有错误
+if [ $? -ne 0 ] || docker logs "$TEST_CONTAINER_NAME" 2>&1 | grep -qE "ERROR:APK_UPDATE"; then
+    # 提取错误信息
+    APK_ERRORS=$(docker logs "$TEST_CONTAINER_NAME" 2>&1 | grep "ERROR:APK_UPDATE" | head -5)
+    if [ -n "$APK_ERRORS" ]; then
+        record_error "Alpine apk update failed: $APK_ERRORS"
+    else
+        record_error "Alpine apk update failed"
+    fi
+fi
 
 # 步骤5: 启动 debian 测试客户端
 echo ""
@@ -355,6 +416,20 @@ echo $(t "RESULT_DOCKER")
 echo $(t "RESULT_SERVICE")
 echo $(t "RESULT_ALPINE")
 echo $(t "RESULT_APT")
+
+# 输出错误统计
+if [ ${#ERRORS[@]} -gt 0 ]; then
+    echo ""
+    echo "========================================"
+    echo $(t "RESULT_ERRORS_TITLE")
+    echo "========================================"
+    for i in "${!ERRORS[@]}"; do
+        echo "  $((i+1)). ${ERRORS[$i]}"
+    done
+    echo ""
+    echo "Total errors: ${#ERRORS[@]}"
+fi
+
 echo ""
 echo $(t "SERVICE_LOCAL" "$PORT")
 echo $(t "SERVICE_CONTAINER" "$CONTAINER_NAME")

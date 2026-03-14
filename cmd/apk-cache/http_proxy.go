@@ -9,12 +9,44 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
 	"github.com/tursom/apk-cache/utils/i18n"
 	"golang.org/x/net/proxy"
 )
+
+// httpClientPool HTTP客户端池，用于缓存已创建的客户端
+var httpClientPool = struct {
+	sync.RWMutex
+	clients map[string]*http.Client
+}{clients: make(map[string]*http.Client)}
+
+// getHTTPClient 从池中获取HTTP客户端，不存在则创建
+func getHTTPClient(proxyAddr string) *http.Client {
+	httpClientPool.RLock()
+	client, ok := httpClientPool.clients[proxyAddr]
+	httpClientPool.RUnlock()
+
+	if ok {
+		return client
+	}
+
+	// 创建新客户端
+	httpClientPool.Lock()
+	// 双重检查
+	if client, ok = httpClientPool.clients[proxyAddr]; ok {
+		httpClientPool.Unlock()
+		return client
+	}
+
+	client = createHTTPClientForUpstream(proxyAddr)
+	httpClientPool.clients[proxyAddr] = client
+	httpClientPool.Unlock()
+
+	return client
+}
 
 // cacheMissReader 用于在读取时统计未命中缓存的字节数
 type cacheMissReader struct {
@@ -89,10 +121,14 @@ func handleProxyHTTPS(w http.ResponseWriter, r *http.Request) {
 			"Host":  host,
 			"Error": err,
 		}))
-		http.Error(w, fmt.Sprintf("Failed to connect to %s: %v", host, err), http.StatusBadGateway)
+		http.Error(w, fmt.Sprintf("Failed to connect to %s", host), http.StatusBadGateway)
 		return
 	}
 	defer targetConn.Close()
+
+	// 设置连接读写超时
+	targetConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	targetConn.SetWriteDeadline(time.Now().Add(60 * time.Second))
 
 	// 获取客户端连接
 	hijacker, ok := w.(http.Hijacker)
@@ -103,25 +139,42 @@ func handleProxyHTTPS(w http.ResponseWriter, r *http.Request) {
 
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Hijacking failed: %v", err), http.StatusInternalServerError)
+		http.Error(w, "Hijacking failed", http.StatusInternalServerError)
 		return
 	}
 	defer clientConn.Close()
 
-	// 告诉客户端连接已建立
-	// 对于CONNECT请求，需要发送特定格式的响应
-	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n"))
-	clientConn.Write([]byte("Proxy-Agent: apk-cache\r\n"))
-	clientConn.Write([]byte("\r\n"))
+	// 设置客户端连接超时
+	clientConn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	clientConn.SetWriteDeadline(time.Now().Add(60 * time.Second))
 
-	// 双向转发数据
-	// 注意：对于HTTPS代理，代理服务器不应该进行TLS握手
-	// 客户端会直接与目标服务器进行TLS握手
+	// 预定义 CONNECT 响应常量
+	const connectResponse = "HTTP/1.1 200 Connection Established\r\nProxy-Agent: apk-cache\r\n\r\n"
+	clientConn.Write([]byte(connectResponse))
+
+	// 双向转发数据，使用管道避免goroutine泄漏
+	clientToTarget := make(chan struct{})
+	targetToClient := make(chan struct{})
+
 	go func() {
 		io.Copy(targetConn, clientConn)
 		targetConn.Close()
+		clientConn.Close()
+		close(clientToTarget)
 	}()
-	io.Copy(clientConn, targetConn)
+
+	go func() {
+		io.Copy(clientConn, targetConn)
+		targetConn.Close()
+		clientConn.Close()
+		close(targetToClient)
+	}()
+
+	// 等待任一方向完成
+	select {
+	case <-clientToTarget:
+	case <-targetToClient:
+	}
 }
 
 // handleProxyHTTP 处理HTTP代理请求
@@ -207,9 +260,19 @@ func proxyDialHTTP(host string, proxyURL *url.URL) (net.Conn, error) {
 		return nil, fmt.Errorf("failed to connect to proxy %s: %v", proxyURL.Host, err)
 	}
 
-	// 发送CONNECT请求
-	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: apk-cache-proxy\r\nProxy-Connection: Keep-Alive\r\n\r\n", host, host)
-	if _, err := proxyConn.Write([]byte(connectReq)); err != nil {
+	// 设置超时
+	proxyConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	proxyConn.SetWriteDeadline(time.Now().Add(30 * time.Second))
+
+	// 使用 strings.Builder 构建 CONNECT 请求
+	var sb strings.Builder
+	sb.WriteString("CONNECT ")
+	sb.WriteString(host)
+	sb.WriteString(" HTTP/1.1\r\nHost: ")
+	sb.WriteString(host)
+	sb.WriteString("\r\nUser-Agent: apk-cache-proxy\r\nProxy-Connection: Keep-Alive\r\n\r\n")
+
+	if _, err := proxyConn.Write([]byte(sb.String())); err != nil {
 		proxyConn.Close()
 		return nil, fmt.Errorf("failed to send CONNECT request: %v", err)
 	}
@@ -322,8 +385,8 @@ func proxyForwardRequest(r *http.Request) (*http.Response, error) {
 
 	log.Println(i18n.T("ForwardingToUpstream", map[string]any{"Method": r.Method, "URL": targetURL.String()}))
 
-	// 创建HTTP客户端
-	client := createHTTPClientForUpstream(proxy)
+	// 从客户端池获取HTTP客户端
+	client := getHTTPClient(proxy)
 
 	// 复制原始请求
 	req, err := http.NewRequest(r.Method, targetURL.String(), r.Body)
