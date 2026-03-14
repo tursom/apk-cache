@@ -428,6 +428,7 @@ if [ ${#ERRORS[@]} -gt 0 ]; then
     done
     echo ""
     echo "Total errors: ${#ERRORS[@]}"
+    exit 1
 fi
 
 echo ""
