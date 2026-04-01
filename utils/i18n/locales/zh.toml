@@ -546,3 +546,6 @@ other = "打开访问时间数据库失败：{{.Error}}"
 
 [SaveAccessTimeFailed]
 other = "保存 {{.Path}} 的访问时间失败：{{.Error}}"
+
+[UpdateCacheTimeFailed]
+other = "更新缓存文件修改时间失败：{{.Path}}：{{.Error}}"

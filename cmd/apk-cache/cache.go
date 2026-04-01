@@ -659,6 +659,19 @@ func handleUpstreamResponse(w http.ResponseWriter, r *http.Request, upstreamResp
 			}))
 		}
 
+		// 上游确认内容未修改，更新缓存文件的修改时间以重置过期计时器
+		// 这对索引文件尤其重要：索引文件按修改时间过期，如果不更新 mtime，
+		// 304 响应后文件仍会被判定为过期，导致每次请求都重复向上游发起验证
+		if _, err := os.Stat(cacheFile); err == nil {
+			now := time.Now()
+			if err := os.Chtimes(cacheFile, now, now); err != nil {
+				log.Println(i18n.T("UpdateCacheTimeFailed", map[string]any{
+					"Path":  cacheFile,
+					"Error": err,
+				}))
+			}
+		}
+
 		// 如果缓存存在，直接使用缓存
 		if cacheValid(cacheFile) {
 			serveFromCache(w, r, cacheFile)

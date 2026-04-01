@@ -546,3 +546,6 @@ other = "Failed to open access time database: {{.Error}}"
 
 [SaveAccessTimeFailed]
 other = "Failed to save access time for {{.Path}}: {{.Error}}"
+
+[UpdateCacheTimeFailed]
+other = "Failed to update cache file modification time: {{.Path}}: {{.Error}}"
