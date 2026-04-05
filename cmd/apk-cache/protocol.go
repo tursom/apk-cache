@@ -74,7 +74,8 @@ type ProtocolAdapter interface {
 	CachePolicy(*NormalizedRequest) CacheDecision
 	CacheKey(*NormalizedRequest) (string, error)
 	ValidateCached(context.Context, *App, *NormalizedRequest, string) error
-	ValidateFetched(context.Context, *App, *NormalizedRequest, string) error
+	ValidateFetched(context.Context, *App, *NormalizedRequest, string, string) error
+	CommitStored(context.Context, *App, *NormalizedRequest, string) error
 	Fetch(context.Context, *App, *NormalizedRequest) (*http.Response, error)
 }
 
@@ -185,19 +186,19 @@ func (a *APKAdapter) ValidateCached(_ context.Context, app *App, req *Normalized
 
 // ValidateFetched 校验本次刚下载完成的 APK/APKINDEX。
 // 哈希失败是致命错误；签名失败则包装为 CacheBypassError，让上层改走“透传但不缓存”。
-func (a *APKAdapter) ValidateFetched(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
+func (a *APKAdapter) ValidateFetched(_ context.Context, app *App, req *NormalizedRequest, cachePath string, filePath string) error {
 	if req.CacheClass == "index" {
 		if app.cfg.APK.VerifySignature {
-			if err := app.apkVerifier.ValidateIndexSignature(cachePath); err != nil {
+			if err := app.apkVerifier.ValidateIndexSignature(filePath); err != nil {
 				utils.Monitoring.RecordAPKSignatureFailure()
 				return &CacheBypassError{Err: err}
 			}
 		}
-		return app.apkIndex.LoadFile(cachePath)
+		return nil
 	}
 
 	if app.cfg.APK.VerifyHash {
-		err := app.apkIndex.ValidatePackage(cachePath)
+		err := app.apkIndex.ValidatePackageFile(cachePath, filePath)
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrAPKIndexUnavailable):
@@ -208,12 +209,19 @@ func (a *APKAdapter) ValidateFetched(_ context.Context, app *App, req *Normalize
 	}
 
 	if app.cfg.APK.VerifySignature {
-		if err := app.apkVerifier.ValidatePackageSignature(cachePath); err != nil {
+		if err := app.apkVerifier.ValidatePackageSignature(filePath); err != nil {
 			utils.Monitoring.RecordAPKSignatureFailure()
 			return &CacheBypassError{Err: err}
 		}
 	}
 
+	return nil
+}
+
+func (a *APKAdapter) CommitStored(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
+	if req.CacheClass == "index" {
+		return app.apkIndex.LoadFile(cachePath)
+	}
 	return nil
 }
 
@@ -281,30 +289,32 @@ func (a *APTAdapter) ValidateCached(ctx context.Context, app *App, req *Normaliz
 	return nil
 }
 
-func (a *APTAdapter) ValidateFetched(ctx context.Context, app *App, req *NormalizedRequest, cachePath string) error {
-	if req.CacheClass == "index" {
-		if a.cfg.LoadIndexAsync {
-			go func() {
-				if err := app.aptIndex.LoadFile(cachePath); err != nil {
-					log.Printf("load apt index %s: %v", cachePath, err)
-				}
-			}()
-		} else {
-			if err := app.aptIndex.LoadFile(cachePath); err != nil {
-				return err
-			}
-		}
-	}
+func (a *APTAdapter) ValidateFetched(_ context.Context, app *App, req *NormalizedRequest, cachePath string, filePath string) error {
 	if !a.cfg.VerifyHash {
 		return nil
 	}
 	if utils.IsHashRequest(req.TargetURL.Path) {
-		return app.aptIndex.ValidateByHash(cachePath, req.TargetURL.Path)
+		return app.aptIndex.ValidateByHash(filePath, req.TargetURL.Path)
 	}
 	if strings.HasSuffix(cachePath, ".deb") {
-		return app.aptIndex.ValidateDeb(cachePath)
+		return app.aptIndex.ValidateDebFile(cachePath, filePath)
 	}
 	return nil
+}
+
+func (a *APTAdapter) CommitStored(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
+	if req.CacheClass != "index" {
+		return nil
+	}
+	if a.cfg.LoadIndexAsync {
+		go func() {
+			if err := app.aptIndex.LoadFile(cachePath); err != nil {
+				log.Printf("load apt index %s: %v", cachePath, err)
+			}
+		}()
+		return nil
+	}
+	return app.aptIndex.LoadFile(cachePath)
 }
 
 func (a *APTAdapter) Fetch(ctx context.Context, app *App, req *NormalizedRequest) (*http.Response, error) {
@@ -357,7 +367,11 @@ func (a *ProxyAdapter) ValidateCached(context.Context, *App, *NormalizedRequest,
 	return nil
 }
 
-func (a *ProxyAdapter) ValidateFetched(context.Context, *App, *NormalizedRequest, string) error {
+func (a *ProxyAdapter) ValidateFetched(context.Context, *App, *NormalizedRequest, string, string) error {
+	return nil
+}
+
+func (a *ProxyAdapter) CommitStored(context.Context, *App, *NormalizedRequest, string) error {
 	return nil
 }
 

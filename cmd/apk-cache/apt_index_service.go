@@ -121,13 +121,19 @@ func (s *APTIndexService) ValidateByHash(cachePath, requestPath string) error {
 }
 
 func (s *APTIndexService) ValidateDeb(cachePath string) error {
+	return s.ValidateDebFile(cachePath, cachePath)
+}
+
+// ValidateDebFile 使用逻辑缓存路径查索引记录，但对 filePath 指向的实际文件做哈希校验。
+// 这样下载阶段可以先对临时文件完成校验，再原子替换正式缓存文件。
+func (s *APTIndexService) ValidateDebFile(cachePath, filePath string) error {
 	s.mu.RLock()
 	record, ok := s.byPath[cachePath]
 	s.mu.RUnlock()
 	if !ok || record.Hash == "" {
 		return nil
 	}
-	actualHash, err := hashFile(cachePath)
+	actualHash, err := hashFile(filePath)
 	if err != nil {
 		return err
 	}

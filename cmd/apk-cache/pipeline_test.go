@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +19,86 @@ import (
 
 	internalconfig "github.com/tursom/apk-cache/internal/config"
 )
+
+type failAfterWriter struct {
+	builder   strings.Builder
+	maxWrites int
+	writes    int
+}
+
+type chunkedReader struct {
+	data      []byte
+	chunkSize int
+	offset    int
+}
+
+func (r *chunkedReader) Read(p []byte) (int, error) {
+	if r.offset >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := r.chunkSize
+	if n > len(r.data)-r.offset {
+		n = len(r.data) - r.offset
+	}
+	if n > len(p) {
+		n = len(p)
+	}
+	copy(p[:n], r.data[r.offset:r.offset+n])
+	r.offset += n
+	return n, nil
+}
+
+func (w *failAfterWriter) Write(p []byte) (int, error) {
+	if w.writes >= w.maxWrites {
+		return 0, fmt.Errorf("forced write failure")
+	}
+	w.writes++
+	return w.builder.Write(p)
+}
+
+func TestStreamResponseToSinksContinuesCachingAfterClientWriteFailure(t *testing.T) {
+	client := &failAfterWriter{maxWrites: 1}
+	var cache strings.Builder
+
+	result, err := streamResponseToSinks(&chunkedReader{data: []byte("abcdef"), chunkSize: 3}, client, &cache, nil)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("stream err = %v want EOF", err)
+	}
+	if !result.ClientFailed {
+		t.Fatalf("expected client write failure")
+	}
+	if result.CacheFailed {
+		t.Fatalf("did not expect cache write failure")
+	}
+	if cache.String() != "abcdef" {
+		t.Fatalf("cache body = %q", cache.String())
+	}
+	if client.builder.String() != "abc" {
+		t.Fatalf("client body = %q", client.builder.String())
+	}
+}
+
+func TestStreamResponseToSinksContinuesClientWriteAfterCacheFailure(t *testing.T) {
+	var client strings.Builder
+	cache := &failAfterWriter{maxWrites: 1}
+
+	result, err := streamResponseToSinks(&chunkedReader{data: []byte("abcdef"), chunkSize: 3}, &client, cache, nil)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("stream err = %v want EOF", err)
+	}
+	if result.ClientFailed {
+		t.Fatalf("did not expect client write failure")
+	}
+	if !result.CacheFailed {
+		t.Fatalf("expected cache write failure")
+	}
+	if client.String() != "abcdef" {
+		t.Fatalf("client body = %q", client.String())
+	}
+	if cache.builder.String() != "abc" {
+		t.Fatalf("cache prefix = %q", cache.builder.String())
+	}
+}
 
 func TestAPTAdapterCacheKeyIncludesHost(t *testing.T) {
 	adapter := NewAPTAdapter(internalconfig.APTConfig{Enabled: true, VerifyHash: true})
@@ -416,7 +498,7 @@ func TestPipelineReFetchesAPKAfterCachedHashValidationFailure(t *testing.T) {
 	}
 }
 
-func TestPipelineRejectsFetchedAPKHashMismatch(t *testing.T) {
+func TestPipelineStreamsFetchedAPKHashMismatchWithoutCaching(t *testing.T) {
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("generate key: %v", err)
@@ -457,8 +539,14 @@ func TestPipelineRejectsFetchedAPKHashMismatch(t *testing.T) {
 	cachePath := mustCachePathForRequest(t, app, packageReq)
 	rec := httptest.NewRecorder()
 	app.pipeline.ServeHTTP(rec, packageReq)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d want %d", rec.Code, http.StatusBadGateway)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("X-Cache = %q", got)
+	}
+	if got := rec.Body.Bytes(); string(got) != string(invalidPackage) {
+		t.Fatalf("unexpected streamed body")
 	}
 	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected invalid package to be absent from cache, stat err = %v", err)
@@ -507,7 +595,7 @@ func TestPipelineBypassesUnsignedFetchedAPKWithoutCaching(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d want %d", rec.Code, http.StatusOK)
 	}
-	if got := rec.Header().Get("X-Cache"); got != "BYPASS" {
+	if got := rec.Header().Get("X-Cache"); got != "MISS" {
 		t.Fatalf("X-Cache = %q", got)
 	}
 	if got := rec.Body.Bytes(); string(got) != string(unsignedPackage) {

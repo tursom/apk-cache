@@ -103,6 +103,12 @@ func (s *APKIndexService) LoadFile(cachePath string) error {
 // ValidatePackage 使用索引记录对缓存文件执行大小和摘要校验。
 // 如果当前没有对应记录，返回 ErrAPKIndexUnavailable，由上层决定是否把它当成软失败。
 func (s *APKIndexService) ValidatePackage(cachePath string) error {
+	return s.ValidatePackageFile(cachePath, cachePath)
+}
+
+// ValidatePackageFile 使用逻辑缓存路径查索引记录，但对 filePath 指向的实际文件计算摘要。
+// 这让 pipeline 可以在临时文件阶段完成校验，再决定是否把它提升为正式缓存文件。
+func (s *APKIndexService) ValidatePackageFile(cachePath, filePath string) error {
 	s.mu.RLock()
 	record, ok := s.byPath[cachePath]
 	s.mu.RUnlock()
@@ -110,7 +116,7 @@ func (s *APKIndexService) ValidatePackage(cachePath string) error {
 		return ErrAPKIndexUnavailable
 	}
 
-	info, err := os.Stat(cachePath)
+	info, err := os.Stat(filePath)
 	if err != nil {
 		return err
 	}
@@ -118,7 +124,7 @@ func (s *APKIndexService) ValidatePackage(cachePath string) error {
 		return ErrAPKHashMismatch
 	}
 
-	actualHash, err := hashFileWithAlgorithm(cachePath, record.Algorithm)
+	actualHash, err := hashFileWithAlgorithm(filePath, record.Algorithm)
 	if err != nil {
 		return err
 	}

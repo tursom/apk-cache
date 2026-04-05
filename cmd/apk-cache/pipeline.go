@@ -9,10 +9,25 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
 )
+
+var streamCopyBufferPool = sync.Pool{
+	New: func() any {
+		buffer := make([]byte, 32*1024)
+		return &buffer
+	},
+}
+
+type streamCopyResult struct {
+	Downloaded   int64
+	Responded    int64
+	CacheFailed  bool
+	ClientFailed bool
+}
 
 type Pipeline struct {
 	app      *App
@@ -177,8 +192,9 @@ func (p *Pipeline) tryServeFromDisk(w http.ResponseWriter, r *http.Request, adap
 	return true
 }
 
-// 这里采用“先完整下载到临时文件，再校验，再响应”的顺序。
-// 这样即便上游在传输中断开，也不会把半截文件返回给客户端或污染缓存。
+// 这里采用“边下载边响应，同时写入临时文件”的顺序。
+// 下载完成后再校验临时文件，并决定是否提升为正式缓存。
+// 这样可以降低首字节延迟，但代价是校验失败时客户端可能已经收到上游内容。
 func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter ProtocolAdapter, req *NormalizedRequest, decision CacheDecision, cachePath string) error {
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		return err
@@ -194,51 +210,59 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		_ = os.Remove(tmpName)
 	}()
 
-	// Phase 1: 先完整下载到临时文件，避免客户端收到半截内容。
-	var written int64
-	buffer := make([]byte, 32*1024)
-	for {
-		n, readErr := resp.Body.Read(buffer)
-		if n > 0 {
-			utils.Monitoring.RecordDownloadBytes(int64(n))
-			if _, err := tmpFile.Write(buffer[:n]); err != nil {
-				return err
-			}
-			written += int64(n)
+	copyEndToEndHeaders(w.Header(), resp.Header)
+	w.Header().Set("X-Cache", "MISS")
+	w.WriteHeader(resp.StatusCode)
+
+	var flush func()
+	if flusher, ok := w.(http.Flusher); ok {
+		flush = flusher.Flush
+	}
+	copyResult, readErr := streamResponseToSinks(resp.Body, w, tmpFile, flush)
+	utils.Monitoring.RecordResponseBytes(copyResult.Responded)
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		if p.app.memoryCache != nil {
+			p.app.memoryCache.Delete(cachePath)
 		}
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			return readErr
-		}
+		return nil
 	}
 
-	if err := tmpFile.Sync(); err != nil {
-		return err
+	cacheReady := !copyResult.CacheFailed
+	if cacheReady {
+		if err := tmpFile.Sync(); err != nil {
+			cacheReady = false
+		}
 	}
 	if err := tmpFile.Close(); err != nil {
-		return err
+		cacheReady = false
 	}
+	if !cacheReady {
+		if p.app.memoryCache != nil {
+			p.app.memoryCache.Delete(cachePath)
+		}
+		return nil
+	}
+
+	if err := adapter.ValidateFetched(ctx, p.app, req, cachePath, tmpName); err != nil {
+		utils.Monitoring.RecordValidationFailure()
+		if shouldBypassCache(err) {
+			// 流式响应已经发出，这里只需放弃缓存即可。
+			utils.Monitoring.RecordAPKBypassResponse()
+			if p.app.memoryCache != nil {
+				p.app.memoryCache.Delete(cachePath)
+			}
+			return nil
+		}
+		if p.app.memoryCache != nil {
+			p.app.memoryCache.Delete(cachePath)
+		}
+		return nil
+	}
+
 	if err := os.Rename(tmpName, cachePath); err != nil {
 		return err
 	}
-
-	if err := adapter.ValidateFetched(ctx, p.app, req, cachePath); err != nil {
-		utils.Monitoring.RecordValidationFailure()
-		if shouldBypassCache(err) {
-			// APK 签名失败属于“允许透传但不允许缓存”的场景：
-			// 先用临时落盘文件响应客户端，再在函数退出时删除它。
-			utils.Monitoring.RecordAPKBypassResponse()
-			defer func() {
-				_ = os.Remove(cachePath)
-				if p.app.memoryCache != nil {
-					p.app.memoryCache.Delete(cachePath)
-				}
-			}()
-			_, writeErr := p.writeStoredResponse(w, resp, cachePath, "BYPASS")
-			return writeErr
-		}
+	if err := adapter.CommitStored(ctx, p.app, req, cachePath); err != nil {
 		_ = os.Remove(cachePath)
 		if p.app.memoryCache != nil {
 			p.app.memoryCache.Delete(cachePath)
@@ -246,10 +270,7 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		return err
 	}
 
-	n, err := p.writeStoredResponse(w, resp, cachePath, "MISS")
-	if err == nil {
-		utils.Monitoring.RecordCacheMiss(n)
-	}
+	utils.Monitoring.RecordCacheMiss(copyResult.Downloaded)
 
 	info, statErr := os.Stat(cachePath)
 	if statErr != nil {
@@ -269,28 +290,44 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 	return nil
 }
 
-// 该 helper 同时服务于正常 MISS 返回和“校验失败但允许透传”的 BYPASS 返回。
-func (p *Pipeline) writeStoredResponse(w http.ResponseWriter, resp *http.Response, cachePath, cacheStatus string) (int64, error) {
-	info, err := os.Stat(cachePath)
-	if err != nil {
-		return 0, err
-	}
-	file, err := os.Open(cachePath)
-	if err != nil {
-		return 0, err
-	}
-	defer file.Close()
+// streamResponseToSinks 同时把上游响应写到客户端和缓存临时文件。
+// 任一写入方失败时，只停止该写入方，另一方继续工作。
+func streamResponseToSinks(src io.Reader, client io.Writer, cache io.Writer, flush func()) (streamCopyResult, error) {
+	var result streamCopyResult
+	clientEnabled := client != nil
+	cacheEnabled := cache != nil
+	bufferPtr := streamCopyBufferPool.Get().(*[]byte)
+	buffer := *bufferPtr
+	defer streamCopyBufferPool.Put(bufferPtr)
 
-	copyEndToEndHeaders(w.Header(), resp.Header)
-	w.Header().Set("X-Cache", cacheStatus)
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-	w.WriteHeader(resp.StatusCode)
+	for {
+		n, readErr := src.Read(buffer)
+		if n > 0 {
+			chunk := buffer[:n]
+			utils.Monitoring.RecordDownloadBytes(int64(n))
+			result.Downloaded += int64(n)
 
-	n, err := io.Copy(w, file)
-	if err == nil {
-		utils.Monitoring.RecordResponseBytes(n)
+			if cacheEnabled {
+				if _, err := cache.Write(chunk); err != nil {
+					cacheEnabled = false
+					result.CacheFailed = true
+				}
+			}
+			if clientEnabled {
+				written, err := client.Write(chunk)
+				result.Responded += int64(written)
+				if err != nil {
+					clientEnabled = false
+					result.ClientFailed = true
+				} else if flush != nil {
+					flush()
+				}
+			}
+		}
+		if readErr != nil {
+			return result, readErr
+		}
 	}
-	return n, err
 }
 
 // 对不进入缓存的响应做直接透传。
