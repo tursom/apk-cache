@@ -1,12 +1,17 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	internalconfig "github.com/tursom/apk-cache/internal/config"
 )
@@ -41,7 +46,6 @@ func TestPipelineCachesAPKResponses(t *testing.T) {
 
 	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
 		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
-		cfg.Proxy.Enabled = true
 	})
 
 	request := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test.apk", nil)
@@ -71,6 +75,98 @@ func TestPipelineCachesAPKResponses(t *testing.T) {
 	}
 }
 
+func TestPipelineCachesAPKIndexResponses(t *testing.T) {
+	var upstreamHits atomic.Int32
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		if r.URL.Path != "/alpine/v3.20/main/x86_64/APKINDEX.tar.gz" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("apk-index"))
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil)
+	cachePath := mustCachePathForRequest(t, app, request)
+
+	first := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(first, request)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first response status = %d", first.Code)
+	}
+	if got := first.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("first response X-Cache = %q", got)
+	}
+
+	second := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second response status = %d", second.Code)
+	}
+	if got := second.Header().Get("X-Cache"); got != "HIT" {
+		t.Fatalf("second response X-Cache = %q", got)
+	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("unexpected upstream hits: got %d want 1", upstreamHits.Load())
+	}
+	if got, err := os.ReadFile(cachePath); err != nil {
+		t.Fatalf("read cache file: %v", err)
+	} else if string(got) != "apk-index" {
+		t.Fatalf("cache file body = %q", string(got))
+	}
+	if app.memoryCache != nil {
+		if _, ok := app.memoryCache.Get(cachePath); ok {
+			t.Fatalf("apk index should not be cached in memory")
+		}
+	}
+}
+
+func TestPipelineUsesIndexTTLForAPKIndexRequests(t *testing.T) {
+	var upstreamHits atomic.Int32
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		_, _ = w.Write([]byte("apk-index"))
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.Cache.Memory.Enabled = false
+		cfg.Cache.IndexTTL = "1s"
+		cfg.Cache.PackageTTL = "1h"
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil)
+	cachePath := mustCachePathForRequest(t, app, request)
+
+	first := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(first, request)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first response status = %d", first.Code)
+	}
+
+	expiredTime := time.Now().Add(-2 * time.Second)
+	if err := os.Chtimes(cachePath, expiredTime, expiredTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	second := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second response status = %d", second.Code)
+	}
+	if got := second.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("second response X-Cache = %q", got)
+	}
+	if upstreamHits.Load() != 2 {
+		t.Fatalf("unexpected upstream hits: got %d want 2", upstreamHits.Load())
+	}
+}
+
 func TestPipelineCachesAPTResponses(t *testing.T) {
 	var upstreamHits atomic.Int32
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -81,7 +177,6 @@ func TestPipelineCachesAPTResponses(t *testing.T) {
 
 	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
 		cfg.APK.Enabled = false
-		cfg.Proxy.Enabled = true
 	})
 
 	requestURL := upstreamServer.URL + "/debian/dists/stable/InRelease"
@@ -104,6 +199,179 @@ func TestPipelineCachesAPTResponses(t *testing.T) {
 	}
 	if upstreamHits.Load() != 1 {
 		t.Fatalf("unexpected upstream hits: got %d want 1", upstreamHits.Load())
+	}
+}
+
+func TestPipelineBypassesNonOKAPKResponses(t *testing.T) {
+	var upstreamHits atomic.Int32
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		http.Error(w, "boom", http.StatusBadGateway)
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test.apk", nil)
+	cachePath := mustCachePathForRequest(t, app, request)
+
+	first := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(first, request)
+	if first.Code != http.StatusBadGateway {
+		t.Fatalf("first response status = %d", first.Code)
+	}
+	if got := first.Header().Get("X-Cache"); got != "BYPASS" {
+		t.Fatalf("first response X-Cache = %q", got)
+	}
+	if !strings.Contains(first.Body.String(), "boom") {
+		t.Fatalf("first response body = %q", first.Body.String())
+	}
+
+	second := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test.apk", nil))
+	if second.Code != http.StatusBadGateway {
+		t.Fatalf("second response status = %d", second.Code)
+	}
+	if upstreamHits.Load() != 2 {
+		t.Fatalf("unexpected upstream hits: got %d want 2", upstreamHits.Load())
+	}
+	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no cache file, stat err = %v", err)
+	}
+}
+
+func TestPipelineReFetchesExpiredDiskCache(t *testing.T) {
+	var upstreamHits atomic.Int32
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		_, _ = w.Write([]byte("apk-package"))
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	request := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test.apk", nil)
+	cachePath := mustCachePathForRequest(t, app, request)
+
+	first := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(first, request)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first response status = %d", first.Code)
+	}
+	expiredTime := time.Now().Add(-2 * app.packageTTL)
+	if err := os.Chtimes(cachePath, expiredTime, expiredTime); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	second := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(second, httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test.apk", nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second response status = %d", second.Code)
+	}
+	if got := second.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("second response X-Cache = %q", got)
+	}
+	if upstreamHits.Load() != 2 {
+		t.Fatalf("unexpected upstream hits: got %d want 2", upstreamHits.Load())
+	}
+}
+
+func TestPipelineReFetchesAfterCachedValidationFailure(t *testing.T) {
+	var upstreamHits atomic.Int32
+	body := []byte("valid-by-hash-content")
+	hash := sha256.Sum256(body)
+	hashHex := hex.EncodeToString(hash[:])
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		_, _ = w.Write(body)
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	requestURL := upstreamServer.URL + "/debian/dists/stable/by-hash/SHA256/" + hashHex
+	request := httptest.NewRequest(http.MethodGet, requestURL, nil)
+	cachePath := mustCachePathForRequest(t, app, request)
+
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("wrong"), 0o644); err != nil {
+		t.Fatalf("write stale cache: %v", err)
+	}
+
+	first := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(first, request)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first response status = %d", first.Code)
+	}
+	if got := first.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("first response X-Cache = %q", got)
+	}
+	if got := first.Body.Bytes(); string(got) != string(body) {
+		t.Fatalf("first response body = %q", string(got))
+	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("unexpected upstream hits after refetch: got %d want 1", upstreamHits.Load())
+	}
+	if got, err := os.ReadFile(cachePath); err != nil {
+		t.Fatalf("read cache file: %v", err)
+	} else if string(got) != string(body) {
+		t.Fatalf("cache file body = %q", string(got))
+	}
+
+	second := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(second, httptest.NewRequest(http.MethodGet, requestURL, nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("second response status = %d", second.Code)
+	}
+	if got := second.Header().Get("X-Cache"); got != "HIT" {
+		t.Fatalf("second response X-Cache = %q", got)
+	}
+	if upstreamHits.Load() != 1 {
+		t.Fatalf("unexpected upstream hits after cache hit: got %d want 1", upstreamHits.Load())
+	}
+}
+
+func TestProxyAdapterForwardsAbsoluteURLRequests(t *testing.T) {
+	var gotPath string
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte("plain"))
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = false
+		cfg.Proxy.Enabled = true
+	})
+
+	requestURL := upstreamServer.URL + "/plain.txt"
+	recorder := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestURL, nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Body.String(); got != "plain" {
+		t.Fatalf("body = %q", got)
+	}
+	if got := recorder.Header().Get("X-Cache"); got != "BYPASS" {
+		t.Fatalf("X-Cache = %q", got)
+	}
+	if gotPath != "/plain.txt" {
+		t.Fatalf("upstream path = %q", gotPath)
 	}
 }
 
@@ -176,4 +444,22 @@ func mustNewTestApp(t *testing.T, mutate func(*internalconfig.Config)) *App {
 		t.Fatalf("new app: %v", err)
 	}
 	return app
+}
+
+func mustCachePathForRequest(t *testing.T, app *App, request *http.Request) string {
+	t.Helper()
+
+	adapter := app.pipeline.matchAdapter(request)
+	if adapter == nil {
+		t.Fatalf("no adapter matched request %s", request.URL)
+	}
+	normalized, err := adapter.Normalize(request)
+	if err != nil {
+		t.Fatalf("normalize request: %v", err)
+	}
+	cacheKey, err := adapter.CacheKey(normalized)
+	if err != nil {
+		t.Fatalf("cache key: %v", err)
+	}
+	return filepath.Join(app.cfg.Cache.Root, cacheKey)
 }

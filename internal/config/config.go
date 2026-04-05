@@ -74,6 +74,13 @@ func Default() *Config {
 		Server: ServerConfig{
 			Listen: ":3142",
 		},
+		Upstreams: []UpstreamConfig{
+			{
+				Name: "Official Alpine CDN",
+				URL:  "https://dl-cdn.alpinelinux.org",
+				Kind: "apk",
+			},
+		},
 		Cache: CacheConfig{
 			Root:       "./cache",
 			DataRoot:   "./data",

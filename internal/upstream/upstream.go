@@ -6,6 +6,8 @@ import (
 	"iter"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -146,8 +148,12 @@ func (u *Server) doHealthCheck() bool {
 	healthy := false
 
 	for _, testPath := range testPaths {
-		url := u.URL + testPath
-		resp, err := client.Head(url)
+		targetURL, err := buildUpstreamURL(u.URL, testPath)
+		if err != nil {
+			lastError = err
+			continue
+		}
+		resp, err := client.Head(targetURL)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			healthy = true
 			resp.Body.Close()
@@ -347,6 +353,7 @@ func NewFetcher(manager *Manager, clientFn func(proxy string) *http.Client) *Def
 // Fetch 从上游服务器获取数据，支持故障转移
 func (f *DefaultFetcher) Fetch(urlPath string, requestModifier func(*http.Request)) (*http.Response, error) {
 	var lastErr error
+	var lastResp *http.Response
 
 	servers := f.manager.getServers()
 	log.Printf("[upstream] Fetching from upstream, path: %s, server count: %d", urlPath, len(servers))
@@ -354,9 +361,14 @@ func (f *DefaultFetcher) Fetch(urlPath string, requestModifier func(*http.Reques
 
 	for i, server := range servers {
 		client := f.client(server.Proxy)
-		url := server.URL + urlPath
+		targetURL, err := buildUpstreamURL(server.URL, urlPath)
+		if err != nil {
+			lastErr = err
+			log.Printf("[upstream] Invalid server URL %s: %v", server.URL, err)
+			continue
+		}
 
-		req, err := http.NewRequest("GET", url, nil)
+		req, err := http.NewRequest("GET", targetURL, nil)
 		if err != nil {
 			lastErr = err
 			continue
@@ -383,14 +395,77 @@ func (f *DefaultFetcher) Fetch(urlPath string, requestModifier func(*http.Reques
 			lastErr = err
 			log.Printf("[upstream] Server %s failed: %v", server.URL, err)
 		} else {
-			lastErr = errors.New(fmt.Sprintf("upstream returned status: %d", resp.StatusCode))
+			if lastResp != nil {
+				lastResp.Body.Close()
+			}
+			lastResp = resp
+			lastErr = fmt.Errorf("upstream returned status: %d", resp.StatusCode)
 			log.Printf("[upstream] Server %s returned error status: %d", server.URL, resp.StatusCode)
-			resp.Body.Close()
 		}
 	}
 
+	if lastResp != nil {
+		return lastResp, nil
+	}
 	if lastErr == nil {
 		lastErr = errors.New("no available upstream server")
 	}
 	return nil, lastErr
+}
+
+func buildUpstreamURL(baseURL, requestPath string) (string, error) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+	parsed.Path = joinUpstreamPath(parsed.Path, requestPath)
+	parsed.RawPath = ""
+	return parsed.String(), nil
+}
+
+func joinUpstreamPath(basePath, requestPath string) string {
+	baseSegments := splitPathSegments(basePath)
+	requestSegments := splitPathSegments(requestPath)
+
+	maxOverlap := 0
+	limit := min(len(baseSegments), len(requestSegments))
+	for overlap := limit; overlap > 0; overlap-- {
+		matched := true
+		for i := 0; i < overlap; i++ {
+			if baseSegments[len(baseSegments)-overlap+i] != requestSegments[i] {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			maxOverlap = overlap
+			break
+		}
+	}
+
+	combined := append(append([]string{}, baseSegments...), requestSegments[maxOverlap:]...)
+	if len(combined) == 0 {
+		return "/"
+	}
+
+	joined := "/" + strings.Join(combined, "/")
+	if strings.HasSuffix(requestPath, "/") && joined != "/" {
+		return joined + "/"
+	}
+	return joined
+}
+
+func splitPathSegments(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

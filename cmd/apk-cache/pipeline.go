@@ -103,6 +103,7 @@ func (p *Pipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := p.fetchAndStore(r.Context(), w, resp, adapter, req, decision, cachePath); err != nil {
 		log.Printf("fetch and store %s: %v", cachePath, err)
+		writePipelineError(w, err)
 	}
 }
 
@@ -183,34 +184,19 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		_ = os.Remove(tmpName)
 	}()
 
-	copyEndToEndHeaders(w.Header(), resp.Header)
-	w.Header().Set("X-Cache", "MISS")
-	w.WriteHeader(resp.StatusCode)
-
-	responseData := make([]byte, 0)
-	buffer := make([]byte, 32*1024)
+	// Phase 1: download entirely to temp file before sending anything to client.
+	// This prevents partial/corrupt responses when upstream times out mid-transfer.
 	var written int64
+	buffer := make([]byte, 32*1024)
 	for {
 		n, readErr := resp.Body.Read(buffer)
 		if n > 0 {
-			chunk := buffer[:n]
 			utils.Monitoring.RecordDownloadBytes(int64(n))
-			utils.Monitoring.RecordCacheMiss(int64(n))
-			utils.Monitoring.RecordResponseBytes(int64(n))
-
-			if _, err := tmpFile.Write(chunk); err != nil {
-				return err
-			}
-			if _, err := w.Write(chunk); err != nil {
+			if _, err := tmpFile.Write(buffer[:n]); err != nil {
 				return err
 			}
 			written += int64(n)
-
-			if decision.StoreInMemory && p.app.memoryCache != nil && (p.app.memoryCacheMaxItemSize == 0 || written <= p.app.memoryCacheMaxItemSize) {
-				responseData = append(responseData, chunk...)
-			}
 		}
-
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
 				break
@@ -238,10 +224,36 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		return err
 	}
 
-	if decision.StoreInMemory && p.app.memoryCache != nil && len(responseData) > 0 {
-		headers := cloneHeaders(resp.Header)
-		headers.Set("Content-Length", strconv.Itoa(len(responseData)))
-		p.app.memoryCache.CacheToMemory(cachePath, responseData, headers, resp.StatusCode, time.Now())
+	// Phase 2: serve the complete, validated file to client.
+	info, err := os.Stat(cachePath)
+	if err != nil {
+		return err
+	}
+	file, err := os.Open(cachePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	copyEndToEndHeaders(w.Header(), resp.Header)
+	w.Header().Set("X-Cache", "MISS")
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.WriteHeader(resp.StatusCode)
+
+	n, err := io.Copy(w, file)
+	if err == nil {
+		utils.Monitoring.RecordCacheMiss(n)
+		utils.Monitoring.RecordResponseBytes(n)
+	}
+
+	// Phase 3: optionally cache to memory.
+	if decision.StoreInMemory && p.app.memoryCache != nil && (p.app.memoryCacheMaxItemSize == 0 || info.Size() <= p.app.memoryCacheMaxItemSize) {
+		data, readErr := os.ReadFile(cachePath)
+		if readErr == nil {
+			headers := cloneHeaders(resp.Header)
+			headers.Set("Content-Length", strconv.Itoa(len(data)))
+			p.app.memoryCache.CacheToMemory(cachePath, data, headers, resp.StatusCode, info.ModTime())
+		}
 	}
 
 	return nil
