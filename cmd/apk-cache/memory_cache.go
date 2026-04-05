@@ -5,6 +5,8 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -305,13 +307,22 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 
 	log.Println(i18n.T("MemoryCacheHit", map[string]any{"Path": key}))
 
-	// 复制响应头
+	// 复制响应头，跳过 hop-by-hop 头和不正确的 Content-Length
 	for key, values := range item.Headers {
+		switch strings.ToLower(key) {
+		case "transfer-encoding", "connection", "keep-alive",
+			"proxy-authenticate", "proxy-authorization",
+			"te", "trailer", "upgrade", "content-length":
+			// 跳过 hop-by-hop 头和 Content-Length（将根据实际数据大小重新设置）
+			continue
+		}
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
 	}
 
+	// 根据实际数据大小设置正确的 Content-Length
+	w.Header().Set("Content-Length", strconv.Itoa(len(item.Data)))
 	w.Header().Set("X-Cache", "MEMORY-HIT")
 	w.WriteHeader(item.StatusCode)
 
