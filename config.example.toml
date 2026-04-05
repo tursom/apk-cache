@@ -48,4 +48,7 @@ enabled = true
 allow_connect = true
 cache_non_package_requests = false
 require_auth = false
+# Only affects ProxyAdapter traffic such as HTTP absolute-URL requests and CONNECT tunnels.
+# Supports socks5://, http://, or https://.
+# upstream_proxy = "socks5://127.0.0.1:1080"
 # allowed_hosts = ["deb.debian.org", "security.debian.org"]

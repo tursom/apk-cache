@@ -70,10 +70,9 @@ cd apk-cache
 
 # 使用配置文件
 ./apk-cache -config config.toml
-
-# 自定义配置
-./apk-cache -addr :3142 -cache ./cache -proxy socks5://127.0.0.1:1080
 ```
+
+当前版本推荐通过 `config.toml` 管理运行配置。`ProxyAdapter` 的上游代理可在 `[proxy]` 节中通过 `upstream_proxy` 配置，支持 `socks5://`、`http://` 和 `https://`。
 
 ## 配置 Alpine Linux 使用缓存服务器
 
@@ -182,12 +181,10 @@ vim config.toml
 - `[server]` - 服务器基本配置
 - `[[upstreams]]` - 上游服务器列表（支持多个）
 - `[cache]` - 缓存配置
+- `[transport]` - 出站 HTTP 连接超时与连接池配置
 - `[apk]` - APK 缓存与校验配置
-- `[security]` - 安全配置（身份验证等）
-- `[health_check]` - 健康检查配置
-- `[rate_limit]` - 请求限流配置
-- `[data_integrity]` - 数据完整性校验配置
-- `[fine_grained_policy]` - 细粒度缓存策略配置
+- `[apt]` - APT 缓存与索引校验配置
+- `[proxy]` - 通用 HTTP/HTTPS 代理配置
 
 ### APK 校验配置
 
@@ -202,6 +199,19 @@ keys_dir = ""
 - `verify_hash`：使用 `APKINDEX` 校验缓存和新下载的 `.apk` 文件
 - `verify_signature`：只有可识别签名且验签通过的 APK/APKINDEX 才会进入缓存
 - `keys_dir`：可选的额外 RSA 公钥目录，会和内置公钥一起作为信任源加载
+
+### ProxyAdapter 上游代理配置
+
+```toml
+[proxy]
+enabled = true
+allow_connect = true
+cache_non_package_requests = false
+upstream_proxy = "socks5://127.0.0.1:1080"
+```
+
+- `upstream_proxy`：仅作用于 `ProxyAdapter` 的出站请求和 `CONNECT` 隧道，不影响 `[[upstreams]].proxy` 的 APK 回源配置
+- `allowed_hosts`：仍然匹配目标站点 host，而不是上游代理服务器 host
 
 ## Docker Compose 示例
 

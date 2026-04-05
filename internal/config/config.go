@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"net/url"
 	"strings"
 	"time"
 
@@ -72,6 +73,7 @@ type ProxyConfig struct {
 	AllowConnect    bool     `toml:"allow_connect"`
 	CacheNonPackage bool     `toml:"cache_non_package_requests"`
 	RequireAuth     bool     `toml:"require_auth"`
+	UpstreamProxy   string   `toml:"upstream_proxy"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 }
 
@@ -121,6 +123,7 @@ func Default() *Config {
 			AllowConnect:    true,
 			CacheNonPackage: false,
 			RequireAuth:     false,
+			UpstreamProxy:   "",
 		},
 	}
 }
@@ -192,6 +195,10 @@ func Validate(cfg *Config) error {
 		}
 	}
 
+	if err := validateProxyAddress("proxy.upstream_proxy", cfg.Proxy.UpstreamProxy); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -201,6 +208,26 @@ func validateDuration(name, value string) error {
 	}
 	if _, err := time.ParseDuration(value); err != nil {
 		return errors.New(name + " is invalid: " + err.Error())
+	}
+	return nil
+}
+
+func validateProxyAddress(name, value string) error {
+	if value == "" {
+		return nil
+	}
+
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return errors.New(name + " is invalid: " + err.Error())
+	}
+	switch parsed.Scheme {
+	case "http", "https", "socks5":
+	default:
+		return errors.New(name + " must start with socks5://, http://, or https://")
+	}
+	if parsed.Host == "" {
+		return errors.New(name + " must include host:port")
 	}
 	return nil
 }

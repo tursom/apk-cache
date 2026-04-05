@@ -141,6 +141,7 @@ APT 的特殊性在于：
 - `upstreams` 当前主要服务 APK 链路，`kind = "apk"`。
 - APT 通过客户端请求中的真实目标 URL 访问上游，而不是走固定 upstream 列表。
 - `proxy.enabled` 和 `proxy.allow_connect` 控制通用代理能力。
+- `proxy.upstream_proxy` 仅作用于 `ProxyAdapter`，用于为绝对 URL 请求和 `CONNECT` 隧道指定 `socks5://`、`http://` 或 `https://` 上游代理。
 - `proxy.cache_non_package_requests` 默认 `false`，避免通用代理流量污染缓存。
 
 ## 请求流说明

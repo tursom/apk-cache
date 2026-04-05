@@ -173,16 +173,11 @@ func (f *HTTPClientFactory) Client(proxyAddr string) *http.Client {
 	}
 
 	transport := upstream.CreateTransport(proxyAddr)
-	httpTransport, ok := transport.(*http.Transport)
-	if !ok || httpTransport == nil {
-		httpTransport = &http.Transport{}
-	}
-	httpTransport.ProxyConnectHeader = make(http.Header)
-	httpTransport.MaxIdleConns = f.maxIdleConns
-	httpTransport.IdleConnTimeout = f.idleConnTimeout
+	transport.MaxIdleConns = f.maxIdleConns
+	transport.IdleConnTimeout = f.idleConnTimeout
 
 	client := &http.Client{
-		Transport: httpTransport,
+		Transport: transport,
 		Timeout:   f.timeout,
 	}
 	f.clients[proxyAddr] = client
@@ -190,8 +185,11 @@ func (f *HTTPClientFactory) Client(proxyAddr string) *http.Client {
 }
 
 func (f *HTTPClientFactory) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: f.timeout}
-	return dialer.DialContext(ctx, network, address)
+	return f.DialProxyContext(ctx, "", network, address)
+}
+
+func (f *HTTPClientFactory) DialProxyContext(ctx context.Context, proxyAddr, network, address string) (net.Conn, error) {
+	return upstream.DialContextViaProxy(ctx, proxyAddr, network, address, f.timeout)
 }
 
 func (a *App) Run(ctx context.Context) error {

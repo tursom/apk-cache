@@ -389,7 +389,7 @@ func (a *ProxyAdapter) Fetch(ctx context.Context, app *App, req *NormalizedReque
 	copyEndToEndHeaders(upstreamReq.Header, req.Request.Header)
 	upstreamReq.Host = req.TargetURL.Host
 	utils.Monitoring.RecordUpstreamRequest()
-	return app.httpClients.Client("").Do(upstreamReq)
+	return app.httpClients.Client(a.cfg.UpstreamProxy).Do(upstreamReq)
 }
 
 func (a *ProxyAdapter) HandleConnect(ctx context.Context, app *App, w http.ResponseWriter, r *http.Request, _ *NormalizedRequest) error {
@@ -413,7 +413,7 @@ func (a *ProxyAdapter) HandleConnect(ctx context.Context, app *App, w http.Respo
 		return err
 	}
 
-	targetConn, err := app.httpClients.DialContext(ctx, "tcp", ensurePort(r.Host, "443"))
+	targetConn, err := app.httpClients.DialProxyContext(ctx, a.cfg.UpstreamProxy, "tcp", ensurePort(r.Host, "443"))
 	if err != nil {
 		clientConn.Close()
 		return err

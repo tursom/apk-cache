@@ -18,6 +18,9 @@ func TestDefaultConfigIsValid(t *testing.T) {
 	if cfg.APK.KeysDir != "" {
 		t.Fatalf("default apk.keys_dir = %q want empty", cfg.APK.KeysDir)
 	}
+	if cfg.Proxy.UpstreamProxy != "" {
+		t.Fatalf("default proxy.upstream_proxy = %q want empty", cfg.Proxy.UpstreamProxy)
+	}
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("default config should be valid: %v", err)
 	}
@@ -99,6 +102,20 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			},
 			wantErr: "at least one APK upstream",
 		},
+		{
+			name: "invalid proxy upstream scheme",
+			mutate: func(cfg *Config) {
+				cfg.Proxy.UpstreamProxy = "ftp://proxy.example.com:21"
+			},
+			wantErr: "proxy.upstream_proxy",
+		},
+		{
+			name: "proxy upstream missing host",
+			mutate: func(cfg *Config) {
+				cfg.Proxy.UpstreamProxy = "http://"
+			},
+			wantErr: "proxy.upstream_proxy",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -112,6 +129,25 @@ func TestValidateRejectsInvalidConfig(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("error = %q want substring %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateAllowsSupportedProxySchemes(t *testing.T) {
+	testCases := []string{
+		"socks5://127.0.0.1:1080",
+		"http://127.0.0.1:8080",
+		"https://127.0.0.1:8443",
+	}
+
+	for _, proxyAddr := range testCases {
+		t.Run(proxyAddr, func(t *testing.T) {
+			cfg := Default()
+			cfg.Proxy.UpstreamProxy = proxyAddr
+
+			if err := Validate(cfg); err != nil {
+				t.Fatalf("validation should succeed for %q: %v", proxyAddr, err)
 			}
 		})
 	}

@@ -70,10 +70,9 @@ The build script automatically:
 
 # Use configuration file
 ./apk-cache -config config.toml
-
-# Custom configuration
-./apk-cache -addr :3142 -cache ./cache -proxy socks5://127.0.0.1:1080
 ```
+
+The current version is intended to be configured through `config.toml`. To route `ProxyAdapter` traffic through an upstream proxy, set `[proxy].upstream_proxy` to a `socks5://`, `http://`, or `https://` URL.
 
 ## Configure Alpine Linux to Use Cache Server
 
@@ -182,12 +181,10 @@ Main configuration sections include:
 - `[server]` - Server basic configuration
 - `[[upstreams]]` - Upstream servers list (supports multiple)
 - `[cache]` - Cache configuration
+- `[transport]` - Outbound HTTP timeout and connection pool settings
 - `[apk]` - APK caching and verification configuration
-- `[security]` - Security configuration (authentication, etc.)
-- `[health_check]` - Health check configuration
-- `[rate_limit]` - Request rate limiting configuration
-- `[data_integrity]` - Data integrity verification configuration
-- `[fine_grained_policy]` - Fine-grained cache policy configuration
+- `[apt]` - APT caching and index verification configuration
+- `[proxy]` - Generic HTTP/HTTPS proxy configuration
 
 ### APK Verification Options
 
@@ -202,6 +199,19 @@ keys_dir = ""
 - `verify_hash`: validate cached and freshly downloaded `.apk` files against `APKINDEX`
 - `verify_signature`: require a recognizable APK/APKINDEX signature before caching
 - `keys_dir`: optional directory of additional trusted RSA public keys loaded alongside built-in keys
+
+### ProxyAdapter Upstream Proxy
+
+```toml
+[proxy]
+enabled = true
+allow_connect = true
+cache_non_package_requests = false
+upstream_proxy = "socks5://127.0.0.1:1080"
+```
+
+- `upstream_proxy`: only affects outbound `ProxyAdapter` traffic and `CONNECT` tunnels; it does not change `[[upstreams]].proxy` for APK fetches
+- `allowed_hosts`: still matches the target host, not the upstream proxy host
 
 ## Docker Compose Example
 

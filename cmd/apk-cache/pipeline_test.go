@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -8,8 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -685,6 +688,84 @@ func TestProxyAdapterForwardsAbsoluteURLRequests(t *testing.T) {
 	}
 }
 
+func TestProxyAdapterUsesHTTPUpstreamProxy(t *testing.T) {
+	var targetPath string
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetPath = r.URL.Path
+		_, _ = w.Write([]byte("via-http-proxy"))
+	}))
+	defer targetServer.Close()
+
+	var proxiedURL string
+	httpProxy := newHTTPTestProxy(t, func(method, target string) {
+		if method == http.MethodConnect {
+			return
+		}
+		proxiedURL = target
+	})
+	defer httpProxy.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = false
+		cfg.Proxy.Enabled = true
+		cfg.Proxy.UpstreamProxy = httpProxy.URL
+	})
+
+	requestURL := targetServer.URL + "/plain.txt"
+	recorder := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestURL, nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Body.String(); got != "via-http-proxy" {
+		t.Fatalf("body = %q", got)
+	}
+	if proxiedURL != requestURL {
+		t.Fatalf("proxied URL = %q want %q", proxiedURL, requestURL)
+	}
+	if targetPath != "/plain.txt" {
+		t.Fatalf("target path = %q want %q", targetPath, "/plain.txt")
+	}
+}
+
+func TestProxyAdapterUsesSOCKS5UpstreamProxy(t *testing.T) {
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("via-socks5-proxy"))
+	}))
+	defer targetServer.Close()
+
+	socksProxy := newSOCKS5TestProxy(t)
+	defer socksProxy.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = false
+		cfg.Proxy.Enabled = true
+		cfg.Proxy.UpstreamProxy = "socks5://" + socksProxy.Addr()
+	})
+
+	requestURL := targetServer.URL + "/plain.txt"
+	recorder := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestURL, nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Body.String(); got != "via-socks5-proxy" {
+		t.Fatalf("body = %q", got)
+	}
+
+	targetURL, err := url.Parse(targetServer.URL)
+	if err != nil {
+		t.Fatalf("parse target url: %v", err)
+	}
+	if got := socksProxy.WaitForRequest(t); got != targetURL.Host {
+		t.Fatalf("socks target = %q want %q", got, targetURL.Host)
+	}
+}
+
 func TestProxyDisabledReturnsForbidden(t *testing.T) {
 	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
 		cfg.APK.Enabled = false
@@ -715,6 +796,65 @@ func TestConnectDisabledReturnsMethodNotAllowed(t *testing.T) {
 
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d want %d", recorder.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestProxyAdapterConnectUsesHTTPUpstreamProxy(t *testing.T) {
+	target := newTCPEchoServer(t)
+	defer target.Close()
+
+	var connectTarget string
+	httpProxy := newHTTPTestProxy(t, func(method, target string) {
+		if method == http.MethodConnect {
+			connectTarget = target
+		}
+	})
+	defer httpProxy.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = false
+		cfg.Proxy.Enabled = true
+		cfg.Proxy.AllowConnect = true
+		cfg.Proxy.UpstreamProxy = httpProxy.URL
+	})
+
+	status, echoed := performConnectRoundTrip(t, app.pipeline, target.Addr(), "ping-over-http-proxy")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d want %d", status, http.StatusOK)
+	}
+	if echoed != "ping-over-http-proxy" {
+		t.Fatalf("echoed = %q", echoed)
+	}
+	if connectTarget != target.Addr() {
+		t.Fatalf("proxy CONNECT target = %q want %q", connectTarget, target.Addr())
+	}
+}
+
+func TestProxyAdapterConnectUsesSOCKS5UpstreamProxy(t *testing.T) {
+	target := newTCPEchoServer(t)
+	defer target.Close()
+
+	socksProxy := newSOCKS5TestProxy(t)
+	defer socksProxy.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = false
+		cfg.Proxy.Enabled = true
+		cfg.Proxy.AllowConnect = true
+		cfg.Proxy.UpstreamProxy = "socks5://" + socksProxy.Addr()
+	})
+
+	status, echoed := performConnectRoundTrip(t, app.pipeline, target.Addr(), "ping-over-socks5-proxy")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d want %d", status, http.StatusOK)
+	}
+	if echoed != "ping-over-socks5-proxy" {
+		t.Fatalf("echoed = %q", echoed)
+	}
+	if got := socksProxy.WaitForRequest(t); got != target.Addr() {
+		t.Fatalf("socks CONNECT target = %q want %q", got, target.Addr())
 	}
 }
 
@@ -756,6 +896,301 @@ func mustNewTestApp(t *testing.T, mutate func(*internalconfig.Config)) *App {
 		t.Fatalf("new app: %v", err)
 	}
 	return app
+}
+
+func performConnectRoundTrip(t *testing.T, handler http.Handler, targetAddr, payload string) (int, string) {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+
+	conn, err := net.Dial("tcp", serverURL.Host)
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", targetAddr, targetAddr); err != nil {
+		t.Fatalf("write CONNECT request: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	request, err := http.NewRequest(http.MethodConnect, server.URL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	response, err := http.ReadResponse(reader, request)
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return response.StatusCode, ""
+	}
+
+	if _, err := conn.Write([]byte(payload)); err != nil {
+		t.Fatalf("write tunnel payload: %v", err)
+	}
+
+	echoed := make([]byte, len(payload))
+	if _, err := io.ReadFull(reader, echoed); err != nil {
+		t.Fatalf("read tunnel payload: %v", err)
+	}
+	return response.StatusCode, string(echoed)
+}
+
+type tcpEchoServer struct {
+	listener net.Listener
+}
+
+func newTCPEchoServer(t *testing.T) *tcpEchoServer {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen echo server: %v", err)
+	}
+
+	server := &tcpEchoServer{listener: listener}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				buffer := make([]byte, 4096)
+				for {
+					n, err := conn.Read(buffer)
+					if n > 0 {
+						if _, writeErr := conn.Write(buffer[:n]); writeErr != nil {
+							return
+						}
+					}
+					if err != nil {
+						return
+					}
+				}
+			}(conn)
+		}
+	}()
+	return server
+}
+
+func (s *tcpEchoServer) Addr() string {
+	return s.listener.Addr().String()
+}
+
+func (s *tcpEchoServer) Close() {
+	_ = s.listener.Close()
+}
+
+type socks5TestProxy struct {
+	listener net.Listener
+	requests chan string
+}
+
+func newSOCKS5TestProxy(t *testing.T) *socks5TestProxy {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen socks5 proxy: %v", err)
+	}
+
+	proxy := &socks5TestProxy{
+		listener: listener,
+		requests: make(chan string, 8),
+	}
+	go proxy.serve(t)
+	return proxy
+}
+
+func (p *socks5TestProxy) Addr() string {
+	return p.listener.Addr().String()
+}
+
+func (p *socks5TestProxy) Close() {
+	_ = p.listener.Close()
+}
+
+func (p *socks5TestProxy) WaitForRequest(t *testing.T) string {
+	t.Helper()
+
+	select {
+	case target := <-p.requests:
+		return target
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for socks5 request")
+		return ""
+	}
+}
+
+func (p *socks5TestProxy) serve(t *testing.T) {
+	for {
+		conn, err := p.listener.Accept()
+		if err != nil {
+			return
+		}
+		go p.handleConn(t, conn)
+	}
+}
+
+func (p *socks5TestProxy) handleConn(t *testing.T, conn net.Conn) {
+	t.Helper()
+	defer conn.Close()
+
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return
+	}
+	methods := make([]byte, int(header[1]))
+	if _, err := io.ReadFull(conn, methods); err != nil {
+		return
+	}
+	if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+		return
+	}
+
+	requestHeader := make([]byte, 4)
+	if _, err := io.ReadFull(conn, requestHeader); err != nil {
+		return
+	}
+	if requestHeader[0] != 0x05 || requestHeader[1] != 0x01 {
+		_, _ = conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+
+	targetAddr, err := readSOCKS5Address(conn, requestHeader[3])
+	if err != nil {
+		_, _ = conn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	p.requests <- targetAddr
+
+	targetConn, err := net.Dial("tcp", targetAddr)
+	if err != nil {
+		_, _ = conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
+	defer targetConn.Close()
+
+	if _, err := conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
+		return
+	}
+
+	go tunnelCopy(targetConn, conn)
+	tunnelCopy(conn, targetConn)
+}
+
+func readSOCKS5Address(conn net.Conn, atyp byte) (string, error) {
+	switch atyp {
+	case 0x01:
+		host := make([]byte, 4)
+		if _, err := io.ReadFull(conn, host); err != nil {
+			return "", err
+		}
+		port := make([]byte, 2)
+		if _, err := io.ReadFull(conn, port); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s:%d", net.IP(host).String(), int(port[0])<<8|int(port[1])), nil
+	case 0x03:
+		length := make([]byte, 1)
+		if _, err := io.ReadFull(conn, length); err != nil {
+			return "", err
+		}
+		host := make([]byte, int(length[0]))
+		if _, err := io.ReadFull(conn, host); err != nil {
+			return "", err
+		}
+		port := make([]byte, 2)
+		if _, err := io.ReadFull(conn, port); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s:%d", string(host), int(port[0])<<8|int(port[1])), nil
+	case 0x04:
+		host := make([]byte, 16)
+		if _, err := io.ReadFull(conn, host); err != nil {
+			return "", err
+		}
+		port := make([]byte, 2)
+		if _, err := io.ReadFull(conn, port); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("[%s]:%d", net.IP(host).String(), int(port[0])<<8|int(port[1])), nil
+	default:
+		return "", fmt.Errorf("unsupported atyp %d", atyp)
+	}
+}
+
+func newHTTPTestProxy(t *testing.T, record func(method, target string)) *httptest.Server {
+	t.Helper()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := r.URL.String()
+		if r.Method == http.MethodConnect {
+			target = r.Host
+		}
+		record(r.Method, target)
+		if r.Method == http.MethodConnect {
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatalf("proxy response writer does not support hijacking")
+			}
+			clientConn, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatalf("proxy hijack: %v", err)
+			}
+
+			targetConn, err := net.Dial("tcp", r.Host)
+			if err != nil {
+				_, _ = clientConn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+				_ = clientConn.Close()
+				return
+			}
+
+			if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+				_ = clientConn.Close()
+				_ = targetConn.Close()
+				return
+			}
+
+			go tunnelCopy(targetConn, clientConn)
+			go tunnelCopy(clientConn, targetConn)
+			return
+		}
+
+		upstreamReq, err := http.NewRequestWithContext(r.Context(), r.Method, r.URL.String(), r.Body)
+		if err != nil {
+			t.Fatalf("proxy new request: %v", err)
+		}
+		upstreamReq.Header = r.Header.Clone()
+		response, err := http.DefaultTransport.RoundTrip(upstreamReq)
+		if err != nil {
+			t.Fatalf("proxy round trip: %v", err)
+		}
+		defer response.Body.Close()
+
+		for key, values := range response.Header {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+		w.WriteHeader(response.StatusCode)
+		if _, err := io.Copy(w, response.Body); err != nil {
+			t.Fatalf("proxy copy body: %v", err)
+		}
+	})
+
+	return httptest.NewServer(handler)
 }
 
 func mustCachePathForRequest(t *testing.T, app *App, request *http.Request) string {
