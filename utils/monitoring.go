@@ -11,11 +11,15 @@ type MonitoringManager struct {
 	registry *prometheus.Registry
 
 	// 缓存相关指标
-	CacheHits      prometheus.Counter
-	CacheMisses    prometheus.Counter
-	DownloadBytes  prometheus.Counter
-	CacheHitBytes  prometheus.Counter
-	CacheMissBytes prometheus.Counter
+	CacheHits          prometheus.Counter
+	CacheMisses        prometheus.Counter
+	DownloadBytes      prometheus.Counter
+	CacheHitBytes      prometheus.Counter
+	CacheMissBytes     prometheus.Counter
+	ResponseBytes      prometheus.Counter
+	UpstreamRequests   prometheus.Counter
+	UpstreamFailovers  prometheus.Counter
+	ValidationFailures prometheus.Counter
 
 	// 限流相关指标
 	RateLimitAllowed       prometheus.Counter
@@ -26,7 +30,7 @@ type MonitoringManager struct {
 	DataIntegrityChecks         prometheus.Counter
 	DataIntegrityCorruptedFiles prometheus.Gauge
 	DataIntegrityRepairedFiles  prometheus.Counter
-	DataIntegrityCheckDuration prometheus.Histogram
+	DataIntegrityCheckDuration  prometheus.Histogram
 
 	// 缓存配额相关指标
 	CacheQuotaSize       *prometheus.GaugeVec
@@ -78,6 +82,26 @@ func NewMonitoring() *MonitoringManager {
 	monitoring.CacheMissBytes = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_miss_bytes_total",
 		Help: "Total bytes served from cache misses",
+	})
+
+	monitoring.ResponseBytes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_response_bytes_total",
+		Help: "Total bytes sent to clients",
+	})
+
+	monitoring.UpstreamRequests = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_upstream_requests_total",
+		Help: "Total number of upstream requests",
+	})
+
+	monitoring.UpstreamFailovers = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_upstream_failovers_total",
+		Help: "Total number of upstream failovers",
+	})
+
+	monitoring.ValidationFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_validation_failures_total",
+		Help: "Total number of cache validation failures",
 	})
 
 	// 初始化限流相关指标
@@ -185,6 +209,10 @@ func (m *MonitoringManager) registerMetrics() {
 	m.registry.MustRegister(m.DownloadBytes)
 	m.registry.MustRegister(m.CacheHitBytes)
 	m.registry.MustRegister(m.CacheMissBytes)
+	m.registry.MustRegister(m.ResponseBytes)
+	m.registry.MustRegister(m.UpstreamRequests)
+	m.registry.MustRegister(m.UpstreamFailovers)
+	m.registry.MustRegister(m.ValidationFailures)
 
 	// 注册限流相关指标
 	m.registry.MustRegister(m.RateLimitAllowed)
@@ -251,6 +279,26 @@ func (m *MonitoringManager) RecordCacheMiss(bytes int64) {
 // RecordDownloadBytes 记录下载字节数
 func (m *MonitoringManager) RecordDownloadBytes(bytes int64) {
 	m.DownloadBytes.Add(float64(bytes))
+}
+
+// RecordResponseBytes 记录返回给客户端的字节数
+func (m *MonitoringManager) RecordResponseBytes(bytes int64) {
+	m.ResponseBytes.Add(float64(bytes))
+}
+
+// RecordUpstreamRequest 记录上游请求
+func (m *MonitoringManager) RecordUpstreamRequest() {
+	m.UpstreamRequests.Add(1)
+}
+
+// RecordUpstreamFailover 记录上游故障切换
+func (m *MonitoringManager) RecordUpstreamFailover() {
+	m.UpstreamFailovers.Add(1)
+}
+
+// RecordValidationFailure 记录校验失败
+func (m *MonitoringManager) RecordValidationFailure() {
+	m.ValidationFailures.Add(1)
 }
 
 // RecordRateLimitAllowed 记录限流允许的请求

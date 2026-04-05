@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tursom/apk-cache/utils"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -349,6 +350,7 @@ func (f *DefaultFetcher) Fetch(urlPath string, requestModifier func(*http.Reques
 
 	servers := f.manager.getServers()
 	log.Printf("[upstream] Fetching from upstream, path: %s, server count: %d", urlPath, len(servers))
+	utils.Monitoring.RecordUpstreamRequest()
 
 	for i, server := range servers {
 		client := f.client(server.Proxy)
@@ -372,6 +374,7 @@ func (f *DefaultFetcher) Fetch(urlPath string, requestModifier func(*http.Reques
 					serverName = server.URL
 				}
 				log.Printf("[upstream] Fallback to server %d: %s", i+1, serverName)
+				utils.Monitoring.RecordUpstreamFailover()
 			}
 			return resp, nil
 		}

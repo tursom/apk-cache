@@ -2,180 +2,189 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
 )
 
-// Config 配置文件结构
 type Config struct {
-	Server            ServerConfig              `toml:"server"`
-	Upstreams        []UpstreamConfig           `toml:"upstreams"`
-	Cache            CacheConfig                `toml:"cache"`
-	Security         SecurityConfig             `toml:"security"`
-	HealthCheck      HealthCheckConfig          `toml:"health_check"`
-	RateLimit        RateLimitConfig            `toml:"rate_limit"`
-	DataIntegrity    DataIntegrityConfig        `toml:"data_integrity"`
-	FineGrainedPolicy FineGrainedPolicyConfig   `toml:"fine_grained_policy"`
+	Server    ServerConfig     `toml:"server"`
+	Upstreams []UpstreamConfig `toml:"upstreams"`
+	Cache     CacheConfig      `toml:"cache"`
+	Transport TransportConfig  `toml:"transport"`
+	APK       APKConfig        `toml:"apk"`
+	APT       APTConfig        `toml:"apt"`
+	Proxy     ProxyConfig      `toml:"proxy"`
 }
 
 type ServerConfig struct {
-	Addr   string `toml:"addr"`
-	Locale string `toml:"locale"`
+	Listen string `toml:"listen"`
 }
 
 type UpstreamConfig struct {
+	Name  string `toml:"name"`
 	URL   string `toml:"url"`
 	Proxy string `toml:"proxy"`
-	Name  string `toml:"name"`
+	Kind  string `toml:"kind"`
 }
 
 type CacheConfig struct {
-	Dir                  string `toml:"dir"`
-	DataDir              string `toml:"data_dir"`
-	IndexDuration        string `toml:"index_duration"`
-	PkgDuration          string `toml:"pkg_duration"`
-	CleanupInterval      string `toml:"cleanup_interval"`
-	MaxSize              string `toml:"max_size"`
-	CleanStrategy        string `toml:"clean_strategy"`
-	MemoryCacheEnabled   bool   `toml:"memory_cache_enabled"`
-	MemoryCacheSize     string `toml:"memory_cache_size"`
-	MemoryCacheMaxItems int    `toml:"memory_cache_max_items"`
-	MemoryCacheTTL      string `toml:"memory_cache_ttl"`
-	MemoryCacheMaxFileSize string `toml:"memory_cache_max_file_size"`
+	Root       string            `toml:"root"`
+	DataRoot   string            `toml:"data_root"`
+	IndexTTL   string            `toml:"index_ttl"`
+	PackageTTL string            `toml:"package_ttl"`
+	Memory     MemoryCacheConfig `toml:"memory"`
 }
 
-type SecurityConfig struct {
-	AdminUser              string `toml:"admin_user"`
-	AdminPassword          string `toml:"admin_password"`
-	ProxyAuthEnabled       bool   `toml:"proxy_auth_enabled"`
-	ProxyUser              string `toml:"proxy_user"`
-	ProxyPassword          string `toml:"proxy_password"`
-	ProxyAuthExemptIPs     string `toml:"proxy_auth_exempt_ips"`
-	TrustedReverseProxyIPs string `toml:"trusted_reverse_proxy_ips"`
-}
-
-type HealthCheckConfig struct {
-	Interval          string `toml:"interval"`
-	Timeout           string `toml:"timeout"`
-	EnableSelfHealing bool   `toml:"enable_self_healing"`
-}
-
-type RateLimitConfig struct {
-	Enabled     bool    `toml:"enabled"`
-	Rate        float64 `toml:"rate"`
-	Burst       float64 `toml:"burst"`
-	ExemptPaths string  `toml:"exempt_paths"`
-}
-
-type DataIntegrityConfig struct {
-	CheckInterval string `toml:"check_interval"`
-	AutoRepair    bool   `toml:"auto_repair"`
-	PeriodicCheck bool   `toml:"periodic_check"`
-}
-
-type FineGrainedPolicyConfig struct {
-	Policy         string              `toml:"policy"`
-	SizeSmall      string              `toml:"size_small"`
-	SizeMedium     string              `toml:"size_medium"`
-	SizeLarge      string              `toml:"size_large"`
-	HotThreshold   int                 `toml:"hot_threshold"`
-	ColdThreshold  int                 `toml:"cold_threshold"`
-	Adaptive       bool                `toml:"adaptive"`
-	AdjustInterval string              `toml:"adjust_interval"`
-	TypeRules      []TypeRuleConfig    `toml:"type_rules"`
-}
-
-type TypeRuleConfig struct {
-	Pattern     string `toml:"pattern"`
-	Priority    string `toml:"priority"`
+type MemoryCacheConfig struct {
+	Enabled     bool   `toml:"enabled"`
+	MaxSize     string `toml:"max_size"`
+	MaxItemSize string `toml:"max_item_size"`
 	TTL         string `toml:"ttl"`
-	MemoryCache bool   `toml:"memory_cache"`
-	Preload     bool   `toml:"preload"`
+	MaxItems    int    `toml:"max_items"`
 }
 
-// Load 加载配置文件
+type TransportConfig struct {
+	Timeout         string `toml:"timeout"`
+	IdleConnTimeout string `toml:"idle_conn_timeout"`
+	MaxIdleConns    int    `toml:"max_idle_conns"`
+}
+
+type APKConfig struct {
+	Enabled bool `toml:"enabled"`
+}
+
+type APTConfig struct {
+	Enabled        bool `toml:"enabled"`
+	VerifyHash     bool `toml:"verify_hash"`
+	LoadIndexAsync bool `toml:"load_index_async"`
+}
+
+type ProxyConfig struct {
+	Enabled         bool     `toml:"enabled"`
+	AllowConnect    bool     `toml:"allow_connect"`
+	CacheNonPackage bool     `toml:"cache_non_package_requests"`
+	RequireAuth     bool     `toml:"require_auth"`
+	AllowedHosts    []string `toml:"allowed_hosts"`
+}
+
+func Default() *Config {
+	return &Config{
+		Server: ServerConfig{
+			Listen: ":3142",
+		},
+		Cache: CacheConfig{
+			Root:       "./cache",
+			DataRoot:   "./data",
+			IndexTTL:   "24h",
+			PackageTTL: "720h",
+			Memory: MemoryCacheConfig{
+				Enabled:     true,
+				MaxSize:     "256MB",
+				MaxItemSize: "16MB",
+				TTL:         "30m",
+				MaxItems:    2048,
+			},
+		},
+		Transport: TransportConfig{
+			Timeout:         "30s",
+			IdleConnTimeout: "90s",
+			MaxIdleConns:    128,
+		},
+		APK: APKConfig{
+			Enabled: true,
+		},
+		APT: APTConfig{
+			Enabled:        true,
+			VerifyHash:     true,
+			LoadIndexAsync: true,
+		},
+		Proxy: ProxyConfig{
+			Enabled:         true,
+			AllowConnect:    true,
+			CacheNonPackage: false,
+			RequireAuth:     false,
+		},
+	}
+}
+
 func Load(path string) (*Config, error) {
-	var config Config
-	_, err := toml.DecodeFile(path, &config)
-	if err != nil {
+	cfg := Default()
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, err
 	}
-
-	if err := Validate(&config); err != nil {
+	if err := Validate(cfg); err != nil {
 		return nil, err
 	}
-
-	return &config, nil
+	return cfg, nil
 }
 
-// Validate 验证配置有效性
-func Validate(config *Config) error {
-	if config.Server.Addr != "" && !contains(config.Server.Addr, ":") {
-		return errors.New("invalid server address: must contain ':'")
+func Validate(cfg *Config) error {
+	if cfg == nil {
+		return errors.New("config is nil")
 	}
 
-	if config.Server.Locale != "" {
-		supported := map[string]bool{"en": true, "zh": true, "": true}
-		if !supported[config.Server.Locale] {
-			return errors.New("unsupported locale: " + config.Server.Locale)
+	if cfg.Server.Listen == "" || !strings.Contains(cfg.Server.Listen, ":") {
+		return errors.New("server.listen must include host:port or :port")
+	}
+
+	if cfg.Cache.Root == "" {
+		return errors.New("cache.root is required")
+	}
+	if cfg.Cache.DataRoot == "" {
+		return errors.New("cache.data_root is required")
+	}
+	if strings.Contains(cfg.Cache.Root, "..") || strings.Contains(cfg.Cache.DataRoot, "..") {
+		return errors.New("cache paths must not contain '..'")
+	}
+
+	if err := validateDuration("cache.index_ttl", cfg.Cache.IndexTTL); err != nil {
+		return err
+	}
+	if err := validateDuration("cache.package_ttl", cfg.Cache.PackageTTL); err != nil {
+		return err
+	}
+	if cfg.Cache.Memory.Enabled {
+		if err := validateDuration("cache.memory.ttl", cfg.Cache.Memory.TTL); err != nil {
+			return err
 		}
 	}
-
-	for i, upstream := range config.Upstreams {
-		if upstream.URL == "" {
-			return errors.New("upstream URL required at index " + string(rune(i)))
-		}
-		if !hasPrefix(upstream.URL, "http://") && !hasPrefix(upstream.URL, "https://") {
-			return errors.New("invalid upstream URL: " + upstream.URL)
-		}
+	if err := validateDuration("transport.timeout", cfg.Transport.Timeout); err != nil {
+		return err
+	}
+	if err := validateDuration("transport.idle_conn_timeout", cfg.Transport.IdleConnTimeout); err != nil {
+		return err
 	}
 
-	if config.Cache.Dir != "" && contains(config.Cache.Dir, "..") {
-		return errors.New("invalid cache directory: path traversal not allowed")
-	}
-
-	if config.Cache.CleanStrategy != "" {
-		supported := map[string]bool{"LRU": true, "LFU": true, "FIFO": true, "": true}
-		if !supported[upper(config.Cache.CleanStrategy)] {
-			return errors.New("unsupported clean strategy: " + config.Cache.CleanStrategy)
+	if cfg.APK.Enabled {
+		hasAPKUpstream := false
+		for _, upstream := range cfg.Upstreams {
+			if upstream.URL == "" {
+				return errors.New("upstream.url is required")
+			}
+			if !strings.HasPrefix(upstream.URL, "http://") && !strings.HasPrefix(upstream.URL, "https://") {
+				return errors.New("upstream.url must start with http:// or https://")
+			}
+			kind := strings.ToLower(strings.TrimSpace(upstream.Kind))
+			if kind == "" || kind == "apk" {
+				hasAPKUpstream = true
+			}
+		}
+		if !hasAPKUpstream {
+			return errors.New("at least one APK upstream is required when apk.enabled=true")
 		}
 	}
 
 	return nil
 }
 
-// Helper functions to avoid importing strings package
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func validateDuration(name, value string) error {
+	if value == "" {
+		return errors.New(name + " is required")
 	}
-	return false
-}
-
-func hasPrefix(s, prefix string) bool {
-	return len(s) >= len(prefix) && s[0:len(prefix)] == prefix
-}
-
-func upper(s string) string {
-	result := make([]byte, len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'a' && c <= 'z' {
-			c -= 'a' - 'A'
-		}
-		result[i] = c
+	if _, err := time.ParseDuration(value); err != nil {
+		return errors.New(name + " is invalid: " + err.Error())
 	}
-	return string(result)
-}
-
-// ParseDuration 解析持续时间字符串
-func ParseDuration(s string) (time.Duration, error) {
-	return time.ParseDuration(s)
+	return nil
 }

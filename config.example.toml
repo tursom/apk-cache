@@ -1,128 +1,48 @@
-# APK Cache Server Configuration
-# 配置文件优先级低于命令行参数
+# APK Cache v2 example configuration
 
 [server]
-# 监听地址
-addr = ":3142"
-# 语言设置 (en/zh)，留空自动检测
-locale = ""
+listen = ":3142"
 
-# 上游服务器列表（支持故障转移，按顺序尝试）
 [[upstreams]]
-name = "Official CDN"
+name = "Official Alpine CDN"
 url = "https://dl-cdn.alpinelinux.org"
-# proxy = ""  # 可选的代理
+kind = "apk"
 
 [[upstreams]]
-name = "Tsinghua Mirror"
+name = "TUNA Alpine Mirror"
 url = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
-# 可以为每个上游服务器单独配置代理
-# proxy = "socks5://127.0.0.1:1080"
-
-[[upstreams]]
-name = "USTC Mirror"
-url = "https://mirrors.ustc.edu.cn/alpine"
-# 支持 HTTP 代理
-# proxy = "http://proxy.example.com:8080"
-
-# 也支持旧的单个上游配置方式（向后兼容）
-# [upstream]
-# url = "https://dl-cdn.alpinelinux.org"
+kind = "apk"
 # proxy = "socks5://127.0.0.1:1080"
 
 [cache]
-# 缓存目录
-dir = "./cache"
-# APKINDEX 索引文件缓存时间（按修改时间过期）
-index_duration = "24h"
-# APK 包文件缓存时间（按访问时间过期，0 = 永不过期）
-pkg_duration = "0"
-# 自动清理间隔（0 = 禁用自动清理）
-cleanup_interval = "1h"
-# 最大缓存大小（如 "10GB", "1TB", "0" = 无限制）
-max_size = "0"
-# 缓存清理策略（LRU = 最近最少使用, LFU = 最不经常使用, FIFO = 先进先出）
-clean_strategy = "LRU"
+root = "./cache"
+data_root = "./data"
+index_ttl = "24h"
+package_ttl = "720h"
 
-# 内存缓存配置
-memory_cache_enabled = true
-memory_cache_size = "100MB"     # 内存缓存最大大小
-memory_cache_max_items = 1000   # 内存缓存最大项目数
-memory_cache_ttl = "1h"         # 内存缓存项过期时间
-memory_cache_max_file_size = "10MB" # 单个文件最大缓存大小
+[cache.memory]
+enabled = true
+max_size = "256MB"
+max_item_size = "16MB"
+ttl = "30m"
+max_items = 2048
 
-[security]
-# 管理界面用户名（默认：admin）
-# admin_user = "admin"
-# 管理界面密码（留空则无需认证）
-# admin_password = "your-secret-password"
+[transport]
+timeout = "30s"
+idle_conn_timeout = "90s"
+max_idle_conns = 128
 
-# 代理身份验证配置
-# 是否启用代理身份验证
-# proxy_auth_enabled = false
-# 代理身份验证用户名（默认：proxy）
-# proxy_user = "proxy"
-# 代理身份验证密码（留空则无需认证）
-# proxy_password = "your-proxy-password"
-# 不需要验证的 IP 网段（CIDR格式，逗号分隔）
-# proxy_auth_exempt_ips = "192.168.1.0/24,10.0.0.0/8"
-# 信任的反向代理 IP（逗号分隔，用于获取真实客户端 IP）
-# trusted_reverse_proxy_ips = "172.17.0.1,192.168.1.100"
+[apk]
+enabled = true
 
-# 健康检查配置
-[health_check]
-# 健康检查间隔（0 = 禁用健康检查）
-# interval = "30s"
-# 健康检查超时时间
-# timeout = "10s"
-# 是否启用自愈机制
-# enable_self_healing = true
+[apt]
+enabled = true
+verify_hash = true
+load_index_async = true
 
-# 请求限流配置
-[rate_limit]
-# 是否启用请求限流
-enabled = false
-# 每秒允许的请求数
-rate = 100.0
-# 突发请求容量
-burst = 200.0
-# 豁免限流的路径（逗号分隔）
-exempt_paths = "/_health,/metrics"
-
-# 数据完整性校验配置
-[data_integrity]
-# 数据完整性检查间隔（0 = 禁用数据完整性检查）
-# check_interval = "1h"
-# 是否启用自动修复损坏的文件
-# auto_repair = true
-# 是否启用定期完整性检查
-# periodic_check = true
-# 是否在启动时初始化现有文件的哈希记录（默认为 false）
-# initialize_existing_files = false
-
-# 细粒度缓存策略配置
-[fine_grained_policy]
-# 策略类型: default(默认) / size(基于大小) / type(基于类型) / frequency(基于频率) / adaptive(自适应)
-# policy = "default"
-# 小文件阈值（小于此大小的文件被视为小文件）
-# size_small = "1MB"
-# 中等文件阈值（小于此大小的文件被视为中等文件）
-# size_medium = "10MB"
-# 大文件阈值（大于等于此大小的文件被视为大文件）
-# size_large = "100MB"
-# 热门文件阈值（每天访问次数超过此值被视为热门文件）
-# hot_threshold = 100
-# 冷门文件阈值（每天访问次数低于等于此值被视为冷门文件）
-# cold_threshold = 1
-# 是否启用自适应策略调整
-# adaptive = false
-# 自适应策略调整间隔
-# adjust_interval = "1h"
-
-# 类型规则（仅在 policy 为 type 或 adaptive 时生效）
-# [[fine_grained_policy.type_rules]]
-# pattern = "^apk-tools.*\\.apk$"  # 文件名匹配模式（正则表达式）
-# priority = "high"               # 优先级: low / normal / high
-# ttl = "7d"                       # 缓存时间
-# memory_cache = true              # 是否启用内存缓存
-# preload = true                   # 是否预加载
+[proxy]
+enabled = true
+allow_connect = true
+cache_non_package_requests = false
+require_auth = false
+# allowed_hosts = ["deb.debian.org", "security.debian.org"]
