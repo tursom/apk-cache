@@ -182,11 +182,26 @@ vim config.toml
 - `[server]` - 服务器基本配置
 - `[[upstreams]]` - 上游服务器列表（支持多个）
 - `[cache]` - 缓存配置
+- `[apk]` - APK 缓存与校验配置
 - `[security]` - 安全配置（身份验证等）
 - `[health_check]` - 健康检查配置
 - `[rate_limit]` - 请求限流配置
 - `[data_integrity]` - 数据完整性校验配置
 - `[fine_grained_policy]` - 细粒度缓存策略配置
+
+### APK 校验配置
+
+```toml
+[apk]
+enabled = true
+verify_hash = true
+verify_signature = true
+keys_dir = ""
+```
+
+- `verify_hash`：使用 `APKINDEX` 校验缓存和新下载的 `.apk` 文件
+- `verify_signature`：只有可识别签名且验签通过的 APK/APKINDEX 才会进入缓存
+- `keys_dir`：可选的额外 RSA 公钥目录，会和内置公钥一起作为信任源加载
 
 ## Docker Compose 示例
 
@@ -274,6 +289,9 @@ services:
 - `apk_cache_data_integrity_corrupted_files_total` - 损坏文件数量
 - `apk_cache_data_integrity_repaired_files_total` - 数据完整性修复次数
 - `apk_cache_data_integrity_check_duration_seconds` - 数据完整性检查耗时
+- `apk_cache_apk_hash_failures_total` - APK 哈希校验失败次数
+- `apk_cache_apk_signature_failures_total` - APK 签名校验失败次数
+- `apk_cache_apk_bypass_responses_total` - 因签名校验失败而绕过缓存的 APK 响应次数
 
 ## 细粒度缓存策略
 

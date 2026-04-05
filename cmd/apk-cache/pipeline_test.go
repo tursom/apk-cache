@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -77,12 +79,13 @@ func TestPipelineCachesAPKResponses(t *testing.T) {
 
 func TestPipelineCachesAPKIndexResponses(t *testing.T) {
 	var upstreamHits atomic.Int32
+	indexBody := buildSignedArchive(t, "ignored", nil, "DESCRIPTION", []byte(""), true, false)
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHits.Add(1)
 		if r.URL.Path != "/alpine/v3.20/main/x86_64/APKINDEX.tar.gz" {
 			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte("apk-index"))
+		_, _ = w.Write(indexBody)
 	}))
 	defer upstreamServer.Close()
 
@@ -115,7 +118,7 @@ func TestPipelineCachesAPKIndexResponses(t *testing.T) {
 	}
 	if got, err := os.ReadFile(cachePath); err != nil {
 		t.Fatalf("read cache file: %v", err)
-	} else if string(got) != "apk-index" {
+	} else if string(got) != string(indexBody) {
 		t.Fatalf("cache file body = %q", string(got))
 	}
 	if app.memoryCache != nil {
@@ -127,9 +130,10 @@ func TestPipelineCachesAPKIndexResponses(t *testing.T) {
 
 func TestPipelineUsesIndexTTLForAPKIndexRequests(t *testing.T) {
 	var upstreamHits atomic.Int32
+	indexBody := buildSignedArchive(t, "ignored", nil, "DESCRIPTION", []byte(""), true, false)
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHits.Add(1)
-		_, _ = w.Write([]byte("apk-index"))
+		_, _ = w.Write(indexBody)
 	}))
 	defer upstreamServer.Close()
 
@@ -343,6 +347,224 @@ func TestPipelineReFetchesAfterCachedValidationFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineReFetchesAPKAfterCachedHashValidationFailure(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	keysDir := t.TempDir()
+	writeTrustedKey(t, keysDir, "test.rsa.pub", privateKey)
+
+	validPackage := buildSignedAPKPackage(t, "test.rsa.pub", privateKey, []byte("valid package"), false, false)
+	indexBody := buildSignedAPKIndex(t, "test.rsa.pub", privateKey, map[string][]byte{
+		"test-1.apk": validPackage,
+	})
+
+	var upstreamHits atomic.Int32
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		switch r.URL.Path {
+		case "/alpine/v3.20/main/x86_64/APKINDEX.tar.gz":
+			_, _ = w.Write(indexBody)
+		case "/alpine/v3.20/main/x86_64/test-1.apk":
+			_, _ = w.Write(validPackage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.APK.VerifyHash = true
+		cfg.APK.VerifySignature = true
+		cfg.APK.KeysDir = keysDir
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	indexReq := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil)
+	indexRec := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(indexRec, indexReq)
+	if indexRec.Code != http.StatusOK {
+		t.Fatalf("index response status = %d", indexRec.Code)
+	}
+
+	packageReq := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test-1.apk", nil)
+	cachePath := mustCachePathForRequest(t, app, packageReq)
+	if err := os.WriteFile(cachePath, buildSignedAPKPackage(t, "test.rsa.pub", privateKey, []byte("stale"), false, false), 0o644); err != nil {
+		t.Fatalf("write stale package: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(rec, packageReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("package response status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("X-Cache = %q", got)
+	}
+	if got := rec.Body.Bytes(); string(got) != string(validPackage) {
+		t.Fatalf("package body mismatch")
+	}
+	if got, err := os.ReadFile(cachePath); err != nil {
+		t.Fatalf("read package cache: %v", err)
+	} else if string(got) != string(validPackage) {
+		t.Fatalf("cached package mismatch")
+	}
+	if upstreamHits.Load() != 2 {
+		t.Fatalf("unexpected upstream hits: got %d want 2", upstreamHits.Load())
+	}
+}
+
+func TestPipelineRejectsFetchedAPKHashMismatch(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	keysDir := t.TempDir()
+	writeTrustedKey(t, keysDir, "test.rsa.pub", privateKey)
+
+	validPackage := buildSignedAPKPackage(t, "test.rsa.pub", privateKey, []byte("valid package"), false, false)
+	indexBody := buildSignedAPKIndex(t, "test.rsa.pub", privateKey, map[string][]byte{
+		"test-1.apk": validPackage,
+	})
+	invalidPackage := buildSignedAPKPackage(t, "test.rsa.pub", privateKey, []byte("different package"), false, false)
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/alpine/v3.20/main/x86_64/APKINDEX.tar.gz":
+			_, _ = w.Write(indexBody)
+		case "/alpine/v3.20/main/x86_64/test-1.apk":
+			_, _ = w.Write(invalidPackage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.APK.VerifyHash = true
+		cfg.APK.VerifySignature = true
+		cfg.APK.KeysDir = keysDir
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	indexReq := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil)
+	app.pipeline.ServeHTTP(httptest.NewRecorder(), indexReq)
+
+	packageReq := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test-1.apk", nil)
+	cachePath := mustCachePathForRequest(t, app, packageReq)
+	rec := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(rec, packageReq)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d want %d", rec.Code, http.StatusBadGateway)
+	}
+	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected invalid package to be absent from cache, stat err = %v", err)
+	}
+}
+
+func TestPipelineBypassesUnsignedFetchedAPKWithoutCaching(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	keysDir := t.TempDir()
+	writeTrustedKey(t, keysDir, "test.rsa.pub", privateKey)
+
+	unsignedPackage := buildSignedAPKPackage(t, "test.rsa.pub", privateKey, []byte("valid package"), true, false)
+	indexBody := buildSignedAPKIndex(t, "test.rsa.pub", privateKey, map[string][]byte{
+		"test-1.apk": unsignedPackage,
+	})
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/alpine/v3.20/main/x86_64/APKINDEX.tar.gz":
+			_, _ = w.Write(indexBody)
+		case "/alpine/v3.20/main/x86_64/test-1.apk":
+			_, _ = w.Write(unsignedPackage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.APK.VerifyHash = true
+		cfg.APK.VerifySignature = true
+		cfg.APK.KeysDir = keysDir
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	app.pipeline.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil))
+
+	packageReq := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test-1.apk", nil)
+	cachePath := mustCachePathForRequest(t, app, packageReq)
+	rec := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(rec, packageReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("X-Cache"); got != "BYPASS" {
+		t.Fatalf("X-Cache = %q", got)
+	}
+	if got := rec.Body.Bytes(); string(got) != string(unsignedPackage) {
+		t.Fatalf("unexpected bypass body")
+	}
+	if _, err := os.Stat(cachePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected unsigned package to bypass cache, stat err = %v", err)
+	}
+}
+
+func TestPipelineAllowsUnsignedAPKWhenSignatureVerificationDisabled(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	unsignedPackage := buildSignedAPKPackage(t, "test.rsa.pub", privateKey, []byte("valid package"), true, false)
+	indexBody := buildSignedAPKIndex(t, "test.rsa.pub", privateKey, map[string][]byte{
+		"test-1.apk": unsignedPackage,
+	})
+
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/alpine/v3.20/main/x86_64/APKINDEX.tar.gz":
+			_, _ = w.Write(indexBody)
+		case "/alpine/v3.20/main/x86_64/test-1.apk":
+			_, _ = w.Write(unsignedPackage)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.APK.VerifyHash = true
+		cfg.APK.VerifySignature = false
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	app.pipeline.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil))
+
+	packageReq := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/test-1.apk", nil)
+	cachePath := mustCachePathForRequest(t, app, packageReq)
+	rec := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(rec, packageReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", rec.Code, http.StatusOK)
+	}
+	if got := rec.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("X-Cache = %q", got)
+	}
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("expected unsigned package to be cached when signature verification is disabled: %v", err)
+	}
+}
+
 func TestProxyAdapterForwardsAbsoluteURLRequests(t *testing.T) {
 	var gotPath string
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -435,6 +657,8 @@ func mustNewTestApp(t *testing.T, mutate func(*internalconfig.Config)) *App {
 	cfg.Cache.Memory.MaxItemSize = "4MB"
 	cfg.Cache.Memory.TTL = "1h"
 	cfg.Cache.Memory.MaxItems = 32
+	cfg.APK.VerifyHash = false
+	cfg.APK.VerifySignature = false
 	if mutate != nil {
 		mutate(cfg)
 	}

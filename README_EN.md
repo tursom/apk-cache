@@ -182,11 +182,26 @@ Main configuration sections include:
 - `[server]` - Server basic configuration
 - `[[upstreams]]` - Upstream servers list (supports multiple)
 - `[cache]` - Cache configuration
+- `[apk]` - APK caching and verification configuration
 - `[security]` - Security configuration (authentication, etc.)
 - `[health_check]` - Health check configuration
 - `[rate_limit]` - Request rate limiting configuration
 - `[data_integrity]` - Data integrity verification configuration
 - `[fine_grained_policy]` - Fine-grained cache policy configuration
+
+### APK Verification Options
+
+```toml
+[apk]
+enabled = true
+verify_hash = true
+verify_signature = true
+keys_dir = ""
+```
+
+- `verify_hash`: validate cached and freshly downloaded `.apk` files against `APKINDEX`
+- `verify_signature`: require a recognizable APK/APKINDEX signature before caching
+- `keys_dir`: optional directory of additional trusted RSA public keys loaded alongside built-in keys
 
 ## Docker Compose Example
 
@@ -274,6 +289,9 @@ Visit `http://your-server:3142/metrics` to get Prometheus metrics:
 - `apk_cache_data_integrity_corrupted_files_total` - Number of corrupted files
 - `apk_cache_data_integrity_repaired_files_total` - Number of data integrity repairs
 - `apk_cache_data_integrity_check_duration_seconds` - Data integrity check duration
+- `apk_cache_apk_hash_failures_total` - Number of APK hash validation failures
+- `apk_cache_apk_signature_failures_total` - Number of APK signature validation failures
+- `apk_cache_apk_bypass_responses_total` - Number of APK responses bypassed from cache after signature validation failures
 
 ## Fine-grained Cache Policy
 

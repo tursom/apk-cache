@@ -9,6 +9,15 @@ import (
 
 func TestDefaultConfigIsValid(t *testing.T) {
 	cfg := Default()
+	if !cfg.APK.VerifyHash {
+		t.Fatalf("default apk.verify_hash should be true")
+	}
+	if !cfg.APK.VerifySignature {
+		t.Fatalf("default apk.verify_signature should be true")
+	}
+	if cfg.APK.KeysDir != "" {
+		t.Fatalf("default apk.keys_dir = %q want empty", cfg.APK.KeysDir)
+	}
 	if err := Validate(cfg); err != nil {
 		t.Fatalf("default config should be valid: %v", err)
 	}
@@ -184,6 +193,9 @@ max_idle_conns = 128
 
 [apk]
 enabled = true
+verify_hash = true
+verify_signature = true
+keys_dir = ""
 
 [apt]
 enabled = true

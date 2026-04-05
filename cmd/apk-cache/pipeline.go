@@ -26,6 +26,10 @@ func NewPipeline(app *App, adapters []ProtocolAdapter) *Pipeline {
 	}
 }
 
+// 统一请求入口：
+// 1. 交给适配器识别和归一化请求
+// 2. 根据缓存策略依次尝试内存缓存、磁盘缓存
+// 3. 未命中时回源、校验并决定是否落盘
 func (p *Pipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	adapter := p.matchAdapter(r)
 	if adapter == nil {
@@ -107,6 +111,7 @@ func (p *Pipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// 按注册顺序选择首个匹配请求的适配器。
 func (p *Pipeline) matchAdapter(r *http.Request) ProtocolAdapter {
 	for _, adapter := range p.adapters {
 		if adapter.Match(r) {
@@ -116,6 +121,7 @@ func (p *Pipeline) matchAdapter(r *http.Request) ProtocolAdapter {
 	return nil
 }
 
+// 保持主流程简洁，内存缓存细节全部封装在 MemoryCache 中。
 func (p *Pipeline) tryServeFromMemory(w http.ResponseWriter, cachePath string) bool {
 	if p.app.memoryCache == nil {
 		return false
@@ -123,6 +129,8 @@ func (p *Pipeline) tryServeFromMemory(w http.ResponseWriter, cachePath string) b
 	return p.app.memoryCache.ServeFromMemory(w, cachePath)
 }
 
+// 磁盘命中时除了 TTL，还会执行协议相关校验。
+// 例如 APT 会做 by-hash/.deb 校验，APK 会做 APKINDEX 哈希和签名校验。
 func (p *Pipeline) tryServeFromDisk(w http.ResponseWriter, r *http.Request, adapter ProtocolAdapter, req *NormalizedRequest, decision CacheDecision, cachePath string) bool {
 	info, err := os.Stat(cachePath)
 	if err != nil || info.IsDir() {
@@ -169,6 +177,8 @@ func (p *Pipeline) tryServeFromDisk(w http.ResponseWriter, r *http.Request, adap
 	return true
 }
 
+// 这里采用“先完整下载到临时文件，再校验，再响应”的顺序。
+// 这样即便上游在传输中断开，也不会把半截文件返回给客户端或污染缓存。
 func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, resp *http.Response, adapter ProtocolAdapter, req *NormalizedRequest, decision CacheDecision, cachePath string) error {
 	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
 		return err
@@ -184,8 +194,7 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		_ = os.Remove(tmpName)
 	}()
 
-	// Phase 1: download entirely to temp file before sending anything to client.
-	// This prevents partial/corrupt responses when upstream times out mid-transfer.
+	// Phase 1: 先完整下载到临时文件，避免客户端收到半截内容。
 	var written int64
 	buffer := make([]byte, 32*1024)
 	for {
@@ -217,6 +226,19 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 
 	if err := adapter.ValidateFetched(ctx, p.app, req, cachePath); err != nil {
 		utils.Monitoring.RecordValidationFailure()
+		if shouldBypassCache(err) {
+			// APK 签名失败属于“允许透传但不允许缓存”的场景：
+			// 先用临时落盘文件响应客户端，再在函数退出时删除它。
+			utils.Monitoring.RecordAPKBypassResponse()
+			defer func() {
+				_ = os.Remove(cachePath)
+				if p.app.memoryCache != nil {
+					p.app.memoryCache.Delete(cachePath)
+				}
+			}()
+			_, writeErr := p.writeStoredResponse(w, resp, cachePath, "BYPASS")
+			return writeErr
+		}
 		_ = os.Remove(cachePath)
 		if p.app.memoryCache != nil {
 			p.app.memoryCache.Delete(cachePath)
@@ -224,29 +246,17 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		return err
 	}
 
-	// Phase 2: serve the complete, validated file to client.
-	info, err := os.Stat(cachePath)
-	if err != nil {
-		return err
-	}
-	file, err := os.Open(cachePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	copyEndToEndHeaders(w.Header(), resp.Header)
-	w.Header().Set("X-Cache", "MISS")
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
-	w.WriteHeader(resp.StatusCode)
-
-	n, err := io.Copy(w, file)
+	n, err := p.writeStoredResponse(w, resp, cachePath, "MISS")
 	if err == nil {
 		utils.Monitoring.RecordCacheMiss(n)
-		utils.Monitoring.RecordResponseBytes(n)
 	}
 
-	// Phase 3: optionally cache to memory.
+	info, statErr := os.Stat(cachePath)
+	if statErr != nil {
+		return statErr
+	}
+
+	// Phase 3: 只有通过校验的文件才有资格进入内存缓存。
 	if decision.StoreInMemory && p.app.memoryCache != nil && (p.app.memoryCacheMaxItemSize == 0 || info.Size() <= p.app.memoryCacheMaxItemSize) {
 		data, readErr := os.ReadFile(cachePath)
 		if readErr == nil {
@@ -259,6 +269,31 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 	return nil
 }
 
+// 该 helper 同时服务于正常 MISS 返回和“校验失败但允许透传”的 BYPASS 返回。
+func (p *Pipeline) writeStoredResponse(w http.ResponseWriter, resp *http.Response, cachePath, cacheStatus string) (int64, error) {
+	info, err := os.Stat(cachePath)
+	if err != nil {
+		return 0, err
+	}
+	file, err := os.Open(cachePath)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	copyEndToEndHeaders(w.Header(), resp.Header)
+	w.Header().Set("X-Cache", cacheStatus)
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.WriteHeader(resp.StatusCode)
+
+	n, err := io.Copy(w, file)
+	if err == nil {
+		utils.Monitoring.RecordResponseBytes(n)
+	}
+	return n, err
+}
+
+// 对不进入缓存的响应做直接透传。
 func (p *Pipeline) writeResponse(w http.ResponseWriter, resp *http.Response, cacheHeader string) {
 	copyEndToEndHeaders(w.Header(), resp.Header)
 	w.Header().Set("X-Cache", cacheHeader)
@@ -277,6 +312,7 @@ func isExpired(modTime time.Time, ttl time.Duration) bool {
 	return time.Since(modTime) > ttl
 }
 
+// 内存缓存需要一份可安全修改的 header 副本，因此这里做深拷贝。
 func cloneHeaders(source http.Header) http.Header {
 	cloned := make(http.Header, len(source))
 	for key, values := range source {
@@ -287,6 +323,7 @@ func cloneHeaders(source http.Header) http.Header {
 	return cloned
 }
 
+// 把内部错误映射到更合适的外部 HTTP 状态码。
 func writePipelineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrProxyDisabled):

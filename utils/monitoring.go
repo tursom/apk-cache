@@ -20,6 +20,9 @@ type MonitoringManager struct {
 	UpstreamRequests   prometheus.Counter
 	UpstreamFailovers  prometheus.Counter
 	ValidationFailures prometheus.Counter
+	APKHashFailures    prometheus.Counter
+	APKSignFailures    prometheus.Counter
+	APKBypassResponses prometheus.Counter
 
 	// 限流相关指标
 	RateLimitAllowed       prometheus.Counter
@@ -102,6 +105,21 @@ func NewMonitoring() *MonitoringManager {
 	monitoring.ValidationFailures = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "apk_cache_validation_failures_total",
 		Help: "Total number of cache validation failures",
+	})
+
+	monitoring.APKHashFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_apk_hash_failures_total",
+		Help: "Total number of APK hash validation failures",
+	})
+
+	monitoring.APKSignFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_apk_signature_failures_total",
+		Help: "Total number of APK signature validation failures",
+	})
+
+	monitoring.APKBypassResponses = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "apk_cache_apk_bypass_responses_total",
+		Help: "Total number of APK responses bypassed from cache due to signature validation",
 	})
 
 	// 初始化限流相关指标
@@ -213,6 +231,9 @@ func (m *MonitoringManager) registerMetrics() {
 	m.registry.MustRegister(m.UpstreamRequests)
 	m.registry.MustRegister(m.UpstreamFailovers)
 	m.registry.MustRegister(m.ValidationFailures)
+	m.registry.MustRegister(m.APKHashFailures)
+	m.registry.MustRegister(m.APKSignFailures)
+	m.registry.MustRegister(m.APKBypassResponses)
 
 	// 注册限流相关指标
 	m.registry.MustRegister(m.RateLimitAllowed)
@@ -299,6 +320,18 @@ func (m *MonitoringManager) RecordUpstreamFailover() {
 // RecordValidationFailure 记录校验失败
 func (m *MonitoringManager) RecordValidationFailure() {
 	m.ValidationFailures.Add(1)
+}
+
+func (m *MonitoringManager) RecordAPKHashFailure() {
+	m.APKHashFailures.Add(1)
+}
+
+func (m *MonitoringManager) RecordAPKSignatureFailure() {
+	m.APKSignFailures.Add(1)
+}
+
+func (m *MonitoringManager) RecordAPKBypassResponse() {
+	m.APKBypassResponses.Add(1)
 }
 
 // RecordRateLimitAllowed 记录限流允许的请求

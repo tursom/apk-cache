@@ -53,6 +53,12 @@ type TransportConfig struct {
 
 type APKConfig struct {
 	Enabled bool `toml:"enabled"`
+	// VerifyHash 控制是否使用 APKINDEX 中的记录校验 .apk 内容。
+	VerifyHash bool `toml:"verify_hash"`
+	// VerifySignature 控制是否要求 APK/APKINDEX 在写入缓存前通过签名校验。
+	VerifySignature bool `toml:"verify_signature"`
+	// KeysDir 允许额外加载一组受信任 RSA 公钥，与内置 keyring 合并使用。
+	KeysDir string `toml:"keys_dir"`
 }
 
 type APTConfig struct {
@@ -100,7 +106,10 @@ func Default() *Config {
 			MaxIdleConns:    128,
 		},
 		APK: APKConfig{
-			Enabled: true,
+			Enabled:         true,
+			VerifyHash:      true,
+			VerifySignature: true,
+			KeysDir:         "",
 		},
 		APT: APTConfig{
 			Enabled:        true,

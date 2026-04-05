@@ -29,11 +29,14 @@ type App struct {
 	lockManager            *utils.FileLockManager
 	apkUpstreams           *upstream.Manager
 	apkFetcher             *upstream.DefaultFetcher
+	apkIndex               *APKIndexService
+	apkVerifier            *APKVerifier
 	aptIndex               *APTIndexService
 	proxyAdapter           *ProxyAdapter
 	pipeline               *Pipeline
 }
 
+// HTTPClientFactory 按 proxy 地址复用 http.Client，避免重复创建 transport。
 type HTTPClientFactory struct {
 	timeout         time.Duration
 	idleConnTimeout time.Duration
@@ -43,6 +46,8 @@ type HTTPClientFactory struct {
 	clients map[string]*http.Client
 }
 
+// NewApp 负责把配置组装成运行时依赖图。
+// APK/APT 各自的索引服务都会在这里初始化，并尝试从已有缓存恢复内存态。
 func NewApp(cfg *internalconfig.Config) (*App, error) {
 	indexTTL, err := time.ParseDuration(cfg.Cache.IndexTTL)
 	if err != nil {
@@ -90,6 +95,11 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 		apkUpstreams.AddServer(upstream.NewServer(candidate.URL, candidate.Proxy, candidate.Name, 30*time.Second))
 	}
 
+	apkVerifier, err := NewAPKVerifier(cfg.APK.KeysDir)
+	if err != nil {
+		return nil, err
+	}
+
 	app := &App{
 		cfg:                    cfg,
 		httpClients:            clientFactory,
@@ -100,7 +110,12 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 		lockManager:            utils.NewFileLockManager(),
 		apkUpstreams:           apkUpstreams,
 		apkFetcher:             upstream.NewFetcher(apkUpstreams, clientFactory.Client),
+		apkIndex:               NewAPKIndexService(cfg.Cache.Root),
+		apkVerifier:            apkVerifier,
 		aptIndex:               NewAPTIndexService(cfg.Cache.Root),
+	}
+	if err := app.apkIndex.LoadFromRoot(cfg.Cache.Root); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("load apk indexes: %v", err)
 	}
 	if err := app.aptIndex.LoadFromRoot(filepath.Join(cfg.Cache.Root, "apt")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("load apt indexes: %v", err)

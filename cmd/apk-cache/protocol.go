@@ -18,11 +18,37 @@ import (
 )
 
 var (
-	ErrProxyDisabled     = errors.New("proxy adapter is disabled")
-	ErrConnectNotAllowed = errors.New("proxy CONNECT is disabled")
-	ErrCacheCorrupted    = errors.New("cache validation failed")
+	ErrProxyDisabled       = errors.New("proxy adapter is disabled")
+	ErrConnectNotAllowed   = errors.New("proxy CONNECT is disabled")
+	ErrCacheCorrupted      = errors.New("cache validation failed")
+	ErrAPKHashMismatch     = errors.New("apk hash mismatch")
+	ErrAPKSignatureInvalid = errors.New("apk signature invalid")
+	ErrAPKUnsigned         = errors.New("apk unsigned")
+	ErrAPKIndexUnavailable = errors.New("apk index unavailable")
 )
 
+// CacheBypassError 表示“这次响应可以返回给客户端，但不能写入缓存”。
+// APK 签名校验失败时会用它把控制权交回 pipeline，让 pipeline 改走透传分支。
+type CacheBypassError struct {
+	Err error
+}
+
+func (e *CacheBypassError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *CacheBypassError) Unwrap() error {
+	return e.Err
+}
+
+// shouldBypassCache 用于区分致命校验错误和“允许透传、不允许缓存”的软失败。
+func shouldBypassCache(err error) bool {
+	var bypassErr *CacheBypassError
+	return errors.As(err, &bypassErr)
+}
+
+// NormalizedRequest 是适配器对原始请求的统一表示。
+// pipeline 只消费这个结构，从而避免把协议分支散落在主流程中。
 type NormalizedRequest struct {
 	AdapterName  string
 	Request      *http.Request
@@ -33,12 +59,14 @@ type NormalizedRequest struct {
 	Cacheable    bool
 }
 
+// CacheDecision 描述当前请求的缓存策略。
 type CacheDecision struct {
 	Enabled       bool
 	TTL           time.Duration
 	StoreInMemory bool
 }
 
+// ProtocolAdapter 把 APK、APT 和通用代理接入统一流水线。
 type ProtocolAdapter interface {
 	Name() string
 	Match(*http.Request) bool
@@ -50,6 +78,7 @@ type ProtocolAdapter interface {
 	Fetch(context.Context, *App, *NormalizedRequest) (*http.Response, error)
 }
 
+// ConnectHandler 是支持 CONNECT 的适配器可选实现。
 type ConnectHandler interface {
 	HandleConnect(context.Context, *App, http.ResponseWriter, *http.Request, *NormalizedRequest) error
 }
@@ -87,6 +116,7 @@ func (a *APKAdapter) Match(r *http.Request) bool {
 	return utils.DetectPackageTypeFast(requestPath(r)) == utils.PackageTypeAPK
 }
 
+// APK 请求的路径本身就是回源路径和缓存键的主要来源，因此归一化逻辑比较直接。
 func (a *APKAdapter) Normalize(r *http.Request) (*NormalizedRequest, error) {
 	path := requestPath(r)
 	if path == "" || path[0] != '/' {
@@ -106,6 +136,7 @@ func (a *APKAdapter) Normalize(r *http.Request) (*NormalizedRequest, error) {
 	}, nil
 }
 
+// APK 包允许进入内存缓存，APKINDEX 只落盘不进内存。
 func (a *APKAdapter) CachePolicy(req *NormalizedRequest) CacheDecision {
 	return CacheDecision{
 		Enabled:       true,
@@ -117,14 +148,76 @@ func (a *APKAdapter) CacheKey(req *NormalizedRequest) (string, error) {
 	return safeJoinPath(req.UpstreamPath)
 }
 
-func (a *APKAdapter) ValidateCached(context.Context, *App, *NormalizedRequest, string) error {
+// ValidateCached 校验磁盘中已经存在的 APK/APKINDEX，失败时上层会删除缓存并回源。
+func (a *APKAdapter) ValidateCached(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
+	if req.CacheClass == "index" {
+		if !app.cfg.APK.VerifySignature {
+			return nil
+		}
+		err := app.apkVerifier.ValidateIndexSignature(cachePath)
+		if err != nil {
+			utils.Monitoring.RecordAPKSignatureFailure()
+		}
+		return err
+	}
+
+	if app.cfg.APK.VerifyHash {
+		err := app.apkIndex.ValidatePackage(cachePath)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrAPKIndexUnavailable):
+		default:
+			utils.Monitoring.RecordAPKHashFailure()
+			return err
+		}
+	}
+
+	if app.cfg.APK.VerifySignature {
+		err := app.apkVerifier.ValidatePackageSignature(cachePath)
+		if err != nil {
+			utils.Monitoring.RecordAPKSignatureFailure()
+		}
+		return err
+	}
+
 	return nil
 }
 
-func (a *APKAdapter) ValidateFetched(context.Context, *App, *NormalizedRequest, string) error {
+// ValidateFetched 校验本次刚下载完成的 APK/APKINDEX。
+// 哈希失败是致命错误；签名失败则包装为 CacheBypassError，让上层改走“透传但不缓存”。
+func (a *APKAdapter) ValidateFetched(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
+	if req.CacheClass == "index" {
+		if app.cfg.APK.VerifySignature {
+			if err := app.apkVerifier.ValidateIndexSignature(cachePath); err != nil {
+				utils.Monitoring.RecordAPKSignatureFailure()
+				return &CacheBypassError{Err: err}
+			}
+		}
+		return app.apkIndex.LoadFile(cachePath)
+	}
+
+	if app.cfg.APK.VerifyHash {
+		err := app.apkIndex.ValidatePackage(cachePath)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrAPKIndexUnavailable):
+		default:
+			utils.Monitoring.RecordAPKHashFailure()
+			return err
+		}
+	}
+
+	if app.cfg.APK.VerifySignature {
+		if err := app.apkVerifier.ValidatePackageSignature(cachePath); err != nil {
+			utils.Monitoring.RecordAPKSignatureFailure()
+			return &CacheBypassError{Err: err}
+		}
+	}
+
 	return nil
 }
 
+// APK 请求通过 apkFetcher 使用配置中的 APK upstream 与 failover 逻辑。
 func (a *APKAdapter) Fetch(ctx context.Context, app *App, req *NormalizedRequest) (*http.Response, error) {
 	return app.apkFetcher.Fetch(req.UpstreamPath, func(upstreamReq *http.Request) {
 		upstreamReq = upstreamReq.WithContext(ctx)
