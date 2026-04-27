@@ -129,14 +129,27 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 	}
 	app.pipeline = NewPipeline(app, adapters)
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/_health", app.handleHealth)
-	mux.Handle("/metrics", promhttp.HandlerFor(utils.Monitoring.GetRegistry(), promhttp.HandlerOpts{}))
-	mux.Handle("/", app.pipeline)
+	metricsHandler := promhttp.HandlerFor(utils.Monitoring.GetRegistry(), promhttp.HandlerOpts{})
+	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Forward-proxy requests may use absolute-form URLs or CONNECT authority-form,
+		// both of which are a poor fit for ServeMux path matching.
+		if r.Method == http.MethodConnect {
+			app.pipeline.ServeHTTP(w, r)
+			return
+		}
+		switch r.URL.Path {
+		case "/_health":
+			app.handleHealth(w, r)
+		case "/metrics":
+			metricsHandler.ServeHTTP(w, r)
+		default:
+			app.pipeline.ServeHTTP(w, r)
+		}
+	})
 
 	app.server = &http.Server{
 		Addr:    cfg.Server.Listen,
-		Handler: mux,
+		Handler: rootHandler,
 	}
 
 	return app, nil

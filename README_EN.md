@@ -72,7 +72,7 @@ The build script automatically:
 ./apk-cache -config config.toml
 ```
 
-The current version is intended to be configured through `config.toml`. To route `ProxyAdapter` traffic through an upstream proxy, set `[proxy].upstream_proxy` to a `socks5://`, `http://`, or `https://` URL.
+The current version is intended to be configured through `config.toml`. To route APT outbound traffic and `ProxyAdapter` traffic through an upstream proxy, set `[proxy].upstream_proxy` to a `socks5://`, `http://`, or `https://` URL.
 
 ## Configure Alpine Linux to Use Cache Server
 
@@ -115,6 +115,8 @@ Edit `/etc/apt/apt.conf.d/95proxies`:
 Acquire::HTTP::Proxy "http://your-cache-server:3142";
 Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 ```
+
+If you want APT packages to be cached, prefer `http://` repository URLs in `sources.list`. `https://` repositories usually use `CONNECT` tunnels, which this version can forward but does not inspect or cache.
 
 ## Main Configuration Parameters
 
@@ -210,7 +212,7 @@ cache_non_package_requests = false
 upstream_proxy = "socks5://127.0.0.1:1080"
 ```
 
-- `upstream_proxy`: only affects outbound `ProxyAdapter` traffic and `CONNECT` tunnels; it does not change `[[upstreams]].proxy` for APK fetches
+- `upstream_proxy`: affects outbound APT requests plus outbound `ProxyAdapter` traffic and `CONNECT` tunnels; it does not change `[[upstreams]].proxy` for APK fetches
 - `allowed_hosts`: still matches the target host, not the upstream proxy host
 
 ## Docker Compose Example

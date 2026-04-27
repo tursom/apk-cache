@@ -291,6 +291,130 @@ func TestPipelineCachesAPTResponses(t *testing.T) {
 	}
 }
 
+func TestAPTAdapterUsesHTTPUpstreamProxy(t *testing.T) {
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("apt-via-http-proxy"))
+	}))
+	defer targetServer.Close()
+
+	var proxiedURL string
+	httpProxy := newHTTPTestProxy(t, func(method, target string) {
+		if method == http.MethodConnect {
+			return
+		}
+		proxiedURL = target
+	})
+	defer httpProxy.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = true
+		cfg.Proxy.UpstreamProxy = httpProxy.URL
+	})
+
+	requestURL := targetServer.URL + "/debian/dists/stable/InRelease"
+	recorder := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestURL, nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Body.String(); got != "apt-via-http-proxy" {
+		t.Fatalf("body = %q", got)
+	}
+	if proxiedURL != requestURL {
+		t.Fatalf("proxied URL = %q want %q", proxiedURL, requestURL)
+	}
+}
+
+func TestAPTAdapterUsesSOCKS5UpstreamProxy(t *testing.T) {
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("apt-via-socks5-proxy"))
+	}))
+	defer targetServer.Close()
+
+	socksProxy := newSOCKS5TestProxy(t)
+	defer socksProxy.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = true
+		cfg.Proxy.UpstreamProxy = "socks5://" + socksProxy.Addr()
+	})
+
+	requestURL := targetServer.URL + "/debian/dists/stable/InRelease"
+	recorder := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestURL, nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusOK)
+	}
+	if got := recorder.Body.String(); got != "apt-via-socks5-proxy" {
+		t.Fatalf("body = %q", got)
+	}
+
+	targetURL, err := url.Parse(targetServer.URL)
+	if err != nil {
+		t.Fatalf("parse target url: %v", err)
+	}
+	if got := socksProxy.WaitForRequest(t); got != targetURL.Host {
+		t.Fatalf("socks target = %q want %q", got, targetURL.Host)
+	}
+}
+
+func TestAPTAdapterHandlesRawAbsoluteFormHTTPRequests(t *testing.T) {
+	var gotPath string
+	targetServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte("apt-raw-http"))
+	}))
+	defer targetServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = true
+	})
+
+	targetURL := targetServer.URL + "/debian/dists/stable/InRelease"
+	status, body := performAbsoluteFormRoundTrip(t, app.pipeline, http.MethodGet, targetURL)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d want %d", status, http.StatusOK)
+	}
+	if body != "apt-raw-http" {
+		t.Fatalf("body = %q", body)
+	}
+	if gotPath != "/debian/dists/stable/InRelease" {
+		t.Fatalf("path = %q", gotPath)
+	}
+}
+
+func TestAPTAdapterHandlesRawAbsoluteFormHTTPSRequests(t *testing.T) {
+	var gotPath string
+	targetServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte("apt-raw-https"))
+	}))
+	defer targetServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = true
+	})
+	setTestHTTPClient(app, "", targetServer.Client())
+
+	targetURL := targetServer.URL + "/debian/dists/stable/InRelease"
+	status, body := performAbsoluteFormRoundTrip(t, app.pipeline, http.MethodGet, targetURL)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d want %d", status, http.StatusOK)
+	}
+	if body != "apt-raw-https" {
+		t.Fatalf("body = %q", body)
+	}
+	if gotPath != "/debian/dists/stable/InRelease" {
+		t.Fatalf("path = %q", gotPath)
+	}
+}
+
 func TestPipelineBypassesNonOKAPKResponses(t *testing.T) {
 	var upstreamHits atomic.Int32
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -858,6 +982,53 @@ func TestProxyAdapterConnectUsesSOCKS5UpstreamProxy(t *testing.T) {
 	}
 }
 
+func TestAppHandlerRoutesConnectRequests(t *testing.T) {
+	target := newTCPEchoServer(t)
+	defer target.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = false
+		cfg.Proxy.Enabled = true
+		cfg.Proxy.AllowConnect = true
+	})
+
+	status, echoed := performConnectRoundTrip(t, app.server.Handler, target.Addr(), "ping-through-app-handler")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d want %d", status, http.StatusOK)
+	}
+	if echoed != "ping-through-app-handler" {
+		t.Fatalf("echoed = %q", echoed)
+	}
+}
+
+func TestAppHandlerRoutesAbsoluteFormHTTPSRequests(t *testing.T) {
+	var gotPath string
+	targetServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte("https-through-app-handler"))
+	}))
+	defer targetServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.APK.Enabled = false
+		cfg.APT.Enabled = true
+	})
+	setTestHTTPClient(app, "", targetServer.Client())
+
+	targetURL := targetServer.URL + "/debian/dists/stable/InRelease"
+	status, body := performAbsoluteFormRoundTrip(t, app.server.Handler, http.MethodGet, targetURL)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d want %d", status, http.StatusOK)
+	}
+	if body != "https-through-app-handler" {
+		t.Fatalf("body = %q", body)
+	}
+	if gotPath != "/debian/dists/stable/InRelease" {
+		t.Fatalf("path = %q", gotPath)
+	}
+}
+
 func TestAPTIndexServiceRejectsInvalidByHashContent(t *testing.T) {
 	root := t.TempDir()
 	cachePath := filepath.Join(root, "apt", "example.com", "debian", "dists", "stable", "by-hash", "SHA256", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -896,6 +1067,12 @@ func mustNewTestApp(t *testing.T, mutate func(*internalconfig.Config)) *App {
 		t.Fatalf("new app: %v", err)
 	}
 	return app
+}
+
+func setTestHTTPClient(app *App, proxyAddr string, client *http.Client) {
+	app.httpClients.mu.Lock()
+	defer app.httpClients.mu.Unlock()
+	app.httpClients.clients[proxyAddr] = client
 }
 
 func performConnectRoundTrip(t *testing.T, handler http.Handler, targetAddr, payload string) (int, string) {
@@ -943,6 +1120,50 @@ func performConnectRoundTrip(t *testing.T, handler http.Handler, targetAddr, pay
 		t.Fatalf("read tunnel payload: %v", err)
 	}
 	return response.StatusCode, string(echoed)
+}
+
+func performAbsoluteFormRoundTrip(t *testing.T, handler http.Handler, method, targetURL string) (int, string) {
+	t.Helper()
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+
+	requestURL, err := url.Parse(targetURL)
+	if err != nil {
+		t.Fatalf("parse target url: %v", err)
+	}
+
+	conn, err := net.Dial("tcp", serverURL.Host)
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", method, targetURL, requestURL.Host); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+
+	reader := bufio.NewReader(conn)
+	request, err := http.NewRequest(method, targetURL, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	response, err := http.ReadResponse(reader, request)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	return response.StatusCode, string(body)
 }
 
 type tcpEchoServer struct {

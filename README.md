@@ -72,7 +72,7 @@ cd apk-cache
 ./apk-cache -config config.toml
 ```
 
-当前版本推荐通过 `config.toml` 管理运行配置。`ProxyAdapter` 的上游代理可在 `[proxy]` 节中通过 `upstream_proxy` 配置，支持 `socks5://`、`http://` 和 `https://`。
+当前版本推荐通过 `config.toml` 管理运行配置。APT 出站请求和 `ProxyAdapter` 的上游代理都可以在 `[proxy]` 节中通过 `upstream_proxy` 配置，支持 `socks5://`、`http://` 和 `https://`。
 
 ## 配置 Alpine Linux 使用缓存服务器
 
@@ -115,6 +115,8 @@ Acquire::HTTPS::Proxy "http://your-cache-server:3142";' > /etc/apt/apt.conf.d/01
 Acquire::HTTP::Proxy "http://your-cache-server:3142";
 Acquire::HTTPS::Proxy "http://your-cache-server:3142";
 ```
+
+如果希望命中 APT 包缓存，建议 `sources.list` 中的源地址使用 `http://`。`https://` 源通常会通过 `CONNECT` 建立隧道，这类流量可以转发，但不会被当前版本解析和缓存。
 
 ## 主要配置参数
 
@@ -210,7 +212,7 @@ cache_non_package_requests = false
 upstream_proxy = "socks5://127.0.0.1:1080"
 ```
 
-- `upstream_proxy`：仅作用于 `ProxyAdapter` 的出站请求和 `CONNECT` 隧道，不影响 `[[upstreams]].proxy` 的 APK 回源配置
+- `upstream_proxy`：作用于 APT 的出站请求，以及 `ProxyAdapter` 的出站请求和 `CONNECT` 隧道；不影响 `[[upstreams]].proxy` 的 APK 回源配置
 - `allowed_hosts`：仍然匹配目标站点 host，而不是上游代理服务器 host
 
 ## Docker Compose 示例

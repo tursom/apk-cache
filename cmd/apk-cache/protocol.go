@@ -325,7 +325,7 @@ func (a *APTAdapter) Fetch(ctx context.Context, app *App, req *NormalizedRequest
 	copyEndToEndHeaders(upstreamReq.Header, req.Request.Header)
 	upstreamReq.Host = req.TargetURL.Host
 	utils.Monitoring.RecordUpstreamRequest()
-	return app.httpClients.Client("").Do(upstreamReq)
+	return app.httpClients.Client(app.cfg.Proxy.UpstreamProxy).Do(upstreamReq)
 }
 
 func (a *ProxyAdapter) Name() string { return "proxy" }
