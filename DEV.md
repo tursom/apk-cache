@@ -11,26 +11,60 @@ APK Cache is a high-performance proxy server for caching Alpine Linux APK packag
 ```
 apk-cache/
 ├── cmd/
-│   ├── apk-cache/           # Main application
-│   │   ├── main.go          # Entry point
-│   │   ├── config.go        # Configuration loading
-│   │   ├── cache.go         # File cache implementation
-│   │   ├── memory_cache.go  # In-memory cache layer
-│   │   ├── handlers.go      # HTTP request handlers
-│   │   ├── admin.go         # Admin dashboard
-│   │   ├── upstream.go      # Upstream server management
-│   │   ├── cleanup.go       # Cache cleanup logic
-│   │   ├── cache_quota.go   # Cache quota management
-│   │   ├── cache_apt.go     # APT proxy support
-│   │   ├── http_proxy.go    # HTTP proxy support
-│   │   └── access_tracker.go # Access tracking
-│   └── apt-hash/            # APT hash tool
-├── build.sh                 # Build script (required)
-├── Dockerfile               # Docker build file
-├── go.mod                   # Go module definition
-├── go.sum                   # Go dependencies
-├── config.example.toml      # Configuration example
-└── cmd/apk-cache/admin.html # Admin dashboard HTML
+│   ├── apk-cache/              # Main application
+│   │   ├── main.go             # Entry point
+│   │   ├── app.go              # App assembly (config, HTTP server, shutdown)
+│   │   ├── pipeline.go         # Unified request pipeline (cache tiering)
+│   │   ├── protocol.go         # ProtocolAdapter interface + APK/APT/Proxy adapters
+│   │   ├── proxy_tunnel.go     # TCP tunnel helpers for CONNECT
+│   │   ├── memory_cache.go     # In-memory LRU cache with TTL
+│   │   ├── apk_index_service.go    # APKINDEX index/validation
+│   │   ├── apk_archive.go      # APK .apk archive reading
+│   │   ├── apk_signature.go    # APK RSA signature verification
+│   │   ├── apt_index_service.go    # APT Release/Packages index/validation
+│   │   ├── admin.html          # Admin dashboard HTML
+│   │   ├── *_test.go           # Tests
+│   │   └── apk_test_helpers_test.go  # Test helper utilities
+│   ├── apt-hash/               # APT hash tool
+│   └── i18n-analyzer/          # i18n coverage analyzer
+├── internal/
+│   ├── config/
+│   │   └── config.go           # TOML config loading + validation
+│   ├── upstream/
+│   │   ├── upstream.go         # Upstream server manager + failover fetcher
+│   │   └── transport.go        # HTTP transport with proxy (SOCKS5/HTTP)
+│   └── policy/
+│       └── policy.go           # Fine-grained cache policies
+├── utils/
+│   ├── monitoring.go           # Prometheus metrics
+│   ├── lockman.go              # In-process file-level lock manager
+│   ├── rate_limiter.go         # Token-bucket rate limiter
+│   ├── ip_utils.go             # IP validation utilities
+│   ├── matcher.go              # Path matching utilities
+│   ├── parse_utils.go          # Path normalization
+│   ├── set.go                  # Set data structure
+│   ├── decompress.go           # Decompression helpers
+│   ├── apt_index.go            # APT index file detection
+│   ├── apt/                    # APT package parsing
+│   │   ├── package.go
+│   │   ├── release.go
+│   │   ├── diff.go
+│   │   └── utils.go
+│   ├── data_integrity/         # File integrity verification
+│   │   ├── manager.go
+│   │   ├── memory.go
+│   │   ├── persistent.go
+│   │   └── apt_manager.go
+│   └── i18n/                   # Internationalization
+│       ├── i18n.go
+│       └── locales/
+├── build.sh                    # Build script (required for admin.html compression)
+├── run_test.sh                 # Integration test script
+├── Dockerfile                  # Docker build
+├── entrypoint.sh               # Docker entrypoint
+├── config.example.toml         # Configuration reference
+├── go.mod                      # Go module
+└── go.sum                      # Go dependencies
 ```
 
 ## Prerequisites
@@ -141,22 +175,30 @@ The script automatically cleans up the test environment (containers, images) aft
 
 ## Key Components
 
+### Protocol Adapter Pipeline
+All incoming requests flow through a unified pipeline that delegates to protocol-specific adapters:
+- **APKAdapter**: Matches APK package/index requests by path pattern. Normalizes to upstream path, handles APKINDEX hash verification and RSA signature validation.
+- **APTAdapter**: Matches APT proxy requests (absolute-form URLs). Handles by-hash verification and Release/Packages index parsing.
+- **ProxyAdapter**: Matches CONNECT tunnels and generic absolute-form HTTP requests. Supports upstream proxy chaining.
+
 ### Cache Architecture (Three-Tier)
-1. **Memory Cache**: LRU cache with TTL support, fastest access
-2. **File Cache**: Persistent disk storage
-3. **Upstream**: Original package sources
+1. **Memory Cache**: LRU cache with TTL, fastest access. Only for package files and APT indexes, not APKINDEX.
+2. **File Cache**: Persistent disk storage with per-file locking via `FileLockManager`.
+3. **Upstream**: Original package sources via `upstream.Manager` with health-based failover.
+
+### Request Pipeline Flow
+1. Match adapter by request pattern
+2. Normalize request to adapter-specific format
+3. Check cache policy → try memory cache → try disk cache (with TTL + validation)
+4. On miss: acquire file lock → double-check caches → fetch from upstream
+5. Stream response to client while writing to temp file
+6. Validate temp file → promote to cache → notify index services
 
 ### Health Check System
-- Periodic checks for upstream servers, filesystem, memory cache, and cache quota
-- Automatic failover to healthy upstreams
-- Self-healing mechanisms for common issues
-
-### Security Features
-- Proxy authentication (SOCKS5/HTTP)
-- Admin dashboard authentication
-- IP whitelisting
-- Reverse proxy support
-- Path security validation
+- Automatic failover between healthy upstream servers
+- Panic recovery in HTTP handler (returns 500, logs stack trace)
+- Request timeout protection (120s default, CONNECT exempt)
+- Graceful shutdown with background goroutine draining
 
 ## Adding New Features
 

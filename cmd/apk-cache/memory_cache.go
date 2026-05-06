@@ -22,6 +22,8 @@ type MemoryCache struct {
 	currentSize int64
 	maxItems    int
 	ttl         time.Duration
+	stopCh      chan struct{}
+	stopOnce    sync.Once
 }
 
 // CacheItem 缓存项
@@ -43,13 +45,12 @@ func NewMemoryCache(maxSize int64, maxItems int, ttl time.Duration) *MemoryCache
 		maxSize:  maxSize,
 		maxItems: maxItems,
 		ttl:      ttl,
+		stopCh:   make(chan struct{}),
 	}
 
-	// 初始化 Prometheus 指标
 	utils.Monitoring.MemCacheSize.WithLabelValues("max").Set(float64(maxSize))
 	utils.Monitoring.UpdateMemoryCacheMetrics(0, 0)
 
-	// 启动定期清理过期项的 goroutine
 	if ttl > 0 {
 		go cache.startCleanup()
 	}
@@ -249,9 +250,20 @@ func (m *MemoryCache) startCleanup() {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		m.cleanupExpired()
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.cleanupExpired()
+		}
 	}
+}
+
+func (m *MemoryCache) Stop() {
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
 }
 
 // cleanupExpired 清理过期项

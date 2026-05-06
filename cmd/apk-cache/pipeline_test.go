@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -1430,4 +1431,135 @@ func mustCachePathForRequest(t *testing.T, app *App, request *http.Request) stri
 		t.Fatalf("cache key: %v", err)
 	}
 	return filepath.Join(app.cfg.Cache.Root, cacheKey)
+}
+
+func TestPanicRecovery(t *testing.T) {
+	app := mustNewTestApp(t, nil)
+
+	req := &http.Request{
+		Method: "GET",
+		URL:    nil,
+		Host:   "cache.local",
+	}
+
+	rec := httptest.NewRecorder()
+	app.server.Handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 Internal Server Error from panic recovery, got %d", rec.Code)
+	}
+}
+
+func TestMemoryCacheStopClosesCleanupGoroutine(t *testing.T) {
+	cache := NewMemoryCache(1<<20, 100, 1*time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		cache.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for MemoryCache.Stop() to return")
+	}
+
+	cache.Stop()
+}
+
+func TestSmoke(t *testing.T) {
+	// ── Setup: an upstream that counts hits and returns distinguishable bodies ──
+	var upstreamHits atomic.Int32
+
+	// Build a minimal valid gzip archive for the APKINDEX body so that
+	// CommitStored can parse it without error. Signature validation is
+	// disabled in the test config.
+	indexBody := buildSignedArchive(t, "ignored", nil, "DESCRIPTION", []byte(""), true, false)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits.Add(1)
+		switch {
+		case strings.HasSuffix(r.URL.Path, ".apk"):
+			_, _ = w.Write([]byte("apk-body-" + filepath.Base(r.URL.Path)))
+		case strings.Contains(r.URL.Path, "APKINDEX"):
+			_, _ = w.Write(indexBody)
+		case strings.Contains(r.URL.Path, "InRelease"):
+			_, _ = w.Write([]byte("apt-release-body"))
+		case r.URL.Path == "/plain.txt":
+			_, _ = w.Write([]byte("plain-body"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstream.URL, Kind: "apk"}}
+		cfg.Cache.Memory.Enabled = false
+	})
+	setTestHTTPClient(app, "", upstream.Client())
+
+	// ── 1. APK package: MISS → HIT ──
+	pkgURL := "http://cache.local/alpine/v3.20/main/x86_64/test.apk"
+	pkgReq := httptest.NewRequest(http.MethodGet, pkgURL, nil)
+
+	r1 := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(r1, pkgReq)
+	if r1.Code != http.StatusOK || r1.Body.String() != "apk-body-test.apk" {
+		t.Fatalf("APK miss: status=%d body=%q", r1.Code, r1.Body.String())
+	}
+	if got := r1.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("APK first X-Cache = %q", got)
+	}
+
+	r2 := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(r2, httptest.NewRequest(http.MethodGet, pkgURL, nil))
+	if r2.Code != http.StatusOK || r2.Body.String() != "apk-body-test.apk" {
+		t.Fatalf("APK hit: status=%d body=%q", r2.Code, r2.Body.String())
+	}
+	if got := r2.Header().Get("X-Cache"); got != "HIT" {
+		t.Fatalf("APK second X-Cache = %q", got)
+	}
+
+	// ── 2. APK index: MISS → HIT ──
+	idxURL := "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz"
+	idxReq := httptest.NewRequest(http.MethodGet, idxURL, nil)
+
+	r3 := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(r3, idxReq)
+	if r3.Code != http.StatusOK || !bytes.Equal(r3.Body.Bytes(), indexBody) {
+		t.Fatalf("index miss: status=%d body-len=%d expected-len=%d", r3.Code, r3.Body.Len(), len(indexBody))
+	}
+
+	r4 := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(r4, httptest.NewRequest(http.MethodGet, idxURL, nil))
+	if r4.Code != http.StatusOK || !bytes.Equal(r4.Body.Bytes(), indexBody) {
+		t.Fatalf("index hit: status=%d body-len=%d expected-len=%d", r4.Code, r4.Body.Len(), len(indexBody))
+	}
+	if got := r4.Header().Get("X-Cache"); got != "HIT" {
+		t.Fatalf("index second X-Cache = %q", got)
+	}
+
+	// ── 3. Proxy adapter forwards absolute-URL request ──
+	proxyReq := httptest.NewRequest(http.MethodGet, upstream.URL+"/plain.txt", nil)
+	r5 := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(r5, proxyReq)
+	if r5.Code != http.StatusOK || r5.Body.String() != "plain-body" {
+		t.Fatalf("proxy forward: status=%d body=%q", r5.Code, r5.Body.String())
+	}
+
+	// ── 4. Health endpoint via app handler ──
+	healthReq := httptest.NewRequest(http.MethodGet, "http://cache.local/_health", nil)
+	r6 := httptest.NewRecorder()
+	app.server.Handler.ServeHTTP(r6, healthReq)
+	if r6.Code != http.StatusOK {
+		t.Fatalf("health: status=%d", r6.Code)
+	}
+	if !strings.Contains(r6.Body.String(), `"status"`) {
+		t.Fatalf("health: body not JSON = %q", r6.Body.String())
+	}
+	if upstreamHits.Load() < 3 {
+		t.Fatalf("upstream hits = %d, expected >= 3 (apk, index, proxy)", upstreamHits.Load())
+	}
 }

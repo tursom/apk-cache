@@ -225,10 +225,15 @@ func (a *APKAdapter) CommitStored(_ context.Context, app *App, req *NormalizedRe
 	return nil
 }
 
-// APK 请求通过 apkFetcher 使用配置中的 APK upstream 与 failover 逻辑。
+// Fetch forwards APK requests through the configured upstreams and failover
+// logic. The caller's context is applied to the upstream request so that
+// cancellations propagate correctly.
 func (a *APKAdapter) Fetch(ctx context.Context, app *App, req *NormalizedRequest) (*http.Response, error) {
 	return app.apkFetcher.Fetch(req.UpstreamPath, func(upstreamReq *http.Request) {
-		upstreamReq = upstreamReq.WithContext(ctx)
+		// Replace the request in-place with a copy that carries the caller's
+		// context. Simple parameter assignment would shadow the outer pointer
+		// and leave the original request unchanged.
+		*upstreamReq = *upstreamReq.WithContext(ctx)
 		copyEndToEndHeaders(upstreamReq.Header, req.Request.Header)
 	})
 }
@@ -307,7 +312,9 @@ func (a *APTAdapter) CommitStored(_ context.Context, app *App, req *NormalizedRe
 		return nil
 	}
 	if a.cfg.LoadIndexAsync {
+		app.bgWg.Add(1)
 		go func() {
+			defer app.bgWg.Done()
 			if err := app.aptIndex.LoadFile(cachePath); err != nil {
 				log.Printf("load apt index %s: %v", cachePath, err)
 			}

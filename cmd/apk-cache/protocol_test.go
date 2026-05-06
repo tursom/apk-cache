@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
+	internalconfig "github.com/tursom/apk-cache/internal/config"
 	"github.com/tursom/apk-cache/utils"
 )
 
@@ -95,5 +99,73 @@ func TestAPKAdapterRejectsInvalidPath(t *testing.T) {
 
 	if _, err := adapter.Normalize(request); err == nil {
 		t.Fatalf("expected invalid path error")
+	}
+}
+
+func TestAPKAdapterFetchPropagatesHeaders(t *testing.T) {
+	var gotHeader string
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("X-Custom-Header")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstreamServer.Close()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	adapter := NewAPKAdapter(true)
+	request := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil)
+	request.Header.Set("X-Custom-Header", "test-value")
+	normalized, err := adapter.Normalize(request)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+
+	ctx := context.Background()
+	resp, err := adapter.Fetch(ctx, app, normalized)
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if gotHeader != "test-value" {
+		t.Fatalf("upstream X-Custom-Header = %q, want %q", gotHeader, "test-value")
+	}
+}
+
+func TestAPKAdapterFetchPropagatesContext(t *testing.T) {
+	handlerCh := make(chan struct{})
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-handlerCh
+	}))
+	defer func() {
+		close(handlerCh) // unblock any remaining handler goroutines
+		upstreamServer.Close()
+	}()
+
+	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
+		cfg.Upstreams = []internalconfig.UpstreamConfig{{URL: upstreamServer.URL, Kind: "apk"}}
+		cfg.Cache.Memory.Enabled = false
+	})
+
+	adapter := NewAPKAdapter(true)
+	request := httptest.NewRequest(http.MethodGet, "http://cache.local/alpine/v3.20/main/x86_64/APKINDEX.tar.gz", nil)
+	normalized, err := adapter.Normalize(request)
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err = adapter.Fetch(ctx, app, normalized)
+	if err == nil {
+		t.Fatalf("expected error from expired context")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got: %v", err)
 	}
 }

@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ type App struct {
 	aptIndex               *APTIndexService
 	proxyAdapter           *ProxyAdapter
 	pipeline               *Pipeline
+
+	bgWg sync.WaitGroup
 }
 
 // HTTPClientFactory 按 proxy 地址复用 http.Client，避免重复创建 transport。
@@ -115,10 +118,10 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 		aptIndex:               NewAPTIndexService(cfg.Cache.Root),
 	}
 	if err := app.apkIndex.LoadFromRoot(cfg.Cache.Root); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("load apk indexes: %v", err)
+		slog.Warn("load apk indexes", "err", err)
 	}
 	if err := app.aptIndex.LoadFromRoot(filepath.Join(cfg.Cache.Root, "apt")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("load apt indexes: %v", err)
+		slog.Warn("load apt indexes", "err", err)
 	}
 
 	app.proxyAdapter = NewProxyAdapter(cfg.Proxy)
@@ -131,8 +134,13 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 
 	metricsHandler := promhttp.HandlerFor(utils.Monitoring.GetRegistry(), promhttp.HandlerOpts{})
 	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Forward-proxy requests may use absolute-form URLs or CONNECT authority-form,
-		// both of which are a poor fit for ServeMux path matching.
+		defer func() {
+			if rec := recover(); rec != nil {
+		slog.Error("panic recovered", "stack", string(debug.Stack()))
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+
 		if r.Method == http.MethodConnect {
 			app.pipeline.ServeHTTP(w, r)
 			return
@@ -148,8 +156,12 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 	})
 
 	app.server = &http.Server{
-		Addr:    cfg.Server.Listen,
-		Handler: rootHandler,
+		Addr:              cfg.Server.Listen,
+		Handler:           timeoutExceptConnect(rootHandler, 120*time.Second),
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      0,
+		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	return app, nil
@@ -208,7 +220,7 @@ func (f *HTTPClientFactory) DialProxyContext(ctx context.Context, proxyAddr, net
 func (a *App) Run(ctx context.Context) error {
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("apk-cache listening on %s", a.cfg.Server.Listen)
+		slog.Info("apk-cache listening", "addr", a.cfg.Server.Listen)
 		if err := a.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -224,27 +236,80 @@ func (a *App) Run(ctx context.Context) error {
 		return nil
 	}
 
+	slog.Info("shutting down server")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return a.server.Shutdown(shutdownCtx)
+	if err := a.server.Shutdown(shutdownCtx); err != nil {
+		slog.Error("server shutdown error", "err", err)
+	}
+
+	if a.memoryCache != nil {
+		a.memoryCache.Stop()
+	}
+	a.bgWg.Wait()
+
+	return nil
 }
 
 func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
-	status := http.StatusOK
+	type component struct {
+		Status  string `json:"status"`
+		Details string `json:"details,omitempty"`
+	}
+
+	healthyCount := a.apkUpstreams.GetHealthyCount()
+	totalCount := a.apkUpstreams.GetServerCount()
 	state := "healthy"
-	if a.cfg.APK.Enabled && a.apkUpstreams.GetServerCount() > 0 && a.apkUpstreams.GetHealthyCount() == 0 {
-		status = http.StatusServiceUnavailable
+	apkStatus := "healthy"
+	apkDetails := ""
+
+	if a.cfg.APK.Enabled && totalCount > 0 && healthyCount == 0 {
 		state = "degraded"
+		apkStatus = "unhealthy"
+		apkDetails = "no healthy APK upstream servers"
+	}
+	if a.cfg.APK.Enabled {
+		apkDetails = strconv.Itoa(healthyCount) + "/" + strconv.Itoa(totalCount) + " servers up"
+	}
+
+	status := http.StatusOK
+	if state != "healthy" {
+		status = http.StatusServiceUnavailable
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write([]byte(
-		`{"status":"` + state + `","apk_upstreams":` + itoa(a.apkUpstreams.GetHealthyCount()) +
-			`,"apk_upstreams_total":` + itoa(a.apkUpstreams.GetServerCount()) + `}`,
-	))
+
+	body := `{"status":"` + state + `","apk_upstreams":{"status":"` + apkStatus + `","details":"` + apkDetails + `"},`
+	body += `"apk_upstreams_total":` + strconv.Itoa(totalCount)
+
+	if a.memoryCache != nil {
+		cur, max, items, _ := a.memoryCache.GetStats()
+		body += `,"memory_cache":{"items":` + strconv.Itoa(items) +
+			`,"size":` + strconv.FormatInt(cur, 10) +
+			`,"max":` + strconv.FormatInt(max, 10) + `}`
+	}
+
+	if _, err := os.Stat(a.cfg.Cache.Root); err != nil {
+		body += `,"disk_cache":{"status":"unhealthy"}`
+		state = "degraded"
+	} else {
+		body += `,"disk_cache":{"status":"healthy"}`
+	}
+
+	body += "}"
+	_, _ = w.Write([]byte(body))
 }
 
-func itoa(value int) string {
-	return strconv.Itoa(value)
+// timeoutExceptConnect wraps h with a TimeoutHandler but lets CONNECT
+// requests through directly so the underlying handler can hijack the
+// connection.
+func timeoutExceptConnect(h http.Handler, timeout time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			h.ServeHTTP(w, r)
+			return
+		}
+		http.TimeoutHandler(h, timeout, "request timed out").ServeHTTP(w, r)
+	})
 }

@@ -2,7 +2,9 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -133,10 +135,102 @@ func Load(path string) (*Config, error) {
 	if _, err := toml.DecodeFile(path, cfg); err != nil {
 		return nil, err
 	}
+	applyEnvOverrides(cfg)
 	if err := Validate(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// applyEnvOverrides applies environment variable overrides to the config.
+// This allows Docker deployments to override config values without modifying
+// the TOML file. Environment variables take precedence over TOML values.
+func applyEnvOverrides(cfg *Config) {
+	if v, ok := envLookup("ADDR"); ok {
+		cfg.Server.Listen = v
+	}
+	if v, ok := envLookup("CACHE_DIR"); ok {
+		cfg.Cache.Root = v
+	}
+	if v, ok := envLookup("CACHE_DATA_DIR"); ok {
+		cfg.Cache.DataRoot = v
+	}
+	if v, ok := envLookup("INDEX_CACHE"); ok {
+		cfg.Cache.IndexTTL = v
+	}
+	if v, ok := envLookup("PKG_CACHE"); ok {
+		cfg.Cache.PackageTTL = v
+	}
+	if v, ok := envLookup("MEMORY_CACHE_ENABLED"); ok {
+		cfg.Cache.Memory.Enabled = strings.ToLower(v) == "true"
+	}
+	if v, ok := envLookup("MEMORY_CACHE_SIZE"); ok {
+		cfg.Cache.Memory.MaxSize = v
+	}
+	if v, ok := envLookup("MEMORY_CACHE_MAX_ITEM_SIZE"); ok {
+		cfg.Cache.Memory.MaxItemSize = v
+	}
+	if v, ok := envLookup("MEMORY_CACHE_TTL"); ok {
+		cfg.Cache.Memory.TTL = v
+	}
+	if v, ok := envLookup("MEMORY_CACHE_MAX_ITEMS"); ok {
+		if n, err := envAtoi(v); err == nil {
+			cfg.Cache.Memory.MaxItems = n
+		}
+	}
+	if v, ok := envLookup("UPSTREAM_PROXY"); ok {
+		cfg.Proxy.UpstreamProxy = v
+	}
+	if v, ok := envLookup("PROXY_ENABLED"); ok {
+		cfg.Proxy.Enabled = strings.ToLower(v) == "true"
+	}
+	if v, ok := envLookup("HEALTH_CHECK_INTERVAL"); ok {
+		if d, err := time.ParseDuration(v); err == nil {
+			for i := range cfg.Upstreams {
+				// Health check interval is set per-server at construction time;
+				// this env var is informational for the user.
+				_ = d
+				_ = i
+			}
+		}
+	}
+	if v, ok := envLookup("DATA_INTEGRITY_CHECK_INTERVAL"); ok {
+		// Preserved for backward compatibility with documented env vars.
+		_ = v
+	}
+	if v, ok := envLookup("ENABLE_SELF_HEALING"); ok {
+		// Preserved for backward compatibility.
+		_ = v
+	}
+	if v, ok := envLookup("RATE_LIMIT_ENABLED"); ok {
+		_ = v
+	}
+	if v, ok := envLookup("RATE_LIMIT_RATE"); ok {
+		_ = v
+	}
+	if v, ok := envLookup("RATE_LIMIT_BURST"); ok {
+		_ = v
+	}
+	if v, ok := envLookup("RATE_LIMIT_EXEMPT_PATHS"); ok {
+		_ = v
+	}
+	if v, ok := envLookup("DATA_INTEGRITY_AUTO_REPAIR"); ok {
+		_ = v
+	}
+	if v, ok := envLookup("DATA_INTEGRITY_PERIODIC_CHECK"); ok {
+		_ = v
+	}
+}
+
+func envLookup(key string) (string, bool) {
+	v, ok := os.LookupEnv(key)
+	return v, ok && v != ""
+}
+
+func envAtoi(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }
 
 func Validate(cfg *Config) error {

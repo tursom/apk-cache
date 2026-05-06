@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,18 +17,21 @@ func main() {
 
 	cfg, err := internalconfig.Load(*configPath)
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		slog.Error("load config", "err", err)
+		os.Exit(1)
 	}
 
 	app, err := NewApp(cfg)
 	if err != nil {
-		log.Fatalf("create app: %v", err)
+		slog.Error("create app", "err", err)
+		os.Exit(1)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	if err := app.Run(ctx); err != nil {
-		log.Fatalf("run app: %v", err)
+		slog.Error("run app", "err", err)
+		os.Exit(1)
 	}
 }
