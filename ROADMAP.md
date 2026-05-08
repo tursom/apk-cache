@@ -62,20 +62,13 @@
   - `rate-limit-burst`: 限流突发容量
   - `rate-limit-exempt-paths`: 豁免限流的路径
 
-### v1.3 - 安全增强版本 ✅
+### v1.3 - 安全增强版本 ⚠️ 已裁剪
 
-#### 数据完整性校验
-- **实现**: 完整的文件完整性验证和自动修复系统 (`utils/data_integrity/`)
-- **特性**:
-  - SHA-256 文件校验和验证
-  - 损坏文件自动检测和修复
-  - 定期完整性检查
-  - 配置化的检查间隔和修复策略
-  - BoltDB 持久化存储校验和 (`utils/data_integrity/persistent.go`)
-- **配置选项**:
-  - `data-integrity-check-interval`: 完整性检查间隔
-  - `data-integrity-auto-repair`: 启用自动修复
-  - `data-integrity-periodic-check`: 启用定期检查
+> **注意**: 原有的 `utils/data_integrity/` 子系统（SHA-256 文件校验、BoltDB 持久化、自动修复）在统一流水线重构中已被移除，原因如下：
+> - 该子系统从未被主应用程序导入或实例化（死代码）
+> - APK 包的 hash 校验由 `APKIndexService` + `APKVerifier` 实现
+> - APT 包的 hash 校验由 `APTIndexService` 实现
+> - 运行时数据完整性通过应用层的 `ValidateCached`/`ValidateFetched` 协议适配器方法保障
 
 ### v1.4 - 功能扩展版本 ✅
 
@@ -115,7 +108,7 @@
   - 磁盘空间监控
 
 #### 现代化管理界面
-- **实现**: 基于 Web 的管理仪表板 (`cmd/apk-cache/admin.go`)
+- **实现**: 基于 Web 的管理仪表板（统一流水线重构后已移除，`/_health` 和 Prometheus 指标替代）
 - **特性**:
   - 实时统计信息
   - 缓存管理功能
@@ -133,7 +126,7 @@
   - 手动缓存预热接口
   - 常用包自动预加载
 - **预期效果**: 提升用户体验
-- **状态**: 已有访问跟踪基础设施 (`cmd/apk-cache/access_tracker.go`)
+- **状态**: 已有访问跟踪基础设施
 
 #### 2. 更细粒度的缓存策略 ✅ 已完成
 - **目标**: 差异化缓存管理
@@ -144,7 +137,7 @@
   - 自适应策略（综合多种策略）
   - 索引文件保持固定短TTL
 - **预期效果**: 优化缓存效率
-- **状态**: 已完成 (`cmd/apk-cache/cache_policy.go`)
+- **状态**: 已完成 (`internal/policy/policy.go`)
 
 #### 3. 并发下载优化
 - **目标**: 提高下载效率
@@ -153,7 +146,7 @@
   - 并发下载控制
   - 下载优先级调度
 - **预期效果**: 减少重复下载
-- **状态**: Singleflight 已实现 (`cmd/apk-cache/upstream.go`)
+- **状态**: Singleflight 已实现 (`internal/upstream/upstream.go`)
 
 ### v1.6 - 配置和运维增强
 
@@ -176,8 +169,8 @@
 #### 6. 完整的 LFU 策略实现
 - **目标**: 实现真正的 LFU 缓存清理策略
 - **实现**:
-  - 在 `cmd/apk-cache/access_tracker.go` 中添加访问计数
-  - 完善 `getLFUFiles()` 方法 (`cmd/apk-cache/cache_quota.go:265`)
+  - 在 `cmd/apk-cache/memory_cache.go` 中添加访问计数（现有 AccessCount 字段）
+  - 完善 LFU 文件选择逻辑
   - 添加访问频率统计和持久化
 - **预期效果**: 更智能的缓存管理
 - **状态**: 当前使用 LRU 策略作为简化实现
@@ -197,25 +190,27 @@
 - **预期效果**: 更好的运维可见性
 - **状态**: 已有基础 Prometheus 指标 (`utils/monitoring.go`)
 
-#### 8. 结构化日志
+#### 8. 结构化日志 ✅ 已完成
 - **目标**: 改进日志可读性和分析能力
 - **实现**:
-  - 支持 JSON 格式日志输出
-  - 添加日志级别配置
-  - 统一日志字段格式
+  - 统一使用 `log/slog` 结构化日志
+  - 键值对格式，支持自动 JSON 输出
+  - 所有 handler 日志已完成迁移（`log` → `slog`）
+  - 废弃的 i18n 日志键已移除
 - **预期效果**: 便于日志分析和监控
-- **状态**: 使用标准 log 包，可扩展
+- **状态**: 已完成，生产代码已全面切换至 `log/slog`
 
 ### v1.8 - 安全增强版本
 
-#### 9. 更安全的文件路径处理
+#### 9. 更安全的文件路径处理 ✅ 已完成
 - **目标**: 防止路径遍历攻击
 - **实现**:
-  - 加强路径规范化检查
-  - 添加路径白名单验证
-  - 实现符号链接防护
+  - `safeJoinPath` 在 `filepath.Clean` 前检查 `..`，防止路径遍历
+  - GOPATH 缓存键模式中，APT/Proxy 适配器均使用 `safeJoinPath`
+  - CONNECT 隧道 `r.Host` 输入经过 CRLF 消毒
+  - APK archive 解压设置 256MB 成员大小限制，防止 zip bomb
 - **预期效果**: 提高安全性
-- **状态**: 已有基础路径验证
+- **状态**: 已完成，所有用户输入路径经过 `safeJoinPath` 和 CRLF 消毒
 
 #### 10. 访问控制增强
 - **目标**: 提供更细粒度的访问控制
@@ -244,7 +239,7 @@
   - CentOS/RHEL YUM 支持
   - 通用包缓存协议
 - **预期效果**: 扩大应用范围
-- **注意**: APT 支持已在 v1.4 中实现 (`cmd/apk-cache/cache_apt.go`)
+- **注意**: APT 支持已在 v1.4 中实现（`protocol.go` 中 `APTAdapter`，`apt_index_service.go` 中 `APTIndexService`）
 
 ## 代码质量改进
 

@@ -40,21 +40,15 @@ apk-cache/
 │   ├── lockman.go              # In-process file-level lock manager
 │   ├── rate_limiter.go         # Token-bucket rate limiter
 │   ├── ip_utils.go             # IP validation utilities
-│   ├── matcher.go              # Path matching utilities
+│   ├── matcher.go              # Path matching utilities (path type detection)
 │   ├── parse_utils.go          # Path normalization
 │   ├── set.go                  # Set data structure
 │   ├── decompress.go           # Decompression helpers
-│   ├── apt_index.go            # APT index file detection
 │   ├── apt/                    # APT package parsing
 │   │   ├── package.go
 │   │   ├── release.go
 │   │   ├── diff.go
 │   │   └── utils.go
-│   ├── data_integrity/         # File integrity verification
-│   │   ├── manager.go
-│   │   ├── memory.go
-│   │   ├── persistent.go
-│   │   └── apt_manager.go
 │   └── i18n/                   # Internationalization
 │       ├── i18n.go
 │       └── locales/
@@ -160,13 +154,16 @@ The script automatically cleans up the test environment (containers, images) aft
 - Use `errors.New()` for static error messages
 
 ### Logging
-- Use structured logging with appropriate levels
-- Include context in log messages
+- Use `log/slog` for all logging (structured key-value pairs: `slog.Info("msg", "key", value)`)
+- Never use `log.Println` / `log.Printf` / `fmt.Print` for logging
+- Use appropriate levels: `Debug` (diagnostics), `Warn` (recoverable issues), `Error` (failures)
+- Do not expose internal paths or config values in error messages sent to clients
 
 ### Internationalization (i18n)
-- All user-facing strings must use the i18n system via `i18n.T()`
-- Never hardcode visible strings - use translation keys
-- Provide translation keys in `utils/i18n/` directory
+- Only user-facing strings (HTTP error bodies, CLI output) use `i18n.T()`
+- Internal logging and diagnostic messages use `slog`, not i18n
+- Provide translation keys in `utils/i18n/locales/`
+- Remove stale translation keys when the corresponding code path is migrated away from i18n
 
 ### Configuration
 - All configuration options must have CLI flags

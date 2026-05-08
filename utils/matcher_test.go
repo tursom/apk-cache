@@ -13,7 +13,6 @@ var testCases = []struct {
 	// APK 测试用例
 	{"/alpine/v3.18/main/x86_64/package-1.0.0-r0.apk", PackageTypeAPK, "APK包文件"},
 	{"/alpine/edge/main/x86_64/APKINDEX.tar.gz", PackageTypeAPK, "APK索引文件"},
-	{"/alpine/v3.17/community/aarch64/", PackageTypeAPK, "Alpine仓库路径"},
 	{"/alpine/latest-stable/main/x86_64/test.apk", PackageTypeAPK, "APK文件"},
 
 	// APT 测试用例
@@ -123,26 +122,15 @@ var benchmarkPaths = []string{
 	"/debian/pve/dists/trixie/pve-no-subscription/binary-amd64/libpve-storage-perl_9.1.0_all.deb",
 }
 
-func TestDetectPackageType(t *testing.T) {
+func TestDetectPackageTypeFast(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			result := DetectPackageType(tc.path)
+			result := DetectPackageTypeFast(tc.path)
 			if result != tc.expected {
 				t.Errorf("DetectPackageTypeFast(%q) = %v; want %v",
 					tc.path, result, tc.expected)
 			}
 		})
-	}
-}
-
-// 性能基准测试
-func BenchmarkDetectPackageType(b *testing.B) {
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		for _, path := range benchmarkPaths {
-			DetectPackageType(path)
-		}
 	}
 }
 

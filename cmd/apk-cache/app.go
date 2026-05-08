@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -17,6 +18,16 @@ import (
 	internalconfig "github.com/tursom/apk-cache/internal/config"
 	"github.com/tursom/apk-cache/internal/upstream"
 	"github.com/tursom/apk-cache/utils"
+)
+
+const (
+	routeHealth  = "/_health"
+	routeMetrics = "/metrics"
+
+	cacheHit       = "HIT"
+	cacheMiss      = "MISS"
+	cacheBypass    = "BYPASS"
+	cacheMemoryHit = "MEMORY-HIT"
 )
 
 type App struct {
@@ -36,7 +47,8 @@ type App struct {
 	proxyAdapter           *ProxyAdapter
 	pipeline               *Pipeline
 
-	bgWg sync.WaitGroup
+	bgWg       sync.WaitGroup
+	connectSem chan struct{}
 }
 
 // HTTPClientFactory 按 proxy 地址复用 http.Client，避免重复创建 transport。
@@ -116,6 +128,7 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 		apkIndex:               NewAPKIndexService(cfg.Cache.Root),
 		apkVerifier:            apkVerifier,
 		aptIndex:               NewAPTIndexService(cfg.Cache.Root),
+		connectSem:             make(chan struct{}, 500),
 	}
 	if err := app.apkIndex.LoadFromRoot(cfg.Cache.Root); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Warn("load apk indexes", "err", err)
@@ -136,8 +149,8 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 	rootHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-		slog.Error("panic recovered", "stack", string(debug.Stack()))
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				slog.Error("panic recovered", "panic", rec, "stack", string(debug.Stack()))
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			}
 		}()
 
@@ -146,9 +159,9 @@ func NewApp(cfg *internalconfig.Config) (*App, error) {
 			return
 		}
 		switch r.URL.Path {
-		case "/_health":
+		case routeHealth:
 			app.handleHealth(w, r)
-		case "/metrics":
+		case routeMetrics:
 			metricsHandler.ServeHTTP(w, r)
 		default:
 			app.pipeline.ServeHTTP(w, r)
@@ -251,54 +264,63 @@ func (a *App) Run(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
-	type component struct {
-		Status  string `json:"status"`
-		Details string `json:"details,omitempty"`
-	}
-
+func (a *App) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	healthyCount := a.apkUpstreams.GetHealthyCount()
 	totalCount := a.apkUpstreams.GetServerCount()
-	state := "healthy"
-	apkStatus := "healthy"
-	apkDetails := ""
 
-	if a.cfg.APK.Enabled && totalCount > 0 && healthyCount == 0 {
-		state = "degraded"
-		apkStatus = "unhealthy"
-		apkDetails = "no healthy APK upstream servers"
+	resp := map[string]interface{}{
+		"apk_upstreams_total": totalCount,
 	}
+
 	if a.cfg.APK.Enabled {
-		apkDetails = strconv.Itoa(healthyCount) + "/" + strconv.Itoa(totalCount) + " servers up"
+		apkStatus := "healthy"
+		apkDetails := strconv.Itoa(healthyCount) + "/" + strconv.Itoa(totalCount) + " servers up"
+		if totalCount > 0 && healthyCount == 0 {
+			apkStatus = "unhealthy"
+			apkDetails = "no healthy APK upstream servers"
+		}
+		resp["apk_upstreams"] = map[string]string{
+			"status":  apkStatus,
+			"details": apkDetails,
+		}
 	}
-
-	status := http.StatusOK
-	if state != "healthy" {
-		status = http.StatusServiceUnavailable
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-
-	body := `{"status":"` + state + `","apk_upstreams":{"status":"` + apkStatus + `","details":"` + apkDetails + `"},`
-	body += `"apk_upstreams_total":` + strconv.Itoa(totalCount)
 
 	if a.memoryCache != nil {
 		cur, max, items, _ := a.memoryCache.GetStats()
-		body += `,"memory_cache":{"items":` + strconv.Itoa(items) +
-			`,"size":` + strconv.FormatInt(cur, 10) +
-			`,"max":` + strconv.FormatInt(max, 10) + `}`
+		resp["memory_cache"] = map[string]interface{}{
+			"items": items,
+			"size":  cur,
+			"max":   max,
+		}
 	}
 
+	diskStatus := "healthy"
 	if _, err := os.Stat(a.cfg.Cache.Root); err != nil {
-		body += `,"disk_cache":{"status":"unhealthy"}`
-		state = "degraded"
-	} else {
-		body += `,"disk_cache":{"status":"healthy"}`
+		diskStatus = "unhealthy"
+	}
+	resp["disk_cache"] = map[string]string{
+		"status": diskStatus,
 	}
 
-	body += "}"
-	_, _ = w.Write([]byte(body))
+	state := "healthy"
+	if a.cfg.APK.Enabled && totalCount > 0 && healthyCount == 0 {
+		state = "degraded"
+	}
+	if diskStatus == "unhealthy" {
+		state = "degraded"
+	}
+	resp["status"] = state
+
+	statusCode := http.StatusOK
+	if state != "healthy" {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		slog.Error("health encode", "err", err)
+	}
 }
 
 // timeoutExceptConnect wraps h with a TimeoutHandler but lets CONNECT

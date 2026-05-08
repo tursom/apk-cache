@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -80,7 +80,7 @@ func (p *Pipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer resp.Body.Close()
-		p.writeResponse(w, resp, "BYPASS")
+		p.writeResponse(w, resp, cacheBypass)
 		return
 	}
 
@@ -116,12 +116,12 @@ func (p *Pipeline) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		p.writeResponse(w, resp, "BYPASS")
+		p.writeResponse(w, resp, cacheBypass)
 		return
 	}
 
 	if err := p.fetchAndStore(r.Context(), w, resp, adapter, req, decision, cachePath); err != nil {
-		log.Printf("fetch and store %s: %v", cachePath, err)
+		slog.Warn("fetch and store", "cachePath", cachePath, "err", err)
 		writePipelineError(w, err)
 	}
 }
@@ -173,7 +173,7 @@ func (p *Pipeline) tryServeFromDisk(w http.ResponseWriter, r *http.Request, adap
 	}
 	defer file.Close()
 
-	w.Header().Set("X-Cache", "HIT")
+	w.Header().Set("X-Cache", cacheHit)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	http.ServeContent(w, r, filepath.Base(cachePath), info.ModTime(), file)
 	utils.Monitoring.RecordCacheHit(info.Size())
@@ -186,6 +186,8 @@ func (p *Pipeline) tryServeFromDisk(w http.ResponseWriter, r *http.Request, adap
 				"Content-Length": {strconv.FormatInt(info.Size(), 10)},
 			}
 			p.app.memoryCache.CacheToMemory(cachePath, data, headers, http.StatusOK, info.ModTime())
+		} else {
+			slog.Debug("read file for memory cache", "path", cachePath, "err", err)
 		}
 	}
 
@@ -205,13 +207,16 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		return err
 	}
 	tmpName := tmpFile.Name()
+	tmpClosed := false
 	defer func() {
-		tmpFile.Close()
+		if !tmpClosed {
+			tmpFile.Close()
+		}
 		_ = os.Remove(tmpName)
 	}()
 
 	copyEndToEndHeaders(w.Header(), resp.Header)
-	w.Header().Set("X-Cache", "MISS")
+	w.Header().Set("X-Cache", cacheMiss)
 	w.WriteHeader(resp.StatusCode)
 
 	var flush func()
@@ -224,6 +229,7 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 		if p.app.memoryCache != nil {
 			p.app.memoryCache.Delete(cachePath)
 		}
+		slog.Warn("response stream truncated", "cachePath", cachePath, "err", readErr)
 		return nil
 	}
 
@@ -236,6 +242,7 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 	if err := tmpFile.Close(); err != nil {
 		cacheReady = false
 	}
+	tmpClosed = true
 	if !cacheReady {
 		if p.app.memoryCache != nil {
 			p.app.memoryCache.Delete(cachePath)
@@ -284,6 +291,8 @@ func (p *Pipeline) fetchAndStore(ctx context.Context, w http.ResponseWriter, res
 			headers := cloneHeaders(resp.Header)
 			headers.Set("Content-Length", strconv.Itoa(len(data)))
 			p.app.memoryCache.CacheToMemory(cachePath, data, headers, resp.StatusCode, info.ModTime())
+		} else {
+			slog.Debug("read file for memory cache", "path", cachePath, "err", readErr)
 		}
 	}
 
@@ -360,14 +369,18 @@ func cloneHeaders(source http.Header) http.Header {
 	return cloned
 }
 
-// 把内部错误映射到更合适的外部 HTTP 状态码。
+// writePipelineError maps internal errors to safe external HTTP status codes
+// and logs the full error server-side to avoid leaking internal details.
 func writePipelineError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrProxyDisabled):
-		http.Error(w, err.Error(), http.StatusForbidden)
+		slog.Debug("request error", "err", err)
+		http.Error(w, "proxy is not configured", http.StatusServiceUnavailable)
 	case errors.Is(err, ErrConnectNotAllowed):
-		http.Error(w, err.Error(), http.StatusMethodNotAllowed)
+		slog.Debug("request error", "err", err)
+		http.Error(w, "connect method is not allowed", http.StatusForbidden)
 	default:
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		slog.Debug("request error", "err", err)
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
 	}
 }

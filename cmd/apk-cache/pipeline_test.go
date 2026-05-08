@@ -891,7 +891,7 @@ func TestProxyAdapterUsesSOCKS5UpstreamProxy(t *testing.T) {
 	}
 }
 
-func TestProxyDisabledReturnsForbidden(t *testing.T) {
+func TestProxyDisabledReturnsUnavailable(t *testing.T) {
 	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
 		cfg.APK.Enabled = false
 		cfg.APT.Enabled = false
@@ -901,12 +901,12 @@ func TestProxyDisabledReturnsForbidden(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	app.pipeline.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://example.com/plain.txt", nil))
 
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("status = %d want %d", recorder.Code, http.StatusForbidden)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusServiceUnavailable)
 	}
 }
 
-func TestConnectDisabledReturnsMethodNotAllowed(t *testing.T) {
+func TestConnectDisabledReturnsForbidden(t *testing.T) {
 	app := mustNewTestApp(t, func(cfg *internalconfig.Config) {
 		cfg.APK.Enabled = false
 		cfg.APT.Enabled = false
@@ -919,8 +919,8 @@ func TestConnectDisabledReturnsMethodNotAllowed(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	app.pipeline.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d want %d", recorder.Code, http.StatusMethodNotAllowed)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("status = %d want %d", recorder.Code, http.StatusForbidden)
 	}
 }
 
@@ -1549,6 +1549,28 @@ func TestSmoke(t *testing.T) {
 		t.Fatalf("proxy forward: status=%d body=%q", r5.Code, r5.Body.String())
 	}
 
+	// ── 3.5. APT: MISS → HIT via absolute-form URL ──
+	aptURL := upstream.URL + "/debian/dists/stable/InRelease"
+	aptReq := httptest.NewRequest(http.MethodGet, aptURL, nil)
+
+	rapt1 := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(rapt1, aptReq)
+	if rapt1.Code != http.StatusOK || rapt1.Body.String() != "apt-release-body" {
+		t.Fatalf("APT miss: status=%d body=%q", rapt1.Code, rapt1.Body.String())
+	}
+	if got := rapt1.Header().Get("X-Cache"); got != "MISS" {
+		t.Fatalf("APT first X-Cache = %q", got)
+	}
+
+	rapt2 := httptest.NewRecorder()
+	app.pipeline.ServeHTTP(rapt2, httptest.NewRequest(http.MethodGet, aptURL, nil))
+	if rapt2.Code != http.StatusOK || rapt2.Body.String() != "apt-release-body" {
+		t.Fatalf("APT hit: status=%d body=%q", rapt2.Code, rapt2.Body.String())
+	}
+	if got := rapt2.Header().Get("X-Cache"); got != "HIT" && got != "MEMORY-HIT" {
+		t.Fatalf("APT second X-Cache = %q", got)
+	}
+
 	// ── 4. Health endpoint via app handler ──
 	healthReq := httptest.NewRequest(http.MethodGet, "http://cache.local/_health", nil)
 	r6 := httptest.NewRecorder()
@@ -1559,7 +1581,7 @@ func TestSmoke(t *testing.T) {
 	if !strings.Contains(r6.Body.String(), `"status"`) {
 		t.Fatalf("health: body not JSON = %q", r6.Body.String())
 	}
-	if upstreamHits.Load() < 3 {
-		t.Fatalf("upstream hits = %d, expected >= 3 (apk, index, proxy)", upstreamHits.Load())
+	if upstreamHits.Load() < 4 {
+		t.Fatalf("upstream hits = %d, expected >= 4 (apk, index, apt, proxy)", upstreamHits.Load())
 	}
 }

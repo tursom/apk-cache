@@ -2,16 +2,14 @@ package main
 
 import (
 	"bytes"
-	"log"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/tursom/apk-cache/utils"
-	"github.com/tursom/apk-cache/utils/i18n"
 )
 
 // MemoryCache 内存缓存管理器
@@ -90,11 +88,13 @@ func (m *MemoryCache) getItem(key string) (*CacheItem, bool) {
 }
 
 // removeItem 移除缓存项（线程安全）
-func (m *MemoryCache) removeItem(key string, size int64) {
+func (m *MemoryCache) removeItem(key string, _ int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.cache, key)
-	m.currentSize -= size
+	if item, exists := m.cache[key]; exists {
+		m.currentSize -= item.Size
+		delete(m.cache, key)
+	}
 }
 
 // updateItemAccess 更新缓存项访问信息（线程安全）
@@ -111,11 +111,7 @@ func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, 
 
 	// 检查是否超过最大大小限制
 	if m.maxSize > 0 && size > m.maxSize {
-		log.Println(i18n.T("MemoryCacheItemTooLarge", map[string]any{
-			"Key":  key,
-			"Size": size,
-			"Max":  m.maxSize,
-		}))
+		slog.Warn("memory cache item too large", "key", key, "size", size, "max", m.maxSize)
 		return false
 	}
 
@@ -130,15 +126,18 @@ func (m *MemoryCache) Set(key string, data []byte, headers map[string][]string, 
 		ModTime:     modTime,
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 检查是否需要清理空间
+	// 检查是否需要清理空间（needCleanup 内部使用 RLock，必须在 Lock 前调用）
 	if m.needCleanup(size) {
+		m.mu.Lock()
 		if !m.cleanup(size) {
+			m.mu.Unlock()
 			return false
 		}
+		m.mu.Unlock()
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// 如果键已存在，先移除旧项
 	if existing, exists := m.cache[key]; exists {
@@ -177,6 +176,9 @@ func (m *MemoryCache) Clear() {
 
 // needCleanup 检查是否需要清理空间
 func (m *MemoryCache) needCleanup(newItemSize int64) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	if m.maxSize == 0 && m.maxItems == 0 {
 		return false
 	}
@@ -229,17 +231,11 @@ func (m *MemoryCache) cleanup(needSize int64) bool {
 		evicted++
 
 		utils.Monitoring.RecordMemoryCacheEviction()
-		log.Println(i18n.T("MemoryCacheEvicted", map[string]any{
-			"Key":  entry.key,
-			"Size": entry.item.Size,
-		}))
+		slog.Debug("memory cache evicted", "key", entry.key, "size", entry.item.Size)
 	}
 
 	if evicted > 0 {
-		log.Println(i18n.T("MemoryCacheCleanupComplete", map[string]any{
-			"Evicted": evicted,
-			"Freed":   freed,
-		}))
+		slog.Debug("memory cache cleanup complete", "evicted", evicted, "freed", freed)
 	}
 
 	return freed >= needSize || (m.maxItems > 0 && len(m.cache) < m.maxItems)
@@ -287,9 +283,7 @@ func (m *MemoryCache) cleanupExpired() {
 	}
 
 	if expiredCount > 0 {
-		log.Println(i18n.T("MemoryCacheExpiredCleaned", map[string]any{
-			"Count": expiredCount,
-		}))
+		slog.Debug("memory cache expired cleaned", "count", expiredCount)
 		utils.Monitoring.UpdateMemoryCacheMetrics(m.currentSize, len(m.cache))
 	}
 }
@@ -317,14 +311,11 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 		return false
 	}
 
-	log.Println(i18n.T("MemoryCacheHit", map[string]any{"Path": key}))
+	slog.Debug("memory cache hit", "path", key)
 
 	// 复制响应头，跳过 hop-by-hop 头和不正确的 Content-Length
 	for key, values := range item.Headers {
-		switch strings.ToLower(key) {
-		case "transfer-encoding", "connection", "keep-alive",
-			"proxy-authenticate", "proxy-authorization",
-			"te", "trailer", "upgrade", "content-length":
+		if isHopByHopHeader(key) || key == "content-length" {
 			// 跳过 hop-by-hop 头和 Content-Length（将根据实际数据大小重新设置）
 			continue
 		}
@@ -335,12 +326,12 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 
 	// 根据实际数据大小设置正确的 Content-Length
 	w.Header().Set("Content-Length", strconv.Itoa(len(item.Data)))
-	w.Header().Set("X-Cache", "MEMORY-HIT")
+	w.Header().Set("X-Cache", cacheMemoryHit)
 	w.WriteHeader(item.StatusCode)
 
 	// 写入响应体
 	if _, err := w.Write(item.Data); err != nil {
-		log.Println(i18n.T("MemoryCacheWriteFailed", map[string]any{"Error": err}))
+		slog.Error("memory cache write failed", "err", err)
 		return false
 	}
 
@@ -351,7 +342,7 @@ func (m *MemoryCache) ServeFromMemory(w http.ResponseWriter, key string) bool {
 // CacheToMemory 将数据缓存到内存
 func (m *MemoryCache) CacheToMemory(key string, data []byte, headers map[string][]string, statusCode int, modTime time.Time) {
 	if !m.Set(key, data, headers, statusCode, modTime) {
-		log.Println(i18n.T("MemoryCacheStoreFailed", map[string]any{"Key": key}))
+		slog.Warn("memory cache store failed", "key", key)
 	}
 }
 

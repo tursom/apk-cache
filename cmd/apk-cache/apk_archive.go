@@ -4,9 +4,12 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 )
+
+const maxDecompressedMemberSize = 256 << 20 // 256MB per gzip member, prevents zip bomb
 
 type apkArchiveMember struct {
 	// Raw 是该 member 在原始归档中的压缩字节。
@@ -56,7 +59,10 @@ func readAPKArchiveBytes(data []byte) ([]apkArchiveMember, error) {
 		}
 		gzReader.Multistream(false)
 
-		payload, err := io.ReadAll(gzReader)
+		payload, err := io.ReadAll(io.LimitReader(gzReader, maxDecompressedMemberSize))
+		if err == nil && int64(len(payload)) >= maxDecompressedMemberSize {
+			err = errors.New("decompressed data exceeds maximum allowed size")
+		}
 		closeErr := gzReader.Close()
 		if err == nil {
 			err = closeErr
@@ -97,8 +103,11 @@ func parseAPKArchiveEntries(payload []byte) []apkArchiveEntry {
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 			continue
 		}
-		body, err := io.ReadAll(reader)
+		body, err := io.ReadAll(io.LimitReader(reader, maxDecompressedMemberSize))
 		if err != nil {
+			return entries
+		}
+		if int64(len(body)) >= maxDecompressedMemberSize {
 			return entries
 		}
 		entries = append(entries, apkArchiveEntry{Name: header.Name, Body: body})

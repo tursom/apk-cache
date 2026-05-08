@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -114,7 +115,9 @@ func dialViaHTTPProxy(ctx context.Context, proxyURL *url.URL, network, address s
 		return nil, err
 	}
 
-	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", address, address); err != nil {
+	// Sanitize address to prevent CRLF injection into the CONNECT request
+	sanitized := strings.ReplaceAll(strings.ReplaceAll(address, "\r", ""), "\n", "")
+	if _, err := fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", sanitized, sanitized); err != nil {
 		conn.Close()
 		return nil, err
 	}

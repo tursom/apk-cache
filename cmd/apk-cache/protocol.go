@@ -1,15 +1,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	internalconfig "github.com/tursom/apk-cache/internal/config"
@@ -149,56 +151,34 @@ func (a *APKAdapter) CacheKey(req *NormalizedRequest) (string, error) {
 	return safeJoinPath(req.UpstreamPath)
 }
 
-// ValidateCached 校验磁盘中已经存在的 APK/APKINDEX，失败时上层会删除缓存并回源。
-func (a *APKAdapter) ValidateCached(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
+// validateAPK 是 ValidateCached 和 ValidateFetched 共享的校验逻辑。
+// 参数 isFetched 控制签名校验失败时是否将错误包装为 CacheBypassError（允许透传但不写入缓存）。
+func (a *APKAdapter) validateAPK(app *App, req *NormalizedRequest, cachePath, filePath string, isFetched bool) error {
 	if req.CacheClass == "index" {
 		if !app.cfg.APK.VerifySignature {
 			return nil
 		}
-		err := app.apkVerifier.ValidateIndexSignature(cachePath)
+		sigPath := cachePath
+		if isFetched && filePath != "" {
+			sigPath = filePath
+		}
+		err := app.apkVerifier.ValidateIndexSignature(sigPath)
 		if err != nil {
 			utils.Monitoring.RecordAPKSignatureFailure()
-		}
-		return err
-	}
-
-	if app.cfg.APK.VerifyHash {
-		err := app.apkIndex.ValidatePackage(cachePath)
-		switch {
-		case err == nil:
-		case errors.Is(err, ErrAPKIndexUnavailable):
-		default:
-			utils.Monitoring.RecordAPKHashFailure()
-			return err
-		}
-	}
-
-	if app.cfg.APK.VerifySignature {
-		err := app.apkVerifier.ValidatePackageSignature(cachePath)
-		if err != nil {
-			utils.Monitoring.RecordAPKSignatureFailure()
-		}
-		return err
-	}
-
-	return nil
-}
-
-// ValidateFetched 校验本次刚下载完成的 APK/APKINDEX。
-// 哈希失败是致命错误；签名失败则包装为 CacheBypassError，让上层改走“透传但不缓存”。
-func (a *APKAdapter) ValidateFetched(_ context.Context, app *App, req *NormalizedRequest, cachePath string, filePath string) error {
-	if req.CacheClass == "index" {
-		if app.cfg.APK.VerifySignature {
-			if err := app.apkVerifier.ValidateIndexSignature(filePath); err != nil {
-				utils.Monitoring.RecordAPKSignatureFailure()
+			if isFetched {
 				return &CacheBypassError{Err: err}
 			}
 		}
-		return nil
+		return err
 	}
 
 	if app.cfg.APK.VerifyHash {
-		err := app.apkIndex.ValidatePackageFile(cachePath, filePath)
+		var err error
+		if isFetched && filePath != "" {
+			err = app.apkIndex.ValidatePackageFile(cachePath, filePath)
+		} else {
+			err = app.apkIndex.ValidatePackage(cachePath)
+		}
 		switch {
 		case err == nil:
 		case errors.Is(err, ErrAPKIndexUnavailable):
@@ -209,14 +189,34 @@ func (a *APKAdapter) ValidateFetched(_ context.Context, app *App, req *Normalize
 	}
 
 	if app.cfg.APK.VerifySignature {
-		if err := app.apkVerifier.ValidatePackageSignature(filePath); err != nil {
-			utils.Monitoring.RecordAPKSignatureFailure()
-			return &CacheBypassError{Err: err}
+		sigPath := cachePath
+		if isFetched && filePath != "" {
+			sigPath = filePath
 		}
+		err := app.apkVerifier.ValidatePackageSignature(sigPath)
+		if err != nil {
+			utils.Monitoring.RecordAPKSignatureFailure()
+			if isFetched {
+				return &CacheBypassError{Err: err}
+			}
+		}
+		return err
 	}
 
 	return nil
 }
+
+// ValidateCached 校验磁盘中已经存在的 APK/APKINDEX，失败时上层会删除缓存并回源。
+func (a *APKAdapter) ValidateCached(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
+	return a.validateAPK(app, req, cachePath, "", false)
+}
+
+// ValidateFetched 校验本次刚下载完成的 APK/APKINDEX。
+// 哈希失败是致命错误；签名失败则包装为 CacheBypassError，让上层改走"透传但不缓存"。
+func (a *APKAdapter) ValidateFetched(_ context.Context, app *App, req *NormalizedRequest, cachePath string, filePath string) error {
+	return a.validateAPK(app, req, cachePath, filePath, true)
+}
+
 
 func (a *APKAdapter) CommitStored(_ context.Context, app *App, req *NormalizedRequest, cachePath string) error {
 	if req.CacheClass == "index" {
@@ -278,7 +278,11 @@ func (a *APTAdapter) CacheKey(req *NormalizedRequest) (string, error) {
 	if host == "" {
 		host = req.Request.Host
 	}
-	return aptutil.GetAPTCacheFilePath("", host, req.TargetURL.Path), nil
+	safePath, err := safeJoinPath(req.TargetURL.Path)
+	if err != nil {
+		return "", err
+	}
+	return aptutil.GetAPTCacheFilePath("", host, safePath), nil
 }
 
 func (a *APTAdapter) ValidateCached(ctx context.Context, app *App, req *NormalizedRequest, cachePath string) error {
@@ -316,7 +320,7 @@ func (a *APTAdapter) CommitStored(_ context.Context, app *App, req *NormalizedRe
 		go func() {
 			defer app.bgWg.Done()
 			if err := app.aptIndex.LoadFile(cachePath); err != nil {
-				log.Printf("load apt index %s: %v", cachePath, err)
+				slog.Warn("load apt index", "path", cachePath, "err", err)
 			}
 		}()
 		return nil
@@ -367,7 +371,11 @@ func (a *ProxyAdapter) CacheKey(req *NormalizedRequest) (string, error) {
 	if req.TargetURL == nil {
 		return "", ErrProxyDisabled
 	}
-	return filepath.Join("proxy", req.TargetURL.Host, req.TargetURL.Path), nil
+	safePath, err := safeJoinPath(req.TargetURL.Path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join("proxy", req.TargetURL.Host, safePath), nil
 }
 
 func (a *ProxyAdapter) ValidateCached(context.Context, *App, *NormalizedRequest, string) error {
@@ -420,20 +428,103 @@ func (a *ProxyAdapter) HandleConnect(ctx context.Context, app *App, w http.Respo
 		return err
 	}
 
-	targetConn, err := app.httpClients.DialProxyContext(ctx, a.cfg.UpstreamProxy, "tcp", ensurePort(r.Host, "443"))
-	if err != nil {
+	// C3: limit concurrent tunnels via semaphore
+	select {
+	case app.connectSem <- struct{}{}:
+	default:
 		clientConn.Close()
-		return err
+		return errors.New("too many concurrent connections")
+	}
+
+	targetAddr := ensurePort(r.Host, "443")
+	var targetConn net.Conn
+
+	if a.cfg.UpstreamProxy != "" {
+		proxyURL, urlErr := url.Parse(a.cfg.UpstreamProxy)
+		if urlErr != nil {
+			clientConn.Close()
+			<-app.connectSem
+			return urlErr
+		}
+
+		switch proxyURL.Scheme {
+		case "http":
+			// M8: connect to upstream proxy and verify CONNECT response
+			targetConn, err = net.DialTimeout("tcp", proxyURL.Host, 30*time.Second)
+			if err != nil {
+				clientConn.Close()
+				<-app.connectSem
+				return err
+			}
+
+			connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", targetAddr, targetAddr)
+			if _, wErr := fmt.Fprint(targetConn, connectReq); wErr != nil {
+				targetConn.Close()
+				clientConn.Close()
+				<-app.connectSem
+				return wErr
+			}
+
+			// Read and verify upstream proxy CONNECT response before notifying client
+			proxyResp, rErr := http.ReadResponse(bufio.NewReader(targetConn), nil)
+			if rErr != nil {
+				targetConn.Close()
+				clientConn.Close()
+				<-app.connectSem
+				return rErr
+			}
+			proxyResp.Body.Close()
+			if proxyResp.StatusCode != http.StatusOK {
+				targetConn.Close()
+				clientConn.Close()
+				<-app.connectSem
+				return fmt.Errorf("upstream proxy rejected CONNECT: %s", proxyResp.Status)
+			}
+		case "https", "socks5":
+			// These schemes handle CONNECT/socks5 internally via DialContextViaProxy
+			targetConn, err = app.httpClients.DialProxyContext(ctx, a.cfg.UpstreamProxy, "tcp", targetAddr)
+			if err != nil {
+				clientConn.Close()
+				<-app.connectSem
+				return err
+			}
+		default:
+			clientConn.Close()
+			<-app.connectSem
+			return fmt.Errorf("unsupported proxy scheme %q", proxyURL.Scheme)
+		}
+	} else {
+		targetConn, err = app.httpClients.DialContext(ctx, "tcp", targetAddr)
+		if err != nil {
+			clientConn.Close()
+			<-app.connectSem
+			return err
+		}
 	}
 
 	if _, err := clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\nProxy-Agent: apk-cache\r\n\r\n")); err != nil {
 		clientConn.Close()
 		targetConn.Close()
+		<-app.connectSem
 		return err
 	}
 
-	go tunnelCopy(targetConn, clientConn)
-	go tunnelCopy(clientConn, targetConn)
+	// Tunnel with semaphore release when both directions complete
+	go func() {
+		defer func() { <-app.connectSem }()
+
+		var tunnels sync.WaitGroup
+		tunnels.Add(2)
+		go func() {
+			defer tunnels.Done()
+			tunnelCopy(targetConn, clientConn)
+		}()
+		go func() {
+			defer tunnels.Done()
+			tunnelCopy(clientConn, targetConn)
+		}()
+		tunnels.Wait()
+	}()
 	return nil
 }
 
@@ -505,25 +596,25 @@ func cloneURL(source *url.URL) *url.URL {
 	return &clone
 }
 
-func safeJoinPath(path string) (string, error) {
-	clean := filepath.Clean(path)
-	if clean == "." {
-		return "", errors.New("empty cache path")
-	}
-	if strings.Contains(clean, "..") {
-		return "", fmt.Errorf("path traversal is not allowed: %s", path)
-	}
-	if filepath.IsAbs(clean) {
-		clean = strings.TrimPrefix(clean, string(filepath.Separator))
-	}
-	return clean, nil
-}
-
 func ensurePort(host, defaultPort string) string {
 	if strings.Contains(host, ":") {
 		return host
 	}
 	return host + ":" + defaultPort
+}
+
+func safeJoinPath(path string) (string, error) {
+	if strings.Contains(path, "..") {
+		return "", fmt.Errorf("path traversal is not allowed: %s", path)
+	}
+	clean := filepath.Clean(path)
+	if clean == "." {
+		return "", errors.New("empty cache path")
+	}
+	if filepath.IsAbs(clean) {
+		clean = strings.TrimPrefix(clean, string(filepath.Separator))
+	}
+	return clean, nil
 }
 
 func stripPort(host string) string {
@@ -539,13 +630,22 @@ func stripPort(host string) string {
 
 func copyEndToEndHeaders(dst, src http.Header) {
 	for key, values := range src {
-		switch strings.ToLower(key) {
-		case "connection", "proxy-connection", "keep-alive", "proxy-authenticate",
-			"proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		if isHopByHopHeader(key) {
 			continue
 		}
 		for _, value := range values {
 			dst.Add(key, value)
 		}
+	}
+}
+
+// isHopByHopHeader returns true for headers that must not be forwarded.
+func isHopByHopHeader(key string) bool {
+	switch strings.ToLower(key) {
+	case "connection", "proxy-connection", "keep-alive", "proxy-authenticate",
+		"proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
 	}
 }

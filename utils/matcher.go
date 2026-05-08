@@ -13,32 +13,6 @@ const (
 	PackageTypeAPT
 )
 
-// DetectPackageType 检测包类型
-func DetectPackageType(path string) PackageType {
-	// 优化的检测顺序，按出现频率排序
-	switch {
-	case strings.HasSuffix(path, ".apk"):
-		return PackageTypeAPK
-	case strings.HasSuffix(path, ".deb"):
-		return PackageTypeAPT
-	case strings.HasSuffix(path, "/APKINDEX.tar.gz"):
-		return PackageTypeAPK
-	case strings.Contains(path, "/alpine/"):
-		return PackageTypeAPK
-	case strings.Contains(path, "/dists/"):
-		return PackageTypeAPT
-	case strings.Contains(path, "/pool/"):
-		return PackageTypeAPT
-	case strings.Contains(path, "/by-hash/"):
-		if strings.Contains(path, "/alpine/") {
-			return PackageTypeAPK
-		}
-		return PackageTypeAPT
-	default:
-		return PackageTypeUnknown
-	}
-}
-
 // DetectPackageTypeFast 快速包类型检测
 // 使用字节切片和 Boyer-Moore 启发式算法
 func DetectPackageTypeFast(path string) PackageType {

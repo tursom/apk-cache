@@ -2,9 +2,10 @@ package config
 
 import (
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,39 +186,39 @@ func applyEnvOverrides(cfg *Config) {
 		cfg.Proxy.Enabled = strings.ToLower(v) == "true"
 	}
 	if v, ok := envLookup("HEALTH_CHECK_INTERVAL"); ok {
-		if d, err := time.ParseDuration(v); err == nil {
-			for i := range cfg.Upstreams {
-				// Health check interval is set per-server at construction time;
-				// this env var is informational for the user.
-				_ = d
-				_ = i
-			}
-		}
+		slog.Warn("env var HEALTH_CHECK_INTERVAL is no longer supported; configure health check via upstream configuration")
+		_ = v
 	}
 	if v, ok := envLookup("DATA_INTEGRITY_CHECK_INTERVAL"); ok {
-		// Preserved for backward compatibility with documented env vars.
+		slog.Warn("env var DATA_INTEGRITY_CHECK_INTERVAL is no longer supported")
 		_ = v
 	}
 	if v, ok := envLookup("ENABLE_SELF_HEALING"); ok {
-		// Preserved for backward compatibility.
+		slog.Warn("env var ENABLE_SELF_HEALING is no longer supported")
 		_ = v
 	}
 	if v, ok := envLookup("RATE_LIMIT_ENABLED"); ok {
+		slog.Warn("env var RATE_LIMIT_ENABLED is no longer supported")
 		_ = v
 	}
 	if v, ok := envLookup("RATE_LIMIT_RATE"); ok {
+		slog.Warn("env var RATE_LIMIT_RATE is no longer supported")
 		_ = v
 	}
 	if v, ok := envLookup("RATE_LIMIT_BURST"); ok {
+		slog.Warn("env var RATE_LIMIT_BURST is no longer supported")
 		_ = v
 	}
 	if v, ok := envLookup("RATE_LIMIT_EXEMPT_PATHS"); ok {
+		slog.Warn("env var RATE_LIMIT_EXEMPT_PATHS is no longer supported")
 		_ = v
 	}
 	if v, ok := envLookup("DATA_INTEGRITY_AUTO_REPAIR"); ok {
+		slog.Warn("env var DATA_INTEGRITY_AUTO_REPAIR is no longer supported")
 		_ = v
 	}
 	if v, ok := envLookup("DATA_INTEGRITY_PERIODIC_CHECK"); ok {
+		slog.Warn("env var DATA_INTEGRITY_PERIODIC_CHECK is no longer supported")
 		_ = v
 	}
 }
@@ -228,9 +229,7 @@ func envLookup(key string) (string, bool) {
 }
 
 func envAtoi(s string) (int, error) {
-	var n int
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
+	return strconv.Atoi(s)
 }
 
 func Validate(cfg *Config) error {
