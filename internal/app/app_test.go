@@ -626,6 +626,140 @@ func TestRequestHelpers(t *testing.T) {
 	}
 }
 
+func TestProtocolForRequestClassification(t *testing.T) {
+	sum := sha256.Sum256([]byte("packages"))
+	byHash := "/debian/dists/bookworm/main/binary-amd64/by-hash/SHA256/" + hex.EncodeToString(sum[:])
+	tests := []struct {
+		name   string
+		method string
+		target string
+		want   string
+	}{
+		{
+			name:   "apk index mirror path",
+			method: http.MethodGet,
+			target: "/alpine/v3.23/main/x86_64/APKINDEX.tar.gz",
+			want:   "apk",
+		},
+		{
+			name:   "apk package mirror path",
+			method: http.MethodGet,
+			target: "/alpine/v3.23/main/x86_64/busybox-1.37.0-r0.apk",
+			want:   "apk",
+		},
+		{
+			name:   "apt absolute index",
+			method: http.MethodGet,
+			target: "http://deb.example/debian/dists/bookworm/InRelease",
+			want:   "apt",
+		},
+		{
+			name:   "apt absolute package",
+			method: http.MethodGet,
+			target: "http://deb.example/debian/pool/main/h/hello/hello_1_amd64.deb",
+			want:   "apt",
+		},
+		{
+			name:   "apt by hash",
+			method: http.MethodGet,
+			target: "http://deb.example" + byHash,
+			want:   "apt",
+		},
+		{
+			name:   "apt nested root index",
+			method: http.MethodGet,
+			target: "http://download.docker.com/linux/ubuntu/dists/noble/InRelease",
+			want:   "apt",
+		},
+		{
+			name:   "connect tunnel",
+			method: http.MethodConnect,
+			target: "https://deb.example",
+			want:   "proxy",
+		},
+		{
+			name:   "absolute alpine-like proxy path",
+			method: http.MethodGet,
+			target: "http://example.com/alpine/not-a-package.txt",
+			want:   "proxy",
+		},
+		{
+			name:   "absolute generic pool path",
+			method: http.MethodGet,
+			target: "http://example.com/api/pool/list",
+			want:   "proxy",
+		},
+		{
+			name:   "absolute generic dists path",
+			method: http.MethodGet,
+			target: "http://example.com/api/dists/list",
+			want:   "proxy",
+		},
+		{
+			name:   "non-get apt absolute path",
+			method: http.MethodPost,
+			target: "http://deb.example/debian/dists/bookworm/InRelease",
+			want:   "proxy",
+		},
+		{
+			name:   "non-get apt origin path",
+			method: http.MethodPost,
+			target: "/debian/dists/bookworm/InRelease",
+			want:   "unknown",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, tc.target, nil)
+			if got := protocolForRequest(req); got != tc.want {
+				t.Fatalf("protocolForRequest(%s %s)=%s want %s", tc.method, tc.target, got, tc.want)
+			}
+		})
+	}
+}
+
+func BenchmarkDetectPackageRequestType(b *testing.B) {
+	paths := []string{
+		"/alpine/v3.23/main/x86_64/APKINDEX.tar.gz",
+		"/alpine/v3.23/main/x86_64/busybox-1.37.0-r0.apk",
+		"/debian/dists/bookworm/InRelease",
+		"/debian/dists/bookworm/main/binary-amd64/Packages.xz",
+		"/debian/dists/bookworm/main/binary-amd64/by-hash/SHA256/2a4f602eab0793435cd6b26bfcf95650efb84b10a9201c3174774fd2d919c71b",
+		"/debian/pool/main/h/hello/hello_1_amd64.deb",
+		"/api/pool/list",
+		"/other/file.txt",
+	}
+	var result packageRequestType
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, path := range paths {
+			result = detectPackageRequestType(path)
+		}
+	}
+	_ = result
+}
+
+func BenchmarkProtocolForRequestClassification(b *testing.B) {
+	requests := []*http.Request{
+		httptest.NewRequest(http.MethodGet, "/alpine/v3.23/main/x86_64/APKINDEX.tar.gz", nil),
+		httptest.NewRequest(http.MethodGet, "/alpine/v3.23/main/x86_64/busybox-1.37.0-r0.apk", nil),
+		httptest.NewRequest(http.MethodGet, "http://deb.example/debian/dists/bookworm/InRelease", nil),
+		httptest.NewRequest(http.MethodGet, "http://deb.example/debian/dists/bookworm/main/binary-amd64/Packages.xz", nil),
+		httptest.NewRequest(http.MethodGet, "http://deb.example/debian/pool/main/h/hello/hello_1_amd64.deb", nil),
+		httptest.NewRequest(http.MethodGet, "http://example.com/api/pool/list", nil),
+		httptest.NewRequest(http.MethodPost, "http://deb.example/debian/dists/bookworm/InRelease", nil),
+		httptest.NewRequest(http.MethodConnect, "https://deb.example", nil),
+	}
+	var result string
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		for _, req := range requests {
+			result = protocolForRequest(req)
+		}
+	}
+	_ = result
+}
+
 func testGzipTar(t *testing.T, entries map[string][]byte) []byte {
 	t.Helper()
 	var gz bytes.Buffer

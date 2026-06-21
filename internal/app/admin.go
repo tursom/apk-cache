@@ -1600,13 +1600,12 @@ func randomID() string {
 }
 
 func protocolForRequest(r *http.Request) string {
-	path := requestPath(r)
-	switch {
-	case isAPTRequest(r, path):
-		return "apt"
-	case isAPKRequest(path):
+	switch classifyRequest(r).protocol {
+	case requestProtocolAPK:
 		return "apk"
-	case r.Method == http.MethodConnect || isProxyRequest(r):
+	case requestProtocolAPT:
+		return "apt"
+	case requestProtocolProxy:
 		return "proxy"
 	default:
 		return "unknown"

@@ -383,17 +383,23 @@ func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) routeHTTP(w http.ResponseWriter, r *http.Request) error {
-	path := requestPath(r)
-	switch {
-	case a.cfg.APK.Enabled && isAPKRequest(path):
-		return a.handleAPK(w, r, path)
-	case a.cfg.APT.Enabled && isAPTRequest(r, path):
-		return a.handleAPT(w, r)
-	case isProxyRequest(r):
+	classification := classifyRequest(r)
+	switch classification.protocol {
+	case requestProtocolAPK:
+		if a.cfg.APK.Enabled {
+			return a.handleAPK(w, r, classification.path)
+		}
+	case requestProtocolAPT:
+		if a.cfg.APT.Enabled {
+			return a.handleAPT(w, r)
+		}
+		if classification.proxy {
+			return a.handleProxyHTTP(w, r)
+		}
+	case requestProtocolProxy:
 		return a.handleProxyHTTP(w, r)
-	default:
-		return ErrUnsupported
 	}
+	return ErrUnsupported
 }
 
 type cacheRequest struct {
@@ -1007,22 +1013,190 @@ func writeError(w http.ResponseWriter, err error) {
 }
 
 func isProxyRequest(r *http.Request) bool {
-	return r.URL.IsAbs() || strings.HasPrefix(r.RequestURI, "http://") || strings.HasPrefix(r.RequestURI, "https://")
+	if r == nil || r.URL == nil {
+		return false
+	}
+	return r.URL.IsAbs() || hasHTTPURLPrefix(r.RequestURI)
 }
 
-func isAPKRequest(path string) bool {
-	return apkpkg.IsPackageFile(path) || apkpkg.IsIndexFile(path) || strings.Contains(path, "/alpine/")
+type requestProtocol int
+
+const (
+	requestProtocolUnknown requestProtocol = iota
+	requestProtocolAPK
+	requestProtocolAPT
+	requestProtocolProxy
+)
+
+type requestClassification struct {
+	protocol requestProtocol
+	path     string
+	proxy    bool
+}
+
+type packageRequestType int
+
+const (
+	packageRequestUnknown packageRequestType = iota
+	packageRequestAPK
+	packageRequestAPT
+)
+
+func isPackageCacheMethod(method string) bool {
+	return method == http.MethodGet
+}
+
+func isAPKRequest(r *http.Request, path string) bool {
+	return classifyRequestPath(r, path).protocol == requestProtocolAPK
 }
 
 func isAPTRequest(r *http.Request, path string) bool {
+	return classifyRequestPath(r, path).protocol == requestProtocolAPT
+}
+
+func classifyRequest(r *http.Request) requestClassification {
+	if r == nil {
+		return requestClassification{}
+	}
 	if r.Method == http.MethodConnect {
+		return requestClassification{protocol: requestProtocolProxy, proxy: true}
+	}
+	return classifyRequestPath(r, requestPath(r))
+}
+
+func classifyRequestPath(r *http.Request, path string) requestClassification {
+	classification := requestClassification{path: path}
+	if r == nil {
+		return classification
+	}
+	if r.Method == http.MethodConnect {
+		classification.protocol = requestProtocolProxy
+		classification.proxy = true
+		return classification
+	}
+	classification.proxy = isProxyRequest(r)
+	if !isPackageCacheMethod(r.Method) {
+		if classification.proxy {
+			classification.protocol = requestProtocolProxy
+		}
+		return classification
+	}
+	packageType := detectPackageRequestType(path)
+	if classification.proxy {
+		if packageType == packageRequestAPT {
+			classification.protocol = requestProtocolAPT
+		} else {
+			classification.protocol = requestProtocolProxy
+		}
+		return classification
+	}
+	switch packageType {
+	case packageRequestAPK:
+		classification.protocol = requestProtocolAPK
+	case packageRequestAPT:
+		classification.protocol = requestProtocolAPT
+	}
+	return classification
+}
+
+func detectPackageRequestType(path string) packageRequestType {
+	n := len(path)
+	if n < 2 || path[0] != '/' {
+		return packageRequestUnknown
+	}
+	if suffixType := detectPackageSuffix(path); suffixType != packageRequestUnknown {
+		return suffixType
+	}
+	seenAPTRoot := false
+	for start := 1; start < n; {
+		end := start
+		for end < n && path[end] != '/' {
+			end++
+		}
+		if start == 1 {
+			switch path[start:end] {
+			case "alpine":
+				return packageRequestAPK
+			}
+		}
+		switch path[start:end] {
+		case "debian", "ubuntu", "debian-security":
+			seenAPTRoot = true
+		}
+		switch path[start:end] {
+		case "by-hash":
+			return packageRequestAPT
+		case "dists":
+			if start == 1 || seenAPTRoot {
+				return packageRequestAPT
+			}
+		case "pool":
+			if start == 1 || seenAPTRoot {
+				return packageRequestAPT
+			}
+		}
+		start = end + 1
+	}
+	return packageRequestUnknown
+}
+
+func detectPackageSuffix(path string) packageRequestType {
+	n := len(path)
+	if n < 4 {
+		return packageRequestUnknown
+	}
+	// Matching policy: classify package/index files only by protocol-owned
+	// terminal names. Directory semantics are handled by the segment scanner.
+	switch path[n-1] {
+	case 'k':
+		if path[n-4:] == ".apk" {
+			return packageRequestAPK
+		}
+	case 'z':
+		if n >= 16 && path[n-16:] == "/APKINDEX.tar.gz" {
+			return packageRequestAPK
+		}
+		if (n >= 12 && (path[n-12:] == "/Packages.gz" || path[n-12:] == "/Packages.xz")) ||
+			(n >= 11 && (path[n-11:] == "/Sources.gz" || path[n-11:] == "/Sources.xz")) {
+			return packageRequestAPT
+		}
+	case 'b':
+		if path[n-4:] == ".deb" {
+			return packageRequestAPT
+		}
+	case 'e':
+		if (n >= 10 && path[n-10:] == "/InRelease") || (n >= 8 && path[n-8:] == "/Release") {
+			return packageRequestAPT
+		}
+	case 's':
+		if (n >= 9 && path[n-9:] == "/Packages") || (n >= 8 && path[n-8:] == "/Sources") {
+			return packageRequestAPT
+		}
+	case '2':
+		if (n >= 13 && path[n-13:] == "/Packages.bz2") || (n >= 12 && path[n-12:] == "/Sources.bz2") {
+			return packageRequestAPT
+		}
+	case 'a':
+		if (n >= 14 && path[n-14:] == "/Packages.lzma") || (n >= 13 && path[n-13:] == "/Sources.lzma") {
+			return packageRequestAPT
+		}
+	}
+	return packageRequestUnknown
+}
+
+func isAPTIndexPath(path string) bool {
+	n := len(path)
+	if n >= 4 && path[n-1] == 'b' && path[n-4:] == ".deb" {
 		return false
 	}
-	if strings.HasSuffix(path, ".deb") || aptpkg.IsIndexFile(path) || aptpkg.IsHashRequest(path) {
-		return true
-	}
-	return strings.Contains(path, "/dists/") || strings.Contains(path, "/pool/") ||
-		strings.HasPrefix(path, "/debian/") || strings.HasPrefix(path, "/ubuntu/")
+	return detectPackageSuffix(path) == packageRequestAPT
+}
+
+func hasHTTPURLPrefix(raw string) bool {
+	return (len(raw) >= 7 &&
+		raw[0] == 'h' && raw[1] == 't' && raw[2] == 't' && raw[3] == 'p' && raw[4] == ':' && raw[5] == '/' && raw[6] == '/') ||
+		(len(raw) >= 8 &&
+			raw[0] == 'h' && raw[1] == 't' && raw[2] == 't' && raw[3] == 'p' && raw[4] == 's' && raw[5] == ':' && raw[6] == '/' && raw[7] == '/')
 }
 
 func requestPath(r *http.Request) string {
@@ -1043,7 +1217,7 @@ func forwardURL(r *http.Request) (*url.URL, error) {
 		clone := *r.URL
 		return &clone, nil
 	}
-	if strings.HasPrefix(r.RequestURI, "http://") || strings.HasPrefix(r.RequestURI, "https://") {
+	if hasHTTPURLPrefix(r.RequestURI) {
 		return url.Parse(r.RequestURI)
 	}
 	if r.Host == "" || r.URL == nil {
