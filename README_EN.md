@@ -527,8 +527,8 @@ curl http://127.0.0.1:3142/_health
 [.github/workflows/build.yml](.github/workflows/build.yml) currently runs:
 
 - Go unit tests and coverage artifact upload.
-- Linux / Windows / macOS binary builds.
-- Docker image build and `/_health` smoke test.
+- Linux amd64/arm64, macOS amd64/arm64, and Windows amd64 binary builds.
+- Docker image build, `/_health` smoke test, and linux/amd64 plus linux/arm64 image publishing.
 - GHCR image push for non-PR events.
 - GitHub Release creation for `v*` tags, including binary artifacts.
 

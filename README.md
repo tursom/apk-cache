@@ -527,8 +527,8 @@ curl http://127.0.0.1:3142/_health
 [.github/workflows/build.yml](.github/workflows/build.yml) 当前包含：
 
 - Go 单元测试和 coverage artifact。
-- Linux / Windows / macOS 多平台二进制构建。
-- Docker 镜像构建和 `/_health` 冒烟。
+- Linux amd64/arm64、macOS amd64/arm64、Windows amd64 二进制构建。
+- Docker 镜像构建、`/_health` 冒烟和 linux/amd64、linux/arm64 镜像发布。
 - 非 PR 事件推送 GHCR 镜像。
 - `v*` tag 创建 GitHub Release 并上传二进制产物。
 

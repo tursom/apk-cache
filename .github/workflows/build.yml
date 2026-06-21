@@ -68,16 +68,8 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
-          - goos: linux
-            goarch: "386"
           - goos: windows
             goarch: amd64
-            ext: .exe
-          - goos: windows
-            goarch: arm64
-            ext: .exe
-          - goos: windows
-            goarch: "386"
             ext: .exe
           - goos: darwin
             goarch: amd64
@@ -199,8 +191,6 @@ jobs:
           platforms: |
             linux/amd64
             linux/arm64
-            linux/386
-            linux/arm/v7
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
