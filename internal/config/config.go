@@ -13,6 +13,9 @@ import (
 
 type Config struct {
 	Server    ServerConfig     `toml:"server"`
+	Database  DatabaseConfig   `toml:"database"`
+	Admin     AdminConfig      `toml:"admin"`
+	HashStore HashStoreConfig  `toml:"hash_store"`
 	Upstreams []UpstreamConfig `toml:"upstreams"`
 	Cache     CacheConfig      `toml:"cache"`
 	Transport TransportConfig  `toml:"transport"`
@@ -23,6 +26,22 @@ type Config struct {
 
 type ServerConfig struct {
 	Listen string `toml:"listen"`
+}
+
+type DatabaseConfig struct {
+	Path string `toml:"path"`
+}
+
+type AdminConfig struct {
+	BootstrapToken string `toml:"bootstrap_token"`
+	SessionSecret  string `toml:"session_secret"`
+}
+
+type HashStoreConfig struct {
+	Path                     string `toml:"path"`
+	RebuildOnCorruption      bool   `toml:"rebuild_on_corruption"`
+	TrustFileStat            bool   `toml:"trust_file_stat"`
+	ActualRevalidateInterval string `toml:"actual_revalidate_interval"`
 }
 
 type UpstreamConfig struct {
@@ -79,6 +98,10 @@ func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Listen: ":3142",
+		},
+		HashStore: HashStoreConfig{
+			TrustFileStat:            true,
+			ActualRevalidateInterval: "24h",
 		},
 		Upstreams: []UpstreamConfig{
 			{
@@ -139,6 +162,27 @@ func Load(path string) (*Config, error) {
 func ApplyEnvOverrides(cfg *Config) {
 	if v, ok := env("LISTEN", "ADDR"); ok {
 		cfg.Server.Listen = v
+	}
+	if v, ok := env("DATABASE_PATH"); ok {
+		cfg.Database.Path = v
+	}
+	if v, ok := env("ADMIN_BOOTSTRAP_TOKEN"); ok {
+		cfg.Admin.BootstrapToken = v
+	}
+	if v, ok := env("ADMIN_SESSION_SECRET"); ok {
+		cfg.Admin.SessionSecret = v
+	}
+	if v, ok := env("HASH_STORE_PATH"); ok {
+		cfg.HashStore.Path = v
+	}
+	if v, ok := env("HASH_STORE_REBUILD_ON_CORRUPTION"); ok {
+		cfg.HashStore.RebuildOnCorruption = parseBool(v)
+	}
+	if v, ok := env("HASH_STORE_TRUST_FILE_STAT"); ok {
+		cfg.HashStore.TrustFileStat = parseBool(v)
+	}
+	if v, ok := env("HASH_STORE_ACTUAL_REVALIDATE_INTERVAL"); ok {
+		cfg.HashStore.ActualRevalidateInterval = v
 	}
 	if v, ok := env("CACHE_ROOT", "CACHE_DIR"); ok {
 		cfg.Cache.Root = v
@@ -229,11 +273,12 @@ func Validate(cfg *Config) error {
 		return errors.New("cache paths must not contain '..'")
 	}
 	for name, value := range map[string]string{
-		"cache.index_ttl":          cfg.Cache.IndexTTL,
-		"cache.package_ttl":        cfg.Cache.PackageTTL,
-		"cache.memory.ttl":         cfg.Cache.Memory.TTL,
-		"transport.timeout":        cfg.Transport.Timeout,
-		"transport.idle_conn_time": cfg.Transport.IdleConnTimeout,
+		"cache.index_ttl":                       cfg.Cache.IndexTTL,
+		"cache.package_ttl":                     cfg.Cache.PackageTTL,
+		"cache.memory.ttl":                      cfg.Cache.Memory.TTL,
+		"hash_store.actual_revalidate_interval": cfg.HashStore.ActualRevalidateInterval,
+		"transport.timeout":                     cfg.Transport.Timeout,
+		"transport.idle_conn_time":              cfg.Transport.IdleConnTimeout,
 	} {
 		if err := validateDuration(name, value); err != nil {
 			return err

@@ -31,6 +31,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: internal/admin/web/package-lock.json
+
+      - name: Build admin UI
+        run: |
+          npm ci --prefix internal/admin/web
+          npm run --prefix internal/admin/web build
+
       - name: Download modules
         run: go mod download
 
@@ -82,6 +94,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: internal/admin/web/package-lock.json
+
+      - name: Build admin UI
+        run: |
+          npm ci --prefix internal/admin/web
+          npm run --prefix internal/admin/web build
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
@@ -132,6 +156,8 @@ jobs:
           trap 'docker logs "$cid" || true; docker rm -f "$cid" || true' EXIT
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3142/_health; then
+              curl -fsS http://127.0.0.1:3142/admin/ >/dev/null
+              curl -fsS http://127.0.0.1:3142/api/admin/v1/setup/status | grep -q '"ok":true'
               exit 0
             fi
             sleep 1

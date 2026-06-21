@@ -8,7 +8,7 @@ APK Cache is an HTTP caching proxy for Linux package repositories. The current i
 - Debian/Ubuntu APT HTTP proxy cache
 - Generic HTTP/HTTPS proxy forwarding, mainly for APT HTTPS `CONNECT` tunnels
 
-The project has been rebuilt around a smaller runtime core. It keeps package caching, validation, proxying, observability, Docker deployment, and CI/CD. The old web dashboard, old i18n layer, and disconnected rate-limit/quota/policy subsystems are not part of the current version.
+The project has been rebuilt around a smaller runtime core. It keeps package caching, validation, proxying, observability, Docker deployment, CI/CD, and an embedded admin console. The old i18n layer and disconnected rate-limit/quota/policy subsystems are not part of the current version.
 
 ## Features
 
@@ -20,7 +20,10 @@ The project has been rebuilt around a smaller runtime core. It keeps package cac
 - Multiple APK upstreams: configured APK upstreams are tried with failover.
 - Upstream proxy support: APK upstreams can have their own proxy; APT and generic proxy traffic use `proxy.upstream_proxy`.
 - HTTPS tunneling: supports `CONNECT` for HTTPS APT sources.
-- Operations endpoints: `/_health` and `/metrics`.
+- Admin console: embedded `/admin/` page and `/api/admin/v1/*` APIs with single-admin login.
+- Persistent configuration: imports TOML/env runtime settings on first boot, then treats SQLite as the source of truth.
+- Persistent hashes: stores APK/APT expected hashes, actual-hash cache, and APT by-hash mappings in Pebble.
+- Operations endpoints: `/_health`, `/metrics`, and `/admin/`.
 - Docker deployment: entrypoint generates runtime TOML from environment variables.
 - CI/CD: GitHub Actions runs tests, binary builds, Docker build/smoke test, and tag releases.
 
@@ -49,11 +52,73 @@ Prometheus metrics:
 curl http://127.0.0.1:3142/metrics
 ```
 
+### Docker Compose Build And Deployment
+
+The repository includes [docker-compose.yml](docker-compose.yml). The default image name is the GitHub Container Registry image: `ghcr.io/tursom/apk-cache:latest`.
+
+Build from the current source tree and start:
+
+```sh
+ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
+ADMIN_SESSION_SECRET='replace-with-random-secret' \
+docker compose up -d --build
+```
+
+Deploy only with the image already published on GitHub:
+
+```sh
+ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
+ADMIN_SESSION_SECRET='replace-with-random-secret' \
+docker compose up -d
+```
+
+Use a different GitHub tag:
+
+```sh
+APK_CACHE_IMAGE=ghcr.io/tursom/apk-cache:v1.2.3 \
+ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
+ADMIN_SESSION_SECRET='replace-with-random-secret' \
+docker compose up -d
+```
+
+`--build` rebuilds from the current source tree and tags the result locally as `ghcr.io/tursom/apk-cache:latest`; it does not push to GitHub.
+
+Default mounts:
+
+```text
+./cache -> /app/cache
+./data  -> /app/data
+```
+
+Common variables:
+
+- `APK_CACHE_HTTP_PORT`: host port, default `3142`.
+- `APK_CACHE_CACHE_DIR`: host cache directory, default `./cache`.
+- `APK_CACHE_DATA_DIR`: host data directory, default `./data`.
+- `APK_UPSTREAM`: APK upstream, default `https://dl-cdn.alpinelinux.org`.
+- `UPSTREAM_PROXY`: outbound proxy for APT and generic proxy traffic.
+- `GOPROXY`: Go module proxy for the build stage.
+
+First-time admin setup requires a bootstrap token:
+
+```sh
+docker run -d \
+  --name apk-cache \
+  -p 3142:3142 \
+  -v "$PWD/cache:/app/cache" \
+  -v "$PWD/data:/app/data" \
+  -e ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
+  ghcr.io/tursom/apk-cache:latest
+```
+
+Open `http://127.0.0.1:3142/admin/` and create the single administrator with the bootstrap token. After setup, normal admin login uses the configured username and password.
+
 ### Build From Source
 
 Requirements:
 
 - Go `1.25.4` or a compatible version
+- Node.js `22` or a compatible version, for building the React admin console
 - Optional: Docker, for container builds and smoke tests
 
 Build:
@@ -143,6 +208,19 @@ See [config.example.toml](config.example.toml) for a complete example.
 [server]
 listen = ":3142"
 
+[database]
+path = ""
+
+[admin]
+bootstrap_token = ""
+session_secret = ""
+
+[hash_store]
+path = ""
+rebuild_on_corruption = false
+trust_file_stat = true
+actual_revalidate_interval = "24h"
+
 [[upstreams]]
 name = "Official Alpine CDN"
 url = "https://dl-cdn.alpinelinux.org"
@@ -191,12 +269,19 @@ allowed_hosts = []
 | Key | Default | Description |
 | --- | --- | --- |
 | `server.listen` | `:3142` | HTTP listen address |
+| `database.path` | `${cache.data_root}/apk-cache.db` | SQLite database path; empty uses the default path |
+| `admin.bootstrap_token` | empty | Required for first-time admin creation; prefer `ADMIN_BOOTSTRAP_TOKEN` |
+| `admin.session_secret` | empty | HMAC key for session/CSRF token hashes; prefer an environment variable in production |
+| `hash_store.path` | `${cache.data_root}/hash.pebble` | Pebble hash-store path |
+| `hash_store.rebuild_on_corruption` | `false` | Allow deleting and rebuilding the hash store after corruption |
+| `hash_store.trust_file_stat` | `true` | Reuse actual-hash cache entries when size and mtime match |
+| `hash_store.actual_revalidate_interval` | `24h` | Maximum interval before recomputing an actual hash even if stat matches |
 | `upstreams[].name` | `Official Alpine CDN` | APK upstream display name |
 | `upstreams[].url` | `https://dl-cdn.alpinelinux.org` | APK upstream base URL |
 | `upstreams[].kind` | `apk` | Only APK upstreams are used for APK fetches |
 | `upstreams[].proxy` | empty | Outbound proxy for this APK upstream |
 | `cache.root` | `./cache` | Disk cache directory |
-| `cache.data_root` | `./data` | Runtime data directory, reserved for future use |
+| `cache.data_root` | `./data` | Runtime data directory; stores SQLite and Pebble by default |
 | `cache.index_ttl` | `24h` | Index-file cache TTL |
 | `cache.package_ttl` | `720h` | Package-file cache TTL; `0` means never expire |
 | `cache.memory.enabled` | `true` | Enable memory cache |
@@ -244,6 +329,13 @@ At container startup, `entrypoint.sh` generates a temporary TOML config from env
 | `LISTEN` / `ADDR` | `:3142` | `server.listen` |
 | `CACHE_ROOT` / `CACHE_DIR` | `/app/cache` | `cache.root` |
 | `DATA_ROOT` | `/app/data` | `cache.data_root` |
+| `DATABASE_PATH` | empty | `database.path`; empty uses `${DATA_ROOT}/apk-cache.db` |
+| `ADMIN_BOOTSTRAP_TOKEN` | empty | `admin.bootstrap_token` |
+| `ADMIN_SESSION_SECRET` | empty | `admin.session_secret` |
+| `HASH_STORE_PATH` | empty | `hash_store.path`; empty uses `${DATA_ROOT}/hash.pebble` |
+| `HASH_STORE_REBUILD_ON_CORRUPTION` | `false` | `hash_store.rebuild_on_corruption` |
+| `HASH_STORE_TRUST_FILE_STAT` | `true` | `hash_store.trust_file_stat` |
+| `HASH_STORE_ACTUAL_REVALIDATE_INTERVAL` | `24h` | `hash_store.actual_revalidate_interval` |
 | `APK_UPSTREAM` / `UPSTREAM` | `https://dl-cdn.alpinelinux.org` | APK upstream URL |
 | `APK_UPSTREAM_PROXY` / `PROXY` | empty | APK upstream proxy |
 | `UPSTREAM_PROXY` | empty | `proxy.upstream_proxy` |
@@ -288,8 +380,21 @@ Every request enters the same HTTP handler:
 
 1. `/_health` returns health information.
 2. `/metrics` returns Prometheus metrics.
-3. `CONNECT` enters the tunnel proxy.
-4. Other requests are classified as APK, APT, or generic proxy traffic.
+3. `/admin/` returns the embedded admin console.
+4. `/api/admin/v1/*` enters the admin API; all endpoints except setup/login require a session and CSRF token.
+5. `CONNECT` enters the tunnel proxy.
+6. Other requests are classified as APK, APT, or generic proxy traffic.
+
+### Configuration And Storage
+
+The service still reads TOML/env on startup, but those inputs mainly bootstrap the listen address, data directory, database path, and first admin setup. After SQLite opens, migrations run and runtime configuration is loaded as follows:
+
+1. If `settings` is empty, the merged TOML/env runtime configuration is imported into SQLite.
+2. If SQLite already has settings, SQLite wins; runtime settings in TOML/env no longer overwrite the database.
+3. Upstreams, admin users, sessions, cache objects, request logs, and management summaries are stored in SQLite.
+4. APK/APT expected hashes, actual-hash cache, source mappings, APT by-hash mappings, and path dictionaries are stored in Pebble.
+
+After a setting is saved in the admin console, a restart will not accidentally revert it from an old TOML file. Startup-time settings such as `server.listen`, `cache.root`, `cache.data_root`, and `hash_store.path` are marked as restart-required by the API.
 
 ### Cache Pipeline
 
@@ -329,6 +434,8 @@ APT validation is implemented in `internal/apt`:
 - `.deb` files are checked against index SHA256 when an index record is available.
 - Missing index records do not block the request.
 
+Actual file hashes are cached in Pebble. A cached actual hash is reused when file size and mtime match; by default it is recomputed at least every 24 hours to reduce long-lived stat-spoofing risk.
+
 ### CONNECT Tunnels
 
 `CONNECT` only creates a TCP tunnel:
@@ -340,6 +447,37 @@ APT validation is implemented in `internal/apt`:
 - Concurrent tunnels have a fixed limit to prevent unbounded connection usage.
 
 ## Operations Endpoints
+
+### `GET /admin/`
+
+Embedded admin console. First-time flow:
+
+1. Set `ADMIN_BOOTSTRAP_TOKEN` and start the service.
+2. Open `/admin/` and use the setup page.
+3. Enter the bootstrap token, username, and password to create the single admin.
+4. Later access uses normal admin login.
+
+The first admin console includes:
+
+- Dashboard: health, upstream status, cache-object count, CONNECT count, and hash-store status.
+- Configuration: inspect and update SQLite-backed runtime settings, including hot-reload vs restart-required markers.
+- Upstreams: add, enable, disable, and delete APK upstreams.
+- Proxy: enable/disable the generic proxy, CONNECT, non-package caching, and allowed hosts.
+- Cache: search cache objects, delete objects, dry-run batch deletion, reconcile disk metadata, clear memory cache, and prewarm URLs.
+- APK/APT: inspect indexes and parsed records, reload indexes, and trigger APT validation.
+- Logs, System, and Hash: inspect recent request logs, error logs, system information, diagnostic packages, and Pebble hash-store statistics.
+
+Frontend source lives in `internal/admin/web` and uses React + TypeScript + Vite. The production build is written to `internal/admin/static` and embedded into the Go binary. `./build.sh` runs the frontend build automatically.
+
+The admin API prefix is `/api/admin/v1` and responses use:
+
+```json
+{
+  "ok": true,
+  "data": {},
+  "error": null
+}
+```
 
 ### `GET /_health`
 
@@ -391,6 +529,8 @@ Prometheus metrics include:
 Common commands:
 
 ```sh
+npm ci --prefix internal/admin/web
+npm run --prefix internal/admin/web build
 go test ./...
 go test ./... -coverprofile=coverage.out
 go tool cover -func=coverage.out
@@ -423,11 +563,11 @@ curl http://127.0.0.1:3142/_health
 
 ## Current Limitations
 
-- No web dashboard; use `/_health` and `/metrics` for observation.
-- No dashboard authentication.
+- The admin console is single-admin only; there are no multi-user roles.
+- There is no operation audit log yet; request logs are for troubleshooting only.
+- The admin console polls APIs; it does not use WebSocket push.
 - No global request rate limiter.
 - No disk quota manager or automatic cleanup policy.
 - HTTPS APT sources are forwarded through `CONNECT`; they are not decrypted or cached.
-- `data_root` is reserved for future extensions. The current cache state is primarily disk cache plus in-memory indexes.
 
 These capabilities can be redesigned on top of the current smaller core, but the old mismatched implementations are not restored.

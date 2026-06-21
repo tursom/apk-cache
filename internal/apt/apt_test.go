@@ -39,10 +39,10 @@ func TestValidateByHash(t *testing.T) {
 	sum := sha256.Sum256(body)
 	hash := hex.EncodeToString(sum[:])
 	index := NewIndex(dir)
-	if err := index.ValidateByHash(path, "/debian/dists/bookworm/by-hash/SHA256/"+hash); err != nil {
+	if err := index.ValidateByHash(path, path, "/debian/dists/bookworm/by-hash/SHA256/"+hash); err != nil {
 		t.Fatalf("validate good hash: %v", err)
 	}
-	if err := index.ValidateByHash(path, "/debian/dists/bookworm/by-hash/SHA256/0000"); err == nil {
+	if err := index.ValidateByHash(path, path, "/debian/dists/bookworm/by-hash/SHA256/0000"); err == nil {
 		t.Fatal("expected bad hash error")
 	}
 }

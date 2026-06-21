@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
+	"github.com/tursom/apk-cache/internal/hashstore"
 	"github.com/ulikunitz/xz"
 )
 
@@ -31,12 +32,39 @@ type Index struct {
 	cacheRoot string
 	mu        sync.RWMutex
 	records   map[string]Record
+	hashStore *hashstore.Store
 }
 
 func NewIndex(cacheRoot string) *Index {
 	return &Index{
 		cacheRoot: cacheRoot,
 		records:   make(map[string]Record),
+	}
+}
+
+func (i *Index) SetHashStore(store *hashstore.Store) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.hashStore = store
+}
+
+func (i *Index) LoadExpected(records []hashstore.Expected) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for _, record := range records {
+		switch record.RecordType {
+		case hashstore.RecordAPTRelease, hashstore.RecordAPTPackage, hashstore.RecordAPTSource:
+		default:
+			continue
+		}
+		if record.TargetPath == "" {
+			continue
+		}
+		i.records[record.TargetPath] = Record{
+			Path: record.TargetPath,
+			Hash: hex.EncodeToString(record.ExpectedHash),
+			Size: record.ExpectedSize,
+		}
 	}
 }
 
@@ -100,14 +128,30 @@ func (i *Index) loadFileAs(filePath, indexPath string) error {
 
 	filename := filepath.Base(indexPath)
 	records := make(map[string]Record)
+	hashRecords := make([]hashstore.ExpectedRecord, 0)
 	switch {
 	case strings.HasPrefix(filename, "Packages"), strings.HasPrefix(filename, "Sources"):
+		recordType := hashstore.RecordAPTPackage
+		if strings.HasPrefix(filename, "Sources") {
+			recordType = hashstore.RecordAPTSource
+		}
 		for _, item := range ParsePackages(reader) {
 			if item.Filename == "" || item.SHA256 == "" {
 				continue
 			}
 			target := CachePath(i.cacheRoot, host, filepath.Join(suite, filepath.FromSlash(item.Filename)))
 			records[target] = Record{Path: target, Hash: strings.ToLower(item.SHA256), Size: item.Size}
+			sum, err := hashstore.DecodeHex(hashstore.HashSHA256, item.SHA256)
+			if err == nil {
+				hashRecords = append(hashRecords, hashstore.ExpectedRecord{
+					SourcePath:   indexPath,
+					TargetPath:   target,
+					HashKind:     hashstore.HashSHA256,
+					RecordType:   recordType,
+					ExpectedHash: sum,
+					ExpectedSize: item.Size,
+				})
+			}
 		}
 	case filename == "Release" || filename == "InRelease":
 		for _, item := range ParseRelease(reader) {
@@ -116,6 +160,27 @@ func (i *Index) loadFileAs(filePath, indexPath string) error {
 			}
 			target := CachePath(i.cacheRoot, host, filepath.Join(parentPath, filepath.FromSlash(item.Filename)))
 			records[target] = Record{Path: target, Hash: strings.ToLower(item.SHA256), Size: item.Size}
+			sum, err := hashstore.DecodeHex(hashstore.HashSHA256, item.SHA256)
+			if err == nil {
+				hashRecords = append(hashRecords, hashstore.ExpectedRecord{
+					SourcePath:   indexPath,
+					TargetPath:   target,
+					HashKind:     hashstore.HashSHA256,
+					RecordType:   hashstore.RecordAPTRelease,
+					ExpectedHash: sum,
+					ExpectedSize: item.Size,
+					ByHashHost:   host,
+				})
+			}
+		}
+	}
+
+	i.mu.RLock()
+	store := i.hashStore
+	i.mu.RUnlock()
+	if store != nil {
+		if err := store.ReplaceSource(indexPath, hashRecords); err != nil {
+			return err
 		}
 	}
 
@@ -131,6 +196,17 @@ func (i *Index) indexPathForHash(cachePath, expectedHash string) (string, bool) 
 	host, _, _, err := i.indexLocation(cachePath)
 	if err != nil {
 		return "", false
+	}
+	i.mu.RLock()
+	store := i.hashStore
+	i.mu.RUnlock()
+	if store != nil {
+		sum, err := hashstore.DecodeHex(hashstore.HashSHA256, expectedHash)
+		if err == nil {
+			if path, ok, err := store.FindAPTByHash(host, hashstore.HashSHA256, sum); err == nil && ok {
+				return path, true
+			}
+		}
 	}
 	hostRoot := filepath.Join(i.cacheRoot, "apt", host)
 
@@ -149,25 +225,72 @@ func (i *Index) indexPathForHash(cachePath, expectedHash string) (string, bool) 
 	return "", false
 }
 
-func (i *Index) ValidateByHash(filePath, requestPath string) error {
+func (i *Index) ValidateByHash(cachePath, filePath, requestPath string) error {
 	algorithm, expected, err := ParseHashPath(requestPath)
 	if err != nil {
 		return err
 	}
-	if algorithm != "sha256" {
+	kind, err := hashstore.KindFromAlgorithm(algorithm)
+	if err != nil {
+		return nil
+	}
+	sum, err := hashstore.DecodeHex(kind, expected)
+	if err != nil {
+		return err
+	}
+	i.mu.RLock()
+	store := i.hashStore
+	i.mu.RUnlock()
+	if store != nil {
+		actual, err := store.GetOrComputeActual(cachePath, filePath, kind)
+		if err != nil {
+			return err
+		}
+		if !hashstore.EqualHash(actual.ActualHash, sum) {
+			return ErrCacheCorrupted
+		}
 		return nil
 	}
 	actual, err := HashFile(filePath)
 	if err != nil {
 		return err
 	}
-	if actual != expected {
+	if actual != strings.ToLower(expected) {
 		return ErrCacheCorrupted
 	}
 	return nil
 }
 
 func (i *Index) ValidateFile(cachePath, filePath string) error {
+	i.mu.RLock()
+	store := i.hashStore
+	i.mu.RUnlock()
+	if store != nil {
+		expected, err := store.GetExpected(cachePath, hashstore.HashSHA256)
+		switch {
+		case err == nil:
+			if expected.ExpectedSize > 0 {
+				info, err := os.Stat(filePath)
+				if err != nil {
+					return err
+				}
+				if info.Size() != expected.ExpectedSize {
+					return ErrCacheCorrupted
+				}
+			}
+			actual, err := store.GetOrComputeActual(cachePath, filePath, hashstore.HashSHA256)
+			if err != nil {
+				return err
+			}
+			if !hashstore.EqualHash(actual.ActualHash, expected.ExpectedHash) {
+				return ErrCacheCorrupted
+			}
+			return nil
+		case !errors.Is(err, hashstore.ErrIndexUnavailable):
+			return err
+		}
+	}
+
 	i.mu.RLock()
 	record, ok := i.records[cachePath]
 	i.mu.RUnlock()

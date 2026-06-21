@@ -1,0 +1,11 @@
+.git
+.github
+apk-cache
+cache
+data
+config.toml
+*.test
+*.out
+internal/admin/web/node_modules
+internal/admin/web/*.tsbuildinfo
+internal/admin/static/assets

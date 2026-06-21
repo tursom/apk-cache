@@ -3,6 +3,23 @@
 [server]
 listen = ":3142"
 
+[database]
+# Empty means "${cache.data_root}/apk-cache.db".
+path = ""
+
+[admin]
+# Required only for first-time /admin/setup.
+bootstrap_token = ""
+# Prefer ADMIN_SESSION_SECRET in production.
+session_secret = ""
+
+[hash_store]
+# Empty means "${cache.data_root}/hash.pebble".
+path = ""
+rebuild_on_corruption = false
+trust_file_stat = true
+actual_revalidate_interval = "24h"
+
 [[upstreams]]
 name = "Official Alpine CDN"
 url = "https://dl-cdn.alpinelinux.org"

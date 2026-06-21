@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/tursom/apk-cache/internal/hashstore"
 )
 
 var (
@@ -32,12 +34,35 @@ type Index struct {
 	cacheRoot string
 	mu        sync.RWMutex
 	records   map[string]Record
+	hashStore *hashstore.Store
 }
 
 func NewIndex(cacheRoot string) *Index {
 	return &Index{
 		cacheRoot: cacheRoot,
 		records:   make(map[string]Record),
+	}
+}
+
+func (i *Index) SetHashStore(store *hashstore.Store) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.hashStore = store
+}
+
+func (i *Index) LoadExpected(records []hashstore.Expected) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	for _, record := range records {
+		if record.RecordType != hashstore.RecordAPKPackage || record.TargetPath == "" {
+			continue
+		}
+		i.records[record.TargetPath] = Record{
+			Path:      record.TargetPath,
+			Algorithm: record.HashKind.Algorithm(),
+			Hash:      append([]byte(nil), record.ExpectedHash...),
+			Size:      record.ExpectedSize,
+		}
 	}
 }
 
@@ -75,6 +100,7 @@ func (i *Index) LoadFile(cachePath string) error {
 
 	dir := filepath.Dir(cachePath)
 	records := make(map[string]Record)
+	hashRecords := make([]hashstore.ExpectedRecord, 0)
 	for _, pkg := range ParseIndex(body) {
 		if pkg.Name == "" || pkg.Version == "" || pkg.Algorithm == "" || len(pkg.Hash) == 0 {
 			continue
@@ -85,6 +111,26 @@ func (i *Index) LoadFile(cachePath string) error {
 			Algorithm: pkg.Algorithm,
 			Hash:      append([]byte(nil), pkg.Hash...),
 			Size:      pkg.Size,
+		}
+		kind, err := hashstore.KindFromAlgorithm(pkg.Algorithm)
+		if err == nil {
+			hashRecords = append(hashRecords, hashstore.ExpectedRecord{
+				SourcePath:   cachePath,
+				TargetPath:   target,
+				HashKind:     kind,
+				RecordType:   hashstore.RecordAPKPackage,
+				ExpectedHash: append([]byte(nil), pkg.Hash...),
+				ExpectedSize: pkg.Size,
+			})
+		}
+	}
+
+	i.mu.RLock()
+	store := i.hashStore
+	i.mu.RUnlock()
+	if store != nil {
+		if err := store.ReplaceSource(cachePath, hashRecords); err != nil {
+			return err
 		}
 	}
 
@@ -97,6 +143,35 @@ func (i *Index) LoadFile(cachePath string) error {
 }
 
 func (i *Index) ValidatePackage(cachePath, filePath string) error {
+	i.mu.RLock()
+	store := i.hashStore
+	i.mu.RUnlock()
+	if store != nil {
+		expected, err := store.GetExpectedAny(cachePath)
+		switch {
+		case err == nil:
+			if expected.ExpectedSize > 0 {
+				info, err := os.Stat(filePath)
+				if err != nil {
+					return err
+				}
+				if info.Size() != expected.ExpectedSize {
+					return ErrHashMismatch
+				}
+			}
+			actual, err := store.GetOrComputeActual(cachePath, filePath, expected.HashKind)
+			if err != nil {
+				return err
+			}
+			if !hashstore.EqualHash(actual.ActualHash, expected.ExpectedHash) {
+				return ErrHashMismatch
+			}
+			return nil
+		case !errors.Is(err, hashstore.ErrIndexUnavailable):
+			return err
+		}
+	}
+
 	i.mu.RLock()
 	record, ok := i.records[cachePath]
 	i.mu.RUnlock()

@@ -127,6 +127,16 @@ func (c *Memory) Delete(key string) {
 	}
 }
 
+func (c *Memory) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.items = make(map[string]*Item)
+	c.currentSize = 0
+	if c.metrics != nil {
+		c.metrics.UpdateMemory(c.currentSize, c.maxSize, len(c.items))
+	}
+}
+
 func (c *Memory) Stop() {
 	c.stopOnce.Do(func() {
 		close(c.stopCh)

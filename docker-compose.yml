@@ -1,0 +1,58 @@
+services:
+  apk-cache:
+    image: ${APK_CACHE_IMAGE:-ghcr.io/tursom/apk-cache:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GO_IMAGE: ${GO_IMAGE:-golang:alpine}
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-alpine}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-alpine:latest}
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${APK_CACHE_HTTP_PORT:-3142}:3142"
+    environment:
+      LISTEN: ":3142"
+      CACHE_ROOT: /app/cache
+      DATA_ROOT: /app/data
+      DATABASE_PATH: ${DATABASE_PATH:-}
+      ADMIN_BOOTSTRAP_TOKEN: ${ADMIN_BOOTSTRAP_TOKEN:-}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET:-}
+      HASH_STORE_PATH: ${HASH_STORE_PATH:-}
+      HASH_STORE_REBUILD_ON_CORRUPTION: ${HASH_STORE_REBUILD_ON_CORRUPTION:-false}
+      HASH_STORE_TRUST_FILE_STAT: ${HASH_STORE_TRUST_FILE_STAT:-true}
+      HASH_STORE_ACTUAL_REVALIDATE_INTERVAL: ${HASH_STORE_ACTUAL_REVALIDATE_INTERVAL:-24h}
+      APK_UPSTREAM: ${APK_UPSTREAM:-https://dl-cdn.alpinelinux.org}
+      APK_UPSTREAM_PROXY: ${APK_UPSTREAM_PROXY:-}
+      UPSTREAM_PROXY: ${UPSTREAM_PROXY:-}
+      INDEX_TTL: ${INDEX_TTL:-24h}
+      PACKAGE_TTL: ${PACKAGE_TTL:-720h}
+      MEMORY_CACHE_ENABLED: ${MEMORY_CACHE_ENABLED:-true}
+      MEMORY_CACHE_SIZE: ${MEMORY_CACHE_SIZE:-256MB}
+      MEMORY_CACHE_MAX_ITEM_SIZE: ${MEMORY_CACHE_MAX_ITEM_SIZE:-16MB}
+      MEMORY_CACHE_TTL: ${MEMORY_CACHE_TTL:-30m}
+      MEMORY_CACHE_MAX_ITEMS: ${MEMORY_CACHE_MAX_ITEMS:-2048}
+      TRANSPORT_TIMEOUT: ${TRANSPORT_TIMEOUT:-30s}
+      TRANSPORT_IDLE_CONN_TIMEOUT: ${TRANSPORT_IDLE_CONN_TIMEOUT:-90s}
+      TRANSPORT_MAX_IDLE_CONNS: ${TRANSPORT_MAX_IDLE_CONNS:-128}
+      APK_ENABLED: ${APK_ENABLED:-true}
+      APK_VERIFY_HASH: ${APK_VERIFY_HASH:-true}
+      APK_VERIFY_SIGNATURE: ${APK_VERIFY_SIGNATURE:-true}
+      APT_ENABLED: ${APT_ENABLED:-true}
+      APT_VERIFY_HASH: ${APT_VERIFY_HASH:-true}
+      APT_LOAD_INDEX_ASYNC: ${APT_LOAD_INDEX_ASYNC:-true}
+      PROXY_ENABLED: ${PROXY_ENABLED:-true}
+      PROXY_ALLOW_CONNECT: ${PROXY_ALLOW_CONNECT:-true}
+      PROXY_CACHE_NON_PACKAGE_REQUESTS: ${PROXY_CACHE_NON_PACKAGE_REQUESTS:-false}
+      PROXY_ALLOWED_HOSTS: ${PROXY_ALLOWED_HOSTS:-}
+    volumes:
+      - ${APK_CACHE_CACHE_DIR:-./cache}:/app/cache
+      - ${APK_CACHE_DATA_DIR:-./data}:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3142/_health >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

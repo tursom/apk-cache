@@ -23,7 +23,9 @@ import (
 	aptpkg "github.com/tursom/apk-cache/internal/apt"
 	cachepkg "github.com/tursom/apk-cache/internal/cache"
 	"github.com/tursom/apk-cache/internal/config"
+	"github.com/tursom/apk-cache/internal/hashstore"
 	"github.com/tursom/apk-cache/internal/metrics"
+	"github.com/tursom/apk-cache/internal/store"
 	"github.com/tursom/apk-cache/internal/upstream"
 )
 
@@ -51,10 +53,13 @@ type App struct {
 	cfg *config.Config
 
 	server    *http.Server
+	store     *store.Store
+	hashStore *hashstore.Store
 	metrics   *metrics.Metrics
 	clients   *HTTPClientFactory
 	mem       *cachepkg.Memory
 	memMax    int64
+	startedAt time.Time
 	locks     *cachepkg.KeyLocks
 	indexTTL  time.Duration
 	pkgTTL    time.Duration
@@ -65,6 +70,9 @@ type App struct {
 	apkIndex     *apkpkg.Index
 	apkVerifier  *apkpkg.Verifier
 	aptIndex     *aptpkg.Index
+
+	loginMu       sync.Mutex
+	loginFailures map[string]loginFailure
 }
 
 type HTTPClientFactory struct {
@@ -77,24 +85,79 @@ type HTTPClientFactory struct {
 }
 
 func New(cfg *config.Config) (*App, error) {
+	if cfg.Database.Path == "" {
+		cfg.Database.Path = store.DefaultDatabasePath(cfg)
+	}
+	if cfg.HashStore.Path == "" {
+		cfg.HashStore.Path = hashstore.DefaultPath(cfg.Cache.DataRoot)
+	}
+	sqlStore, err := store.Open(cfg.Database.Path)
+	if err != nil {
+		return nil, err
+	}
+	runtimeCfg, _, err := sqlStore.EnsureRuntimeConfig(context.Background(), cfg)
+	if err != nil {
+		_ = sqlStore.Close()
+		return nil, err
+	}
+	cfg = runtimeCfg
+
 	indexTTL, err := time.ParseDuration(cfg.Cache.IndexTTL)
 	if err != nil {
+		_ = sqlStore.Close()
 		return nil, err
 	}
 	packageTTL, err := time.ParseDuration(cfg.Cache.PackageTTL)
 	if err != nil {
+		_ = sqlStore.Close()
 		return nil, err
 	}
 	if err := os.MkdirAll(cfg.Cache.Root, 0o755); err != nil {
+		_ = sqlStore.Close()
 		return nil, err
 	}
 	if err := os.MkdirAll(cfg.Cache.DataRoot, 0o755); err != nil {
+		_ = sqlStore.Close()
+		return nil, err
+	}
+	actualRevalidate, err := time.ParseDuration(cfg.HashStore.ActualRevalidateInterval)
+	if err != nil {
+		_ = sqlStore.Close()
+		return nil, err
+	}
+	rebuiltAfterCorruption := false
+	kvStore, err := hashstore.Open(hashstore.Config{
+		Path:                     cfg.HashStore.Path,
+		CacheRoot:                cfg.Cache.Root,
+		TrustFileStat:            cfg.HashStore.TrustFileStat,
+		ActualRevalidateInterval: actualRevalidate,
+	})
+	if err != nil && cfg.HashStore.RebuildOnCorruption {
+		slog.Warn("rebuild hash store after open failure", "path", cfg.HashStore.Path, "err", err)
+		if removeErr := os.RemoveAll(cfg.HashStore.Path); removeErr != nil {
+			_ = sqlStore.Close()
+			return nil, removeErr
+		}
+		kvStore, err = hashstore.Open(hashstore.Config{
+			Path:                     cfg.HashStore.Path,
+			CacheRoot:                cfg.Cache.Root,
+			TrustFileStat:            cfg.HashStore.TrustFileStat,
+			ActualRevalidateInterval: actualRevalidate,
+		})
+		if err == nil {
+			rebuiltAfterCorruption = true
+		}
+	}
+	if err != nil {
+		_ = sqlStore.Close()
 		return nil, err
 	}
 
 	m := metrics.New()
 	clients, err := NewHTTPClientFactory(cfg.Transport)
 	if err != nil {
+		_ = kvStore.Close()
+		_ = sqlStore.Close()
 		return nil, err
 	}
 
@@ -103,14 +166,20 @@ func New(cfg *config.Config) (*App, error) {
 	if cfg.Cache.Memory.Enabled {
 		maxSize, err := cachepkg.ParseSize(cfg.Cache.Memory.MaxSize)
 		if err != nil {
+			_ = kvStore.Close()
+			_ = sqlStore.Close()
 			return nil, err
 		}
 		maxItemSize, err = cachepkg.ParseSize(cfg.Cache.Memory.MaxItemSize)
 		if err != nil {
+			_ = kvStore.Close()
+			_ = sqlStore.Close()
 			return nil, err
 		}
 		ttl, err := time.ParseDuration(cfg.Cache.Memory.TTL)
 		if err != nil {
+			_ = kvStore.Close()
+			_ = sqlStore.Close()
 			return nil, err
 		}
 		mem = cachepkg.NewMemory(maxSize, cfg.Cache.Memory.MaxItems, ttl, m)
@@ -128,29 +197,65 @@ func New(cfg *config.Config) (*App, error) {
 
 	verifier, err := apkpkg.NewVerifier(cfg.APK.KeysDir)
 	if err != nil {
+		_ = kvStore.Close()
+		_ = sqlStore.Close()
 		return nil, err
 	}
 
+	apkIndex := apkpkg.NewIndex(cfg.Cache.Root)
+	apkIndex.SetHashStore(kvStore)
+	aptIndex := aptpkg.NewIndex(cfg.Cache.Root)
+	aptIndex.SetHashStore(kvStore)
+
 	a := &App{
-		cfg:          cfg,
-		metrics:      m,
-		clients:      clients,
-		mem:          mem,
-		memMax:       maxItemSize,
-		locks:        cachepkg.NewKeyLocks(),
-		indexTTL:     indexTTL,
-		pkgTTL:       packageTTL,
-		connectCh:    make(chan struct{}, defaultConnectCap),
-		apkUpstreams: apkManager,
-		apkIndex:     apkpkg.NewIndex(cfg.Cache.Root),
-		apkVerifier:  verifier,
-		aptIndex:     aptpkg.NewIndex(cfg.Cache.Root),
+		cfg:           cfg,
+		store:         sqlStore,
+		hashStore:     kvStore,
+		metrics:       m,
+		clients:       clients,
+		mem:           mem,
+		memMax:        maxItemSize,
+		startedAt:     time.Now().UTC(),
+		locks:         cachepkg.NewKeyLocks(),
+		indexTTL:      indexTTL,
+		pkgTTL:        packageTTL,
+		connectCh:     make(chan struct{}, defaultConnectCap),
+		apkUpstreams:  apkManager,
+		apkIndex:      apkIndex,
+		apkVerifier:   verifier,
+		aptIndex:      aptIndex,
+		loginFailures: make(map[string]loginFailure),
 	}
-	if err := a.apkIndex.LoadFromRoot(cfg.Cache.Root); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("load apk indexes", "err", err)
+	hashEmpty, err := kvStore.Empty()
+	if err != nil {
+		_ = kvStore.Close()
+		_ = sqlStore.Close()
+		return nil, err
 	}
-	if err := a.aptIndex.LoadFromRoot(filepath.Join(cfg.Cache.Root, "apt")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Warn("load apt indexes", "err", err)
+	if hashEmpty {
+		if err := a.apkIndex.LoadFromRoot(cfg.Cache.Root); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("load apk indexes", "err", err)
+		}
+		if err := a.aptIndex.LoadFromRoot(filepath.Join(cfg.Cache.Root, "apt")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("load apt indexes", "err", err)
+		}
+		if rebuiltAfterCorruption {
+			kvStore.MarkRebuilt("corruption")
+		} else {
+			kvStore.MarkRebuilt("empty_or_incompatible")
+		}
+	} else {
+		expected, err := kvStore.ListExpected()
+		if err != nil {
+			_ = kvStore.Close()
+			_ = sqlStore.Close()
+			return nil, err
+		}
+		a.apkIndex.LoadExpected(expected)
+		a.aptIndex.LoadExpected(expected)
+		if rebuiltAfterCorruption {
+			kvStore.MarkRebuilt("corruption")
+		}
 	}
 
 	a.server = &http.Server{
@@ -227,6 +332,12 @@ func (a *App) Run(ctx context.Context) error {
 		a.mem.Stop()
 	}
 	a.bgWg.Wait()
+	if err := a.hashStore.Close(); err != nil {
+		slog.Warn("hash store close", "err", err)
+	}
+	if err := a.store.Close(); err != nil {
+		slog.Warn("sqlite store close", "err", err)
+	}
 	return nil
 }
 
@@ -235,25 +346,38 @@ func (a *App) Handler() http.Handler {
 }
 
 func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	lw := &loggingResponseWriter{ResponseWriter: w}
+	start := time.Now()
+	defer func() {
+		a.recordRequest(r, lw, time.Since(start), "")
+	}()
 	defer func() {
 		if rec := recover(); rec != nil {
 			slog.Error("panic recovered", "panic", rec, "stack", string(debug.Stack()))
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			http.Error(lw, "Internal Server Error", http.StatusInternalServerError)
 		}
 	}()
 
 	switch {
+	case r.URL.Path == "/admin" && r.Method == http.MethodGet:
+		http.Redirect(lw, r, "/admin/", http.StatusFound)
+	case strings.HasPrefix(r.URL.Path, "/admin/assets/") && r.Method == http.MethodGet:
+		a.handleAdminAsset(lw, r)
+	case strings.HasPrefix(r.URL.Path, "/admin/") && r.Method == http.MethodGet:
+		a.handleAdminPage(lw, r)
+	case strings.HasPrefix(r.URL.Path, "/api/admin/v1/"):
+		a.handleAdminAPI(lw, r)
 	case r.URL.Path == "/_health" && r.Method == http.MethodGet:
-		a.handleHealth(w)
+		a.handleHealth(lw)
 	case r.URL.Path == "/metrics" && r.Method == http.MethodGet:
-		promhttp.HandlerFor(a.metrics.Registry(), promhttp.HandlerOpts{}).ServeHTTP(w, r)
+		promhttp.HandlerFor(a.metrics.Registry(), promhttp.HandlerOpts{}).ServeHTTP(lw, r)
 	case r.Method == http.MethodConnect:
-		if err := a.handleConnect(w, r); err != nil {
-			writeError(w, err)
+		if err := a.handleConnect(lw, r); err != nil {
+			writeError(lw, err)
 		}
 	default:
-		if err := a.routeHTTP(w, r); err != nil {
-			writeError(w, err)
+		if err := a.routeHTTP(lw, r); err != nil {
+			writeError(lw, err)
 		}
 	}
 }
@@ -275,6 +399,9 @@ func (a *App) routeHTTP(w http.ResponseWriter, r *http.Request) error {
 type cacheRequest struct {
 	cachePath     string
 	cacheClass    string
+	protocol      string
+	host          string
+	requestPath   string
 	storeInMemory bool
 	fetch         func(context.Context) (*http.Response, error)
 	validateCache func(context.Context, string) error
@@ -341,6 +468,7 @@ func (a *App) tryDisk(w http.ResponseWriter, r *http.Request, req cacheRequest, 
 	}
 	if ttl > 0 && time.Since(info.ModTime()) > ttl {
 		_ = os.Remove(req.cachePath)
+		a.deleteHashMetadata(req.cachePath, req.cacheClass)
 		if a.mem != nil {
 			a.mem.Delete(req.cachePath)
 		}
@@ -350,6 +478,7 @@ func (a *App) tryDisk(w http.ResponseWriter, r *http.Request, req cacheRequest, 
 		if err := req.validateCache(r.Context(), req.cachePath); err != nil {
 			a.metrics.ValidationFailures.Inc()
 			_ = os.Remove(req.cachePath)
+			a.deleteHashMetadata(req.cachePath, req.cacheClass)
 			if a.mem != nil {
 				a.mem.Delete(req.cachePath)
 			}
@@ -367,6 +496,7 @@ func (a *App) tryDisk(w http.ResponseWriter, r *http.Request, req cacheRequest, 
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	http.ServeContent(w, r, filepath.Base(req.cachePath), info.ModTime(), file)
 	a.metrics.RecordCacheHit(info.Size())
+	a.recordCacheObject(r.Context(), req, info.Size(), "", "ok", "valid")
 
 	if req.storeInMemory {
 		a.cacheDiskFileInMemory(req.cachePath, info, http.Header{
@@ -431,6 +561,7 @@ func (a *App) fetchAndStore(ctx context.Context, w http.ResponseWriter, resp *ht
 			if errors.Is(err, ErrSoftCacheBypass) {
 				a.metrics.APKBypassResponses.Inc()
 			}
+			a.deleteHashMetadata(req.cachePath, req.cacheClass)
 			if a.mem != nil {
 				a.mem.Delete(req.cachePath)
 			}
@@ -443,6 +574,7 @@ func (a *App) fetchAndStore(ctx context.Context, w http.ResponseWriter, resp *ht
 	if req.commit != nil {
 		if err := req.commit(ctx, req.cachePath); err != nil {
 			_ = os.Remove(req.cachePath)
+			a.deleteHashMetadata(req.cachePath, req.cacheClass)
 			if a.mem != nil {
 				a.mem.Delete(req.cachePath)
 			}
@@ -450,6 +582,7 @@ func (a *App) fetchAndStore(ctx context.Context, w http.ResponseWriter, resp *ht
 		}
 	}
 	a.metrics.RecordCacheMiss(result.downloaded)
+	a.recordCacheObject(ctx, req, result.downloaded, resp.Header.Get("Content-Type"), "ok", "valid")
 
 	if req.storeInMemory {
 		if info, err := os.Stat(req.cachePath); err == nil {
@@ -473,6 +606,16 @@ func (a *App) cacheDiskFileInMemory(cachePath string, info os.FileInfo, headers 
 		return
 	}
 	a.mem.Set(cachePath, data, headers, status, info.ModTime())
+}
+
+func (a *App) deleteHashMetadata(cachePath, cacheClass string) {
+	if a.hashStore == nil {
+		return
+	}
+	_ = a.hashStore.DeleteActual(cachePath)
+	if cacheClass == "index" || apkpkg.IsIndexFile(cachePath) || aptpkg.IsIndexFile(cachePath) {
+		_ = a.hashStore.DeleteSource(cachePath)
+	}
 }
 
 func (a *App) writeResponse(w http.ResponseWriter, resp *http.Response, cacheHeader string) {
@@ -543,6 +686,9 @@ func (a *App) handleAPK(w http.ResponseWriter, r *http.Request, path string) err
 	req := cacheRequest{
 		cachePath:     cachePath,
 		cacheClass:    cacheClass,
+		protocol:      "apk",
+		host:          "apk",
+		requestPath:   path,
 		storeInMemory: storeMemory,
 		fetch: func(ctx context.Context) (*http.Response, error) {
 			return a.apkUpstreams.Fetch(ctx, path, r.Header)
@@ -621,6 +767,9 @@ func (a *App) handleAPT(w http.ResponseWriter, r *http.Request) error {
 	req := cacheRequest{
 		cachePath:     cachePath,
 		cacheClass:    cacheClass,
+		protocol:      "apt",
+		host:          target.Host,
+		requestPath:   target.Path,
 		storeInMemory: storeMemory,
 		fetch: func(ctx context.Context) (*http.Response, error) {
 			upstreamReq, err := http.NewRequestWithContext(ctx, r.Method, target.String(), nil)
@@ -670,7 +819,7 @@ func (a *App) validateAPT(cachePath, filePath, requestPath string) error {
 		return nil
 	}
 	if aptpkg.IsHashRequest(requestPath) {
-		return a.aptIndex.ValidateByHash(filePath, requestPath)
+		return a.aptIndex.ValidateByHash(cachePath, filePath, requestPath)
 	}
 	return a.aptIndex.ValidateFile(cachePath, filePath)
 }
@@ -700,6 +849,9 @@ func (a *App) handleProxyHTTP(w http.ResponseWriter, r *http.Request) error {
 		return a.serveCached(w, r, cacheRequest{
 			cachePath:     cachePath,
 			cacheClass:    "package",
+			protocol:      "proxy",
+			host:          target.Host,
+			requestPath:   target.Path,
 			storeInMemory: false,
 			fetch: func(ctx context.Context) (*http.Response, error) {
 				return a.fetchProxyHTTP(ctx, r, target)

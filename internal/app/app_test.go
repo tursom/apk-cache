@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/tursom/apk-cache/internal/config"
+	"github.com/tursom/apk-cache/internal/hashstore"
 )
 
 func testConfig(t *testing.T, upstreamURL string) *config.Config {
@@ -148,7 +149,8 @@ func TestAPTByHashFailureStreamsButDoesNotCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256([]byte("expected"))
-	target := up.URL + "/debian/dists/bookworm/main/binary-amd64/by-hash/SHA256/" + hex.EncodeToString(sum[:])
+	requestPath := "/debian/dists/bookworm/main/binary-amd64/by-hash/SHA256/" + hex.EncodeToString(sum[:])
+	target := up.URL + requestPath
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
 		a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
@@ -158,6 +160,10 @@ func TestAPTByHashFailureStreamsButDoesNotCache(t *testing.T) {
 	}
 	if hits.Load() != 2 {
 		t.Fatalf("failed validation response should not cache, hits=%d", hits.Load())
+	}
+	cachePath := aptCachePath(t, a.cfg.Cache.Root, up.URL, requestPath)
+	if _, ok, err := a.hashStore.GetActual(cachePath, hashstore.HashSHA256); err != nil || ok {
+		t.Fatalf("failed validation should delete actual hash metadata: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -226,6 +232,116 @@ func TestValidateAPKHashAndSignatureBranches(t *testing.T) {
 	}
 	if err := a.validateAPK(unsignedPath, unsignedPath, "package", true); !errors.Is(err, ErrSoftCacheBypass) {
 		t.Fatalf("expected soft bypass, got %v", err)
+	}
+}
+
+func TestAPKHashStorePersistsAcrossRestartWithoutIndexScan(t *testing.T) {
+	cfg := testConfig(t, "http://example.invalid")
+	cfg.APK.VerifyHash = true
+	cfg.APK.VerifySignature = false
+	first, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	packageBody := []byte("apk payload after restart")
+	sum := sha256.Sum256(packageBody)
+	indexPath := filepath.Join(cfg.Cache.Root, "alpine", "v3.23", "main", "x86_64", "APKINDEX.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	indexBody := []byte("P:hello\nV:1.0-r0\nS:" + strconv.Itoa(len(packageBody)) + "\nC:" + hex.EncodeToString(sum[:]) + "\n\n")
+	if err := os.WriteFile(indexPath, testGzipTar(t, map[string][]byte{"APKINDEX": indexBody}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.apkIndex.LoadFile(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	packagePath := filepath.Join(filepath.Dir(indexPath), "hello-1.0-r0.apk")
+	if err := os.WriteFile(packagePath, packageBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.validateAPK(packagePath, packagePath, "package", false); err != nil {
+		t.Fatalf("first validate: %v", err)
+	}
+	if err := first.hashStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(indexPath); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.store.Close()
+	defer second.hashStore.Close()
+	second.apkIndex.SetHashStore(nil)
+	if err := second.validateAPK(packagePath, packagePath, "package", false); err != nil {
+		t.Fatalf("validate after restart without APKINDEX scan: %v", err)
+	}
+}
+
+func TestAPKHashStoreRebuildsFromDiskIndexesWhenDeleted(t *testing.T) {
+	cfg := testConfig(t, "http://example.invalid")
+	cfg.APK.VerifyHash = true
+	cfg.APK.VerifySignature = false
+	first, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	packageBody := []byte("apk payload after hash store rebuild")
+	sum := sha256.Sum256(packageBody)
+	indexPath := filepath.Join(cfg.Cache.Root, "alpine", "v3.23", "main", "x86_64", "APKINDEX.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(indexPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	indexBody := []byte("P:hello\nV:1.0-r0\nS:" + strconv.Itoa(len(packageBody)) + "\nC:" + hex.EncodeToString(sum[:]) + "\n\n")
+	if err := os.WriteFile(indexPath, testGzipTar(t, map[string][]byte{"APKINDEX": indexBody}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.apkIndex.LoadFile(indexPath); err != nil {
+		t.Fatal(err)
+	}
+	packagePath := filepath.Join(filepath.Dir(indexPath), "hello-1.0-r0.apk")
+	if err := os.WriteFile(packagePath, packageBody, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.validateAPK(packagePath, packagePath, "package", false); err != nil {
+		t.Fatalf("first validate: %v", err)
+	}
+	hashStorePath := cfg.HashStore.Path
+	if err := first.hashStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(hashStorePath); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.store.Close()
+	defer second.hashStore.Close()
+	stats, err := second.hashStore.Stats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.LastRebuildUnixNS == 0 || stats.LastRebuildReason != "empty_or_incompatible" || stats.CorruptionStatus != "ok" {
+		t.Fatalf("unexpected rebuild stats: %#v", stats)
+	}
+	second.apkIndex.SetHashStore(nil)
+	if err := second.validateAPK(packagePath, packagePath, "package", false); err != nil {
+		t.Fatalf("validate after hash store rebuild: %v", err)
 	}
 }
 

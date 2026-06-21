@@ -2,5 +2,7 @@
 /cache/
 /data/
 /config.toml
+/internal/admin/web/node_modules/
+/internal/admin/web/*.tsbuildinfo
 *.test
 *.out
