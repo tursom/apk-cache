@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,26 @@ type Setting struct {
 	HotReload       bool            `json:"hot_reload"`
 }
 
+type APTMirror struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	PublicPrefix string `json:"public_prefix"`
+	UpstreamURL  string `json:"upstream_url"`
+	Proxy        string `json:"proxy"`
+	Enabled      bool   `json:"enabled"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
+type ProxyHostRule struct {
+	ID          int64  `json:"id"`
+	Host        string `json:"host"`
+	Enabled     bool   `json:"enabled"`
+	Description string `json:"description"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
 type Upstream struct {
 	ID        int64  `json:"id"`
 	Name      string `json:"name"`
@@ -44,13 +65,14 @@ type Upstream struct {
 }
 
 type AdminUser struct {
-	ID           int64
-	Username     string
-	PasswordHash string
-	PasswordAlgo string
-	CreatedAt    string
-	UpdatedAt    string
-	LastLoginAt  sql.NullString
+	ID                  int64
+	Username            string
+	PasswordHash        string
+	PasswordAlgo        string
+	IsDefaultCredential bool
+	CreatedAt           string
+	UpdatedAt           string
+	LastLoginAt         sql.NullString
 }
 
 type AdminSession struct {
@@ -185,6 +207,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			username TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL,
 			password_algo TEXT NOT NULL,
+			is_default_credential INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			last_login_at TEXT
@@ -221,6 +244,28 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_upstreams_kind_enabled_priority
 			ON upstreams(kind, enabled, priority)`,
+		`CREATE TABLE IF NOT EXISTS apt_mirrors (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			public_prefix TEXT NOT NULL UNIQUE,
+			upstream_url TEXT NOT NULL,
+			proxy TEXT NOT NULL DEFAULT '',
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_apt_mirrors_enabled_prefix
+			ON apt_mirrors(enabled, public_prefix)`,
+		`CREATE TABLE IF NOT EXISTS proxy_host_rules (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			host TEXT NOT NULL UNIQUE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			description TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_proxy_host_rules_enabled_host
+			ON proxy_host_rules(enabled, host)`,
 		`CREATE TABLE IF NOT EXISTS cache_objects (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			protocol TEXT NOT NULL,
@@ -296,6 +341,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.ensureColumn(ctx, "admin_users", "is_default_credential", `ALTER TABLE admin_users ADD COLUMN is_default_credential INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -310,6 +358,12 @@ func (s *Store) EnsureRuntimeConfig(ctx context.Context, cfg *config.Config) (*c
 			return nil, false, err
 		}
 		imported = true
+	}
+	if err := s.ensureRuntimeSettingDefaults(ctx, cfg); err != nil {
+		return nil, false, err
+	}
+	if err := s.ensureProxyHostRulesFromAllowedHosts(ctx); err != nil {
+		return nil, false, err
 	}
 	loaded, err := s.LoadRuntimeConfig(ctx, cfg)
 	return loaded, imported, err
@@ -345,6 +399,16 @@ func (s *Store) ImportRuntimeConfig(ctx context.Context, cfg *config.Config) err
 			return err
 		}
 	}
+	for _, host := range cfg.Proxy.AllowedHosts {
+		host = normalizeHostRule(host)
+		if host == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO proxy_host_rules(host, enabled, description, created_at, updated_at) VALUES(?, 1, ?, ?, ?)`,
+			host, "imported from proxy.allowed_hosts", nowText(), nowText()); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -365,6 +429,9 @@ func (s *Store) LoadRuntimeConfig(ctx context.Context, base *config.Config) (*co
 		if def == nil {
 			continue
 		}
+		if !settingEditable(def) {
+			continue
+		}
 		if err := def.apply(cfg, json.RawMessage(raw)); err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
@@ -372,13 +439,16 @@ func (s *Store) LoadRuntimeConfig(ctx context.Context, base *config.Config) (*co
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	upstreams, err := s.ListUpstreams(ctx, true)
+	allUpstreams, err := s.ListUpstreams(ctx, false)
 	if err != nil {
 		return nil, err
 	}
-	if len(upstreams) > 0 {
-		cfg.Upstreams = make([]config.UpstreamConfig, 0, len(upstreams))
-		for _, up := range upstreams {
+	if len(allUpstreams) > 0 {
+		cfg.Upstreams = cfg.Upstreams[:0]
+		for _, up := range allUpstreams {
+			if !up.Enabled {
+				continue
+			}
 			cfg.Upstreams = append(cfg.Upstreams, config.UpstreamConfig{
 				Name:  up.Name,
 				URL:   up.URL,
@@ -386,6 +456,14 @@ func (s *Store) LoadRuntimeConfig(ctx context.Context, base *config.Config) (*co
 				Kind:  up.Kind,
 			})
 		}
+	}
+	hostRules, err := s.ListProxyHostRules(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Proxy.AllowedHosts = cfg.Proxy.AllowedHosts[:0]
+	for _, rule := range hostRules {
+		cfg.Proxy.AllowedHosts = append(cfg.Proxy.AllowedHosts, rule.Host)
 	}
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
@@ -418,6 +496,22 @@ func (s *Store) ListSettings(ctx context.Context) ([]Setting, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) ExistingSettingKeys(ctx context.Context, keys []string) ([]string, error) {
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		var exists int
+		err := s.db.QueryRowContext(ctx, `SELECT 1 FROM settings WHERE key = ?`, key).Scan(&exists)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, key)
+	}
+	return out, nil
+}
+
 func (s *Store) UpdateSettings(ctx context.Context, base *config.Config, values map[string]json.RawMessage) (*config.Config, []string, error) {
 	next, restartKeys, err := s.ValidateSettings(ctx, base, values)
 	if err != nil {
@@ -430,8 +524,16 @@ func (s *Store) UpdateSettings(ctx context.Context, base *config.Config, values 
 	defer func() { _ = tx.Rollback() }()
 	for key, raw := range values {
 		def := findSettingDef(key)
-		if _, err := tx.ExecContext(ctx, `UPDATE settings SET value_json = ?, value_type = ?, restart_required = ?, updated_at = ? WHERE key = ?`,
-			string(raw), def.valueType, boolInt(def.restartRequired), nowText(), key); err != nil {
+		if !settingEditable(def) {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key, value_json, value_type, restart_required, updated_at) VALUES(?, ?, ?, ?, ?)
+			ON CONFLICT(key) DO UPDATE SET
+				value_json = excluded.value_json,
+				value_type = excluded.value_type,
+				restart_required = excluded.restart_required,
+				updated_at = excluded.updated_at`,
+			key, string(raw), def.valueType, boolInt(def.restartRequired), nowText()); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -452,6 +554,16 @@ func (s *Store) ValidateSettings(ctx context.Context, base *config.Config, value
 		if def == nil {
 			return nil, nil, fmt.Errorf("unknown setting %q", key)
 		}
+		if !settingEditable(def) {
+			current, err := def.marshal(next)
+			if err != nil {
+				return nil, nil, err
+			}
+			if string(current) != string(raw) {
+				return nil, nil, fmt.Errorf("%s is read-only", key)
+			}
+			continue
+		}
 		if err := def.apply(next, raw); err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", key, err)
 		}
@@ -471,28 +583,42 @@ func (s *Store) CountAdmins(ctx context.Context) (int, error) {
 	return count, err
 }
 
-func (s *Store) CreateAdmin(ctx context.Context, username, passwordHash, passwordAlgo string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO admin_users(id, username, password_hash, password_algo, created_at, updated_at) VALUES(1, ?, ?, ?, ?, ?)`,
-		username, passwordHash, passwordAlgo, nowText(), nowText())
+func (s *Store) CreateAdmin(ctx context.Context, username, passwordHash, passwordAlgo string, defaultCredential ...bool) error {
+	isDefault := false
+	if len(defaultCredential) > 0 {
+		isDefault = defaultCredential[0]
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO admin_users(id, username, password_hash, password_algo, is_default_credential, created_at, updated_at) VALUES(1, ?, ?, ?, ?, ?, ?)`,
+		username, passwordHash, passwordAlgo, boolInt(isDefault), nowText(), nowText())
 	return err
 }
 
 func (s *Store) GetAdminByUsername(ctx context.Context, username string) (AdminUser, error) {
 	var user AdminUser
-	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, password_algo, created_at, updated_at, last_login_at FROM admin_users WHERE username = ?`, username).
-		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.PasswordAlgo, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt)
+	var isDefault int
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, password_algo, is_default_credential, created_at, updated_at, last_login_at FROM admin_users WHERE username = ?`, username).
+		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.PasswordAlgo, &isDefault, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt)
+	user.IsDefaultCredential = isDefault != 0
 	return user, err
 }
 
 func (s *Store) GetAdminByID(ctx context.Context, id int64) (AdminUser, error) {
 	var user AdminUser
-	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, password_algo, created_at, updated_at, last_login_at FROM admin_users WHERE id = ?`, id).
-		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.PasswordAlgo, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt)
+	var isDefault int
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, password_algo, is_default_credential, created_at, updated_at, last_login_at FROM admin_users WHERE id = ?`, id).
+		Scan(&user.ID, &user.Username, &user.PasswordHash, &user.PasswordAlgo, &isDefault, &user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt)
+	user.IsDefaultCredential = isDefault != 0
 	return user, err
 }
 
+func (s *Store) UpdateAdminUsername(ctx context.Context, id int64, username string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE admin_users SET username = ?, is_default_credential = 0, updated_at = ? WHERE id = ?`,
+		username, nowText(), id)
+	return err
+}
+
 func (s *Store) UpdateAdminPassword(ctx context.Context, id int64, passwordHash, passwordAlgo string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE admin_users SET password_hash = ?, password_algo = ?, updated_at = ? WHERE id = ?`,
+	_, err := s.db.ExecContext(ctx, `UPDATE admin_users SET password_hash = ?, password_algo = ?, is_default_credential = 0, updated_at = ? WHERE id = ?`,
 		passwordHash, passwordAlgo, nowText(), id)
 	return err
 }
@@ -587,6 +713,190 @@ func (s *Store) SetUpstreamEnabled(ctx context.Context, id int64, enabled bool) 
 
 func (s *Store) DeleteUpstream(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM upstreams WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) ListAPTMirrors(ctx context.Context, enabledOnly bool) ([]APTMirror, error) {
+	query := `SELECT id, name, public_prefix, upstream_url, proxy, enabled, created_at, updated_at FROM apt_mirrors`
+	if enabledOnly {
+		query += ` WHERE enabled = 1`
+	}
+	query += ` ORDER BY length(public_prefix) DESC, public_prefix, id`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []APTMirror
+	for rows.Next() {
+		var item APTMirror
+		var enabled int
+		if err := rows.Scan(&item.ID, &item.Name, &item.PublicPrefix, &item.UpstreamURL, &item.Proxy, &enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Enabled = enabled != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAPTMirror(ctx context.Context, id int64) (APTMirror, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, name, public_prefix, upstream_url, proxy, enabled, created_at, updated_at FROM apt_mirrors WHERE id = ?`, id)
+	if err != nil {
+		return APTMirror{}, err
+	}
+	defer rows.Close()
+	items, err := scanAPTMirrors(rows)
+	if err != nil {
+		return APTMirror{}, err
+	}
+	if len(items) == 0 {
+		return APTMirror{}, sql.ErrNoRows
+	}
+	return items[0], nil
+}
+
+func (s *Store) CreateAPTMirror(ctx context.Context, mirror APTMirror) (APTMirror, error) {
+	now := nowText()
+	res, err := s.db.ExecContext(ctx, `INSERT INTO apt_mirrors(name, public_prefix, upstream_url, proxy, enabled, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		mirror.Name, mirror.PublicPrefix, mirror.UpstreamURL, mirror.Proxy, boolInt(mirror.Enabled), now, now)
+	if err != nil {
+		return APTMirror{}, err
+	}
+	id, _ := res.LastInsertId()
+	mirror.ID = id
+	mirror.CreatedAt = now
+	mirror.UpdatedAt = now
+	return mirror, nil
+}
+
+func (s *Store) UpdateAPTMirror(ctx context.Context, mirror APTMirror) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE apt_mirrors SET name = ?, public_prefix = ?, upstream_url = ?, proxy = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+		mirror.Name, mirror.PublicPrefix, mirror.UpstreamURL, mirror.Proxy, boolInt(mirror.Enabled), nowText(), mirror.ID)
+	return err
+}
+
+func (s *Store) SetAPTMirrorEnabled(ctx context.Context, id int64, enabled bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE apt_mirrors SET enabled = ?, updated_at = ? WHERE id = ?`, boolInt(enabled), nowText(), id)
+	return err
+}
+
+func (s *Store) DeleteAPTMirror(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM apt_mirrors WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) ListProxyHostRules(ctx context.Context, enabledOnly bool) ([]ProxyHostRule, error) {
+	query := `SELECT id, host, enabled, description, created_at, updated_at FROM proxy_host_rules`
+	if enabledOnly {
+		query += ` WHERE enabled = 1`
+	}
+	query += ` ORDER BY host, id`
+	rows, err := s.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ProxyHostRule
+	for rows.Next() {
+		var item ProxyHostRule
+		var enabled int
+		if err := rows.Scan(&item.ID, &item.Host, &enabled, &item.Description, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Enabled = enabled != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateProxyHostRule(ctx context.Context, rule ProxyHostRule) (ProxyHostRule, error) {
+	rule.Host = normalizeHostRule(rule.Host)
+	now := nowText()
+	res, err := s.db.ExecContext(ctx, `INSERT INTO proxy_host_rules(host, enabled, description, created_at, updated_at) VALUES(?, ?, ?, ?, ?)`,
+		rule.Host, boolInt(rule.Enabled), rule.Description, now, now)
+	if err != nil {
+		return ProxyHostRule{}, err
+	}
+	id, _ := res.LastInsertId()
+	rule.ID = id
+	rule.CreatedAt = now
+	rule.UpdatedAt = now
+	return rule, nil
+}
+
+func (s *Store) UpdateProxyHostRule(ctx context.Context, rule ProxyHostRule) error {
+	rule.Host = normalizeHostRule(rule.Host)
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_host_rules SET host = ?, enabled = ?, description = ?, updated_at = ? WHERE id = ?`,
+		rule.Host, boolInt(rule.Enabled), rule.Description, nowText(), rule.ID)
+	return err
+}
+
+func (s *Store) SetProxyHostRuleEnabled(ctx context.Context, id int64, enabled bool) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE proxy_host_rules SET enabled = ?, updated_at = ? WHERE id = ?`, boolInt(enabled), nowText(), id)
+	return err
+}
+
+func (s *Store) DeleteProxyHostRule(ctx context.Context, id int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM proxy_host_rules WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) ReplaceProxyHostRules(ctx context.Context, hosts []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM proxy_host_rules`); err != nil {
+		return err
+	}
+	normalized := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		host = normalizeHostRule(host)
+		if host == "" {
+			continue
+		}
+		normalized = append(normalized, host)
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO proxy_host_rules(host, enabled, description, created_at, updated_at) VALUES(?, 1, ?, ?, ?)`,
+			host, "imported from proxy.allowed_hosts", nowText(), nowText()); err != nil {
+			return err
+		}
+	}
+	raw, err := json.Marshal(normalized)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO settings(key, value_json, value_type, restart_required, updated_at) VALUES('proxy.allowed_hosts', ?, 'string[]', 0, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value_json = excluded.value_json,
+			value_type = excluded.value_type,
+			restart_required = excluded.restart_required,
+			updated_at = excluded.updated_at`, string(raw), nowText()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) SyncProxyAllowedHostsSetting(ctx context.Context) error {
+	rules, err := s.ListProxyHostRules(ctx, true)
+	if err != nil {
+		return err
+	}
+	hosts := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		hosts = append(hosts, rule.Host)
+	}
+	raw, err := json.Marshal(hosts)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO settings(key, value_json, value_type, restart_required, updated_at) VALUES('proxy.allowed_hosts', ?, 'string[]', 0, ?)
+		ON CONFLICT(key) DO UPDATE SET
+			value_json = excluded.value_json,
+			value_type = excluded.value_type,
+			restart_required = excluded.restart_required,
+			updated_at = excluded.updated_at`, string(raw), nowText())
 	return err
 }
 
@@ -740,11 +1050,111 @@ func scanCacheObjects(rows *sql.Rows) ([]CacheObject, error) {
 	return out, rows.Err()
 }
 
+func scanAPTMirrors(rows *sql.Rows) ([]APTMirror, error) {
+	var out []APTMirror
+	for rows.Next() {
+		var item APTMirror
+		var enabled int
+		if err := rows.Scan(&item.ID, &item.Name, &item.PublicPrefix, &item.UpstreamURL, &item.Proxy, &enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		item.Enabled = enabled != 0
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ensureRuntimeSettingDefaults(ctx context.Context, cfg *config.Config) error {
+	for _, def := range settingDefs {
+		value, err := def.marshal(cfg)
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO settings(key, value_json, value_type, restart_required, updated_at) VALUES(?, ?, ?, ?, ?)`,
+			def.key, string(value), def.valueType, boolInt(def.restartRequired), nowText()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureProxyHostRulesFromAllowedHosts(ctx context.Context) error {
+	var ruleCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM proxy_host_rules`).Scan(&ruleCount); err != nil {
+		return err
+	}
+	if ruleCount > 0 {
+		return nil
+	}
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT value_json FROM settings WHERE key = 'proxy.allowed_hosts'`).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var hosts []string
+	if err := json.Unmarshal([]byte(raw), &hosts); err != nil {
+		return err
+	}
+	for _, host := range hosts {
+		host = normalizeHostRule(host)
+		if host == "" {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO proxy_host_rules(host, enabled, description, created_at, updated_at) VALUES(?, 1, ?, ?, ?)`,
+			host, "imported from proxy.allowed_hosts", nowText(), nowText()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, column, alterSQL string) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, alterSQL)
+	return err
+}
+
 func cloneConfig(cfg *config.Config) *config.Config {
 	next := *cfg
 	next.Upstreams = append([]config.UpstreamConfig(nil), cfg.Upstreams...)
 	next.Proxy.AllowedHosts = append([]string(nil), cfg.Proxy.AllowedHosts...)
 	return &next
+}
+
+func normalizeHostRule(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimPrefix(strings.TrimPrefix(host, "http://"), "https://")
+	if slash := strings.IndexByte(host, '/'); slash >= 0 {
+		host = host[:slash]
+	}
+	if value, _, err := net.SplitHostPort(host); err == nil {
+		host = value
+	}
+	host = strings.Trim(host, "[]")
+	return host
 }
 
 func nowText() string {

@@ -14,7 +14,6 @@ import (
 type Config struct {
 	Server    ServerConfig     `toml:"server"`
 	Database  DatabaseConfig   `toml:"database"`
-	Admin     AdminConfig      `toml:"admin"`
 	HashStore HashStoreConfig  `toml:"hash_store"`
 	Upstreams []UpstreamConfig `toml:"upstreams"`
 	Cache     CacheConfig      `toml:"cache"`
@@ -30,11 +29,6 @@ type ServerConfig struct {
 
 type DatabaseConfig struct {
 	Path string `toml:"path"`
-}
-
-type AdminConfig struct {
-	BootstrapToken string `toml:"bootstrap_token"`
-	SessionSecret  string `toml:"session_secret"`
 }
 
 type HashStoreConfig struct {
@@ -165,12 +159,6 @@ func ApplyEnvOverrides(cfg *Config) {
 	}
 	if v, ok := env("DATABASE_PATH"); ok {
 		cfg.Database.Path = v
-	}
-	if v, ok := env("ADMIN_BOOTSTRAP_TOKEN"); ok {
-		cfg.Admin.BootstrapToken = v
-	}
-	if v, ok := env("ADMIN_SESSION_SECRET"); ok {
-		cfg.Admin.SessionSecret = v
 	}
 	if v, ok := env("HASH_STORE_PATH"); ok {
 		cfg.HashStore.Path = v

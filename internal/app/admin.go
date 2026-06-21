@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -14,6 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -41,6 +42,8 @@ const (
 	adminSessionCookie = "apk_cache_admin_session"
 	adminCSRFCookie    = "apk_cache_admin_csrf"
 	adminSessionTTL    = 24 * time.Hour
+	defaultAdminUser   = "admin"
+	defaultAdminPass   = "admin123456"
 )
 
 type loginFailure struct {
@@ -73,14 +76,6 @@ func (a *App) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		path = "/"
 	}
 
-	if path == "/setup/status" && r.Method == http.MethodGet {
-		a.adminSetupStatus(w, r)
-		return
-	}
-	if path == "/setup" && r.Method == http.MethodPost {
-		a.adminSetup(w, r)
-		return
-	}
 	if path == "/auth/login" && r.Method == http.MethodPost {
 		a.adminLogin(w, r)
 		return
@@ -93,10 +88,16 @@ func (a *App) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case path == "/auth/me" && r.Method == http.MethodGet:
-		a.writeAdminData(w, map[string]any{"authenticated": true, "username": user.Username, "csrf_token": csrfFromRequest(r)})
+		a.writeAdminData(w, adminUserPayload(user, csrfFromRequest(r)))
 	case path == "/auth/logout" && r.Method == http.MethodPost:
 		a.adminLogout(w, r, session)
 	case path == "/auth/change-password" && r.Method == http.MethodPost:
+		a.adminChangePassword(w, r, user)
+	case path == "/account" && r.Method == http.MethodGet:
+		a.adminAccount(w, r, user)
+	case path == "/account/username" && r.Method == http.MethodPut:
+		a.adminUpdateUsername(w, r, user)
+	case path == "/account/password" && r.Method == http.MethodPut:
 		a.adminChangePassword(w, r, user)
 	case path == "/dashboard/summary" && r.Method == http.MethodGet:
 		a.adminDashboard(w, r)
@@ -122,6 +123,12 @@ func (a *App) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		a.adminProxyStatus(w, r)
 	case path == "/proxy/config" && r.Method == http.MethodPut:
 		a.adminProxyConfig(w, r)
+	case path == "/proxy/host-rules" && r.Method == http.MethodGet:
+		a.adminListProxyHostRules(w, r)
+	case path == "/proxy/host-rules" && r.Method == http.MethodPost:
+		a.adminCreateProxyHostRule(w, r)
+	case strings.HasPrefix(path, "/proxy/host-rules/"):
+		a.adminProxyHostRuleAction(w, r, path)
 	case path == "/cache/objects" && r.Method == http.MethodGet:
 		a.adminListCacheObjects(w, r)
 	case strings.HasPrefix(path, "/cache/objects/"):
@@ -148,6 +155,12 @@ func (a *App) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		a.adminAPTIndexes(w, r)
 	case path == "/apt/records" && r.Method == http.MethodGet:
 		a.adminAPTRecords(w, r)
+	case path == "/apt/mirrors" && r.Method == http.MethodGet:
+		a.adminListAPTMirrors(w, r)
+	case path == "/apt/mirrors" && r.Method == http.MethodPost:
+		a.adminCreateAPTMirror(w, r)
+	case strings.HasPrefix(path, "/apt/mirrors/"):
+		a.adminAPTMirrorAction(w, r, path)
 	case path == "/apt/indexes/reload" && r.Method == http.MethodPost:
 		a.adminReloadAPTIndexes(w, r)
 	case path == "/apt/validate" && r.Method == http.MethodPost:
@@ -165,64 +178,6 @@ func (a *App) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	default:
 		a.writeAdminError(w, http.StatusNotFound, "not_found", "admin endpoint not found")
 	}
-}
-
-func (a *App) adminSetupStatus(w http.ResponseWriter, r *http.Request) {
-	count, err := a.store.CountAdmins(r.Context())
-	if err != nil {
-		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
-		return
-	}
-	a.writeAdminData(w, map[string]any{
-		"setup_required":       count == 0,
-		"bootstrap_configured": a.cfg.Admin.BootstrapToken != "",
-	})
-}
-
-func (a *App) adminSetup(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		BootstrapToken string `json:"bootstrap_token"`
-		Username       string `json:"username"`
-		Password       string `json:"password"`
-	}
-	if !a.decodeAdminJSON(w, r, &req) {
-		return
-	}
-	count, err := a.store.CountAdmins(r.Context())
-	if err != nil {
-		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
-		return
-	}
-	if count > 0 {
-		a.writeAdminError(w, http.StatusConflict, "already_setup", "admin user already exists")
-		return
-	}
-	if a.cfg.Admin.BootstrapToken == "" {
-		a.writeAdminError(w, http.StatusPreconditionFailed, "bootstrap_not_configured", "ADMIN_BOOTSTRAP_TOKEN is not configured")
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(req.BootstrapToken), []byte(a.cfg.Admin.BootstrapToken)) != 1 {
-		a.writeAdminError(w, http.StatusForbidden, "invalid_bootstrap_token", "invalid bootstrap token")
-		return
-	}
-	username := strings.TrimSpace(req.Username)
-	if username == "" {
-		username = "admin"
-	}
-	if len(req.Password) < 8 {
-		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", "password must be at least 8 characters")
-		return
-	}
-	hash, err := hashPassword(req.Password)
-	if err != nil {
-		a.writeAdminError(w, http.StatusInternalServerError, "hash_failed", err.Error())
-		return
-	}
-	if err := a.store.CreateAdmin(r.Context(), username, hash, "argon2id"); err != nil {
-		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
-		return
-	}
-	a.writeAdminData(w, map[string]any{"username": username})
 }
 
 func (a *App) adminLogin(w http.ResponseWriter, r *http.Request) {
@@ -277,7 +232,9 @@ func (a *App) adminLogin(w http.ResponseWriter, r *http.Request) {
 	_ = a.store.MarkAdminLogin(r.Context(), user.ID)
 	a.clearLoginFailures(r.RemoteAddr)
 	a.setSessionCookies(w, r, token, csrf, now.Add(adminSessionTTL))
-	a.writeAdminData(w, map[string]any{"authenticated": true, "username": user.Username, "csrf_token": csrf})
+	user.LastLoginAt.String = now.Format(time.RFC3339Nano)
+	user.LastLoginAt.Valid = true
+	a.writeAdminData(w, adminUserPayload(user, csrf))
 }
 
 func (a *App) requireAdmin(w http.ResponseWriter, r *http.Request) (store.AdminUser, store.AdminSession, bool) {
@@ -345,6 +302,37 @@ func (a *App) adminChangePassword(w http.ResponseWriter, r *http.Request, user s
 		return
 	}
 	a.writeAdminData(w, map[string]any{"changed": true})
+}
+
+func (a *App) adminAccount(w http.ResponseWriter, r *http.Request, user store.AdminUser) {
+	a.writeAdminData(w, map[string]any{
+		"username":              user.Username,
+		"is_default_credential": user.IsDefaultCredential,
+		"last_login_at":         nullableString(user.LastLoginAt),
+	})
+}
+
+func (a *App) adminUpdateUsername(w http.ResponseWriter, r *http.Request, user store.AdminUser) {
+	var req struct {
+		Username string `json:"username"`
+	}
+	if !a.decodeAdminJSON(w, r, &req) {
+		return
+	}
+	username := strings.TrimSpace(req.Username)
+	if len(username) < 3 || len(username) > 64 {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", "username must be 3-64 characters")
+		return
+	}
+	if strings.ContainsAny(username, " \t\r\n") {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", "username must not contain whitespace")
+		return
+	}
+	if err := a.store.UpdateAdminUsername(r.Context(), user.ID, username); err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	a.writeAdminData(w, map[string]any{"username": username, "is_default_credential": false})
 }
 
 func (a *App) adminDashboard(w http.ResponseWriter, r *http.Request) {
@@ -447,11 +435,12 @@ func (a *App) adminValidateConfig(w http.ResponseWriter, r *http.Request) {
 	if !a.decodeAdminJSON(w, r, &req) {
 		return
 	}
-	if _, _, err := a.store.ValidateSettings(r.Context(), a.cfg, req.Settings); err != nil {
+	_, restartKeys, err := a.store.ValidateSettings(r.Context(), a.cfg, req.Settings)
+	if err != nil {
 		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
 		return
 	}
-	a.writeAdminData(w, map[string]any{"valid": true})
+	a.writeAdminData(w, map[string]any{"valid": true, "restart_required": restartKeys})
 }
 
 func (a *App) adminReloadConfig(w http.ResponseWriter, r *http.Request) {
@@ -581,12 +570,15 @@ func (a *App) adminTestUpstream(w http.ResponseWriter, r *http.Request, id int64
 }
 
 func (a *App) adminProxyStatus(w http.ResponseWriter, r *http.Request) {
+	hostRules, _ := a.store.ListProxyHostRules(r.Context(), false)
 	a.writeAdminData(w, map[string]any{
 		"enabled":                    a.cfg.Proxy.Enabled,
 		"allow_connect":              a.cfg.Proxy.AllowConnect,
 		"cache_non_package_requests": a.cfg.Proxy.CacheNonPackage,
 		"upstream_proxy":             a.cfg.Proxy.UpstreamProxy,
 		"allowed_hosts":              a.cfg.Proxy.AllowedHosts,
+		"host_rules":                 hostRules,
+		"host_rules_configured":      a.proxyHostRulesConfigured,
 		"connect":                    map[string]any{"active": len(a.connectCh), "limit": cap(a.connectCh)},
 	})
 }
@@ -619,19 +611,111 @@ func (a *App) adminProxyConfig(w http.ResponseWriter, r *http.Request) {
 	if req.UpstreamProxy != nil {
 		put("proxy.upstream_proxy", *req.UpstreamProxy)
 	}
-	if req.AllowedHosts != nil {
-		put("proxy.allowed_hosts", req.AllowedHosts)
-	}
 	next, restartKeys, err := a.store.UpdateSettings(r.Context(), a.cfg, settings)
 	if err != nil {
 		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
 		return
 	}
-	if err := a.applyRuntimeConfig(next); err != nil {
-		a.writeAdminError(w, http.StatusBadRequest, "apply_failed", err.Error())
-		return
+	if req.AllowedHosts != nil {
+		if err := a.store.ReplaceProxyHostRules(r.Context(), req.AllowedHosts); err != nil {
+			a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+			return
+		}
+		if err := a.reloadRuntimeFromStore(r.Context()); err != nil {
+			a.writeAdminError(w, http.StatusBadRequest, "reload_failed", err.Error())
+			return
+		}
+	} else {
+		if err := a.applyRuntimeConfig(next); err != nil {
+			a.writeAdminError(w, http.StatusBadRequest, "apply_failed", err.Error())
+			return
+		}
 	}
 	a.writeAdminData(w, map[string]any{"saved": true, "restart_required": restartKeys})
+}
+
+func (a *App) adminListProxyHostRules(w http.ResponseWriter, r *http.Request) {
+	items, err := a.store.ListProxyHostRules(r.Context(), false)
+	if err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	a.writeAdminData(w, map[string]any{"items": items})
+}
+
+func (a *App) adminCreateProxyHostRule(w http.ResponseWriter, r *http.Request) {
+	var req store.ProxyHostRule
+	if !a.decodeAdminJSON(w, r, &req) {
+		return
+	}
+	if err := validateProxyHostRule(&req); err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
+		return
+	}
+	created, err := a.store.CreateProxyHostRule(r.Context(), req)
+	if err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	if err := a.store.SyncProxyAllowedHostsSetting(r.Context()); err != nil {
+		_ = a.store.DeleteProxyHostRule(r.Context(), created.ID)
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	if err := a.reloadRuntimeFromStore(r.Context()); err != nil {
+		_ = a.store.DeleteProxyHostRule(r.Context(), created.ID)
+		a.writeAdminError(w, http.StatusBadRequest, "reload_failed", err.Error())
+		return
+	}
+	a.writeAdminData(w, created)
+}
+
+func (a *App) adminProxyHostRuleAction(w http.ResponseWriter, r *http.Request, path string) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 {
+		a.writeAdminError(w, http.StatusNotFound, "not_found", "host rule not found")
+		return
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", "invalid host rule id")
+		return
+	}
+	switch {
+	case len(parts) == 3 && r.Method == http.MethodPut:
+		var req store.ProxyHostRule
+		if !a.decodeAdminJSON(w, r, &req) {
+			return
+		}
+		req.ID = id
+		if err := validateProxyHostRule(&req); err != nil {
+			a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		err = a.store.UpdateProxyHostRule(r.Context(), req)
+	case len(parts) == 3 && r.Method == http.MethodDelete:
+		err = a.store.DeleteProxyHostRule(r.Context(), id)
+	case len(parts) == 4 && parts[3] == "enable" && r.Method == http.MethodPost:
+		err = a.store.SetProxyHostRuleEnabled(r.Context(), id, true)
+	case len(parts) == 4 && parts[3] == "disable" && r.Method == http.MethodPost:
+		err = a.store.SetProxyHostRuleEnabled(r.Context(), id, false)
+	default:
+		a.writeAdminError(w, http.StatusNotFound, "not_found", "host rule action not found")
+		return
+	}
+	if err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	if err := a.store.SyncProxyAllowedHostsSetting(r.Context()); err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	if err := a.reloadRuntimeFromStore(r.Context()); err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "reload_failed", err.Error())
+		return
+	}
+	a.writeAdminData(w, map[string]any{"updated": true})
 }
 
 func (a *App) adminListCacheObjects(w http.ResponseWriter, r *http.Request) {
@@ -921,6 +1005,164 @@ func (a *App) adminAPTRecords(w http.ResponseWriter, r *http.Request) {
 	a.writeAdminData(w, map[string]any{"items": out})
 }
 
+func (a *App) adminListAPTMirrors(w http.ResponseWriter, r *http.Request) {
+	items, err := a.store.ListAPTMirrors(r.Context(), false)
+	if err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	a.writeAdminData(w, map[string]any{"items": items})
+}
+
+func (a *App) adminCreateAPTMirror(w http.ResponseWriter, r *http.Request) {
+	var req store.APTMirror
+	if !a.decodeAdminJSON(w, r, &req) {
+		return
+	}
+	if err := validateAPTMirror(&req); err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
+		return
+	}
+	created, err := a.store.CreateAPTMirror(r.Context(), req)
+	if err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	if err := a.reloadRuntimeFromStore(r.Context()); err != nil {
+		_ = a.store.DeleteAPTMirror(r.Context(), created.ID)
+		a.writeAdminError(w, http.StatusBadRequest, "reload_failed", err.Error())
+		return
+	}
+	a.writeAdminData(w, created)
+}
+
+func (a *App) adminAPTMirrorAction(w http.ResponseWriter, r *http.Request, path string) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 {
+		a.writeAdminError(w, http.StatusNotFound, "not_found", "apt mirror not found")
+		return
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", "invalid apt mirror id")
+		return
+	}
+	switch {
+	case len(parts) == 3 && r.Method == http.MethodPut:
+		var req store.APTMirror
+		if !a.decodeAdminJSON(w, r, &req) {
+			return
+		}
+		req.ID = id
+		if err := validateAPTMirror(&req); err != nil {
+			a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
+			return
+		}
+		err = a.store.UpdateAPTMirror(r.Context(), req)
+	case len(parts) == 3 && r.Method == http.MethodDelete:
+		err = a.store.DeleteAPTMirror(r.Context(), id)
+	case len(parts) == 4 && parts[3] == "enable" && r.Method == http.MethodPost:
+		err = a.store.SetAPTMirrorEnabled(r.Context(), id, true)
+	case len(parts) == 4 && parts[3] == "disable" && r.Method == http.MethodPost:
+		err = a.store.SetAPTMirrorEnabled(r.Context(), id, false)
+	case len(parts) == 4 && parts[3] == "test" && r.Method == http.MethodPost:
+		a.adminTestAPTMirror(w, r, id)
+		return
+	case len(parts) == 4 && parts[3] == "sources-list" && r.Method == http.MethodGet:
+		a.adminAPTMirrorSourcesList(w, r, id)
+		return
+	default:
+		a.writeAdminError(w, http.StatusNotFound, "not_found", "apt mirror action not found")
+		return
+	}
+	if err != nil {
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	if err := a.reloadRuntimeFromStore(r.Context()); err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "reload_failed", err.Error())
+		return
+	}
+	a.writeAdminData(w, map[string]any{"updated": true})
+}
+
+func (a *App) adminTestAPTMirror(w http.ResponseWriter, r *http.Request, id int64) {
+	mirror, err := a.store.GetAPTMirror(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			a.writeAdminError(w, http.StatusNotFound, "not_found", "apt mirror not found")
+			return
+		}
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	var req struct {
+		Path string `json:"path"`
+	}
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			a.writeAdminError(w, http.StatusBadRequest, "invalid_json", err.Error())
+			return
+		}
+	}
+	publicPath := strings.TrimRight(mirror.PublicPrefix, "/") + "/" + strings.TrimLeft(req.Path, "/")
+	if req.Path == "" {
+		publicPath = strings.TrimRight(mirror.PublicPrefix, "/") + "/"
+	}
+	testReq := httptest.NewRequest(http.MethodGet, publicPath, nil)
+	target, err := aptMirrorTarget(mirror, testReq)
+	if err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodHead, target.String(), nil)
+	if err != nil {
+		a.writeAdminError(w, http.StatusBadRequest, "validation_failed", err.Error())
+		return
+	}
+	proxy := mirror.Proxy
+	if proxy == "" {
+		proxy = a.cfg.Proxy.UpstreamProxy
+	}
+	start := time.Now()
+	resp, err := a.clients.Client(proxy).Do(upstreamReq)
+	if err != nil {
+		a.writeAdminData(w, map[string]any{"ok": false, "target": target.String(), "error": err.Error(), "duration_ms": time.Since(start).Milliseconds()})
+		return
+	}
+	defer resp.Body.Close()
+	a.writeAdminData(w, map[string]any{"ok": resp.StatusCode < 500, "target": target.String(), "status_code": resp.StatusCode, "duration_ms": time.Since(start).Milliseconds()})
+}
+
+func (a *App) adminAPTMirrorSourcesList(w http.ResponseWriter, r *http.Request, id int64) {
+	mirror, err := a.store.GetAPTMirror(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			a.writeAdminError(w, http.StatusNotFound, "not_found", "apt mirror not found")
+			return
+		}
+		a.writeAdminError(w, http.StatusInternalServerError, "store_error", err.Error())
+		return
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded == "http" || forwarded == "https" {
+		scheme = forwarded
+	}
+	host := r.Host
+	if host == "" {
+		host = "cache.example:3142"
+	}
+	base := scheme + "://" + host + strings.TrimRight(mirror.PublicPrefix, "/")
+	line := "deb " + base + " stable main"
+	a.writeAdminData(w, map[string]any{"line": line, "base_url": base})
+}
+
 func (a *App) adminReloadAPTIndexes(w http.ResponseWriter, r *http.Request) {
 	err := a.aptIndex.LoadFromRoot(filepath.Join(a.cfg.Cache.Root, "apt"))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -1126,6 +1368,14 @@ func (a *App) applyRuntimeConfig(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	aptMirrors, err := a.store.ListAPTMirrors(context.Background(), true)
+	if err != nil {
+		return err
+	}
+	proxyHostRules, err := a.store.ListProxyHostRules(context.Background(), false)
+	if err != nil {
+		return err
+	}
 	oldMem := a.mem
 	a.cfg = cfg
 	a.indexTTL = indexTTL
@@ -1135,6 +1385,8 @@ func (a *App) applyRuntimeConfig(cfg *config.Config) error {
 	a.memMax = maxItemSize
 	a.apkUpstreams = apkManager
 	a.apkVerifier = verifier
+	a.aptMirrors = aptMirrors
+	a.proxyHostRulesConfigured = len(proxyHostRules) > 0
 	a.hashStore.UpdateOptions(cfg.HashStore.TrustFileStat, actualRevalidate)
 	if oldMem != nil {
 		oldMem.Stop()
@@ -1342,6 +1594,7 @@ func (a *App) systemInfo(user store.AdminUser) map[string]any {
 		}
 		build["settings"] = settings
 	}
+	deprecatedSettings, _ := a.store.ExistingSettingKeys(context.Background(), []string{"admin.bootstrap_token", "admin.session_secret"})
 	return map[string]any{
 		"go": map[string]any{
 			"version":       runtime.Version(),
@@ -1371,10 +1624,12 @@ func (a *App) systemInfo(user store.AdminUser) map[string]any {
 			"verify_apt_hash": a.cfg.APT.VerifyHash,
 		},
 		"admin": map[string]any{
-			"username":      user.Username,
-			"last_login_at": nullableString(user.LastLoginAt),
+			"username":              user.Username,
+			"is_default_credential": user.IsDefaultCredential,
+			"last_login_at":         nullableString(user.LastLoginAt),
 		},
-		"build": build,
+		"deprecated_settings": deprecatedSettings,
+		"build":               build,
 	}
 }
 
@@ -1393,10 +1648,7 @@ func redactedConfig(cfg *config.Config) map[string]any {
 		"database": map[string]any{
 			"path": cfg.Database.Path,
 		},
-		"admin": map[string]any{
-			"bootstrap_token": secretState(cfg.Admin.BootstrapToken),
-			"session_secret":  secretState(cfg.Admin.SessionSecret),
-		},
+		"admin": map[string]any{"auth_mode": "default-admin-db-session"},
 		"hash_store": map[string]any{
 			"path":                       cfg.HashStore.Path,
 			"rebuild_on_corruption":      cfg.HashStore.RebuildOnCorruption,
@@ -1422,13 +1674,6 @@ func redactedConfig(cfg *config.Config) map[string]any {
 		},
 		"upstreams": upstreams,
 	}
-}
-
-func secretState(value string) string {
-	if value == "" {
-		return ""
-	}
-	return "<redacted>"
 }
 
 func redactURL(value string) string {
@@ -1514,6 +1759,32 @@ func (a *App) clearSessionCookies(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: adminCSRFCookie, Value: "", Path: "/", Expires: expired, MaxAge: -1, HttpOnly: false, SameSite: http.SameSiteLaxMode, Secure: secure})
 }
 
+func ensureDefaultAdmin(ctx context.Context, st *store.Store) error {
+	count, err := st.CountAdmins(ctx)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	hash, err := hashPassword(defaultAdminPass)
+	if err != nil {
+		return err
+	}
+	return st.CreateAdmin(ctx, defaultAdminUser, hash, "argon2id", true)
+}
+
+func adminUserPayload(user store.AdminUser, csrf string) map[string]any {
+	return map[string]any{
+		"authenticated":         true,
+		"username":              user.Username,
+		"csrf_token":            csrf,
+		"is_default_credential": user.IsDefaultCredential,
+		"last_login_at":         nullableString(user.LastLoginAt),
+		"default_username":      defaultAdminUser,
+	}
+}
+
 func csrfFromRequest(r *http.Request) string {
 	if cookie, err := r.Cookie(adminCSRFCookie); err == nil {
 		return cookie.Value
@@ -1582,13 +1853,81 @@ func (a *App) newToken() (plain, hashed string, err error) {
 }
 
 func (a *App) hashToken(token string) string {
-	if a.cfg.Admin.SessionSecret != "" {
-		mac := hmac.New(sha256.New, []byte(a.cfg.Admin.SessionSecret))
-		_, _ = mac.Write([]byte(token))
-		return hex.EncodeToString(mac.Sum(nil))
-	}
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func validateProxyHostRule(rule *store.ProxyHostRule) error {
+	rule.Host = normalizeProxyHost(rule.Host)
+	if rule.Host == "" {
+		return errors.New("host is required")
+	}
+	if strings.ContainsAny(rule.Host, "/\\ \t\r\n") {
+		return errors.New("host must not include scheme, path, or whitespace")
+	}
+	return nil
+}
+
+func validateAPTMirror(mirror *store.APTMirror) error {
+	mirror.Name = strings.TrimSpace(mirror.Name)
+	if mirror.Name == "" {
+		mirror.Name = "APT Mirror"
+	}
+	prefix, err := normalizeAPTPublicPrefix(mirror.PublicPrefix)
+	if err != nil {
+		return err
+	}
+	mirror.PublicPrefix = prefix
+	parsed, err := url.Parse(strings.TrimSpace(mirror.UpstreamURL))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("upstream_url must start with http:// or https://")
+	}
+	if parsed.Host == "" {
+		return errors.New("upstream_url must include host")
+	}
+	mirror.UpstreamURL = strings.TrimRight(parsed.String(), "/")
+	if mirror.Proxy != "" {
+		proxyURL, err := url.Parse(mirror.Proxy)
+		if err != nil {
+			return err
+		}
+		if proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https" && proxyURL.Scheme != "socks5") {
+			return errors.New("proxy must start with socks5://, http://, or https://")
+		}
+	}
+	return nil
+}
+
+func normalizeAPTPublicPrefix(prefix string) (string, error) {
+	prefix = "/" + strings.Trim(strings.TrimSpace(prefix), "/")
+	if prefix == "/" {
+		return "", errors.New("public_prefix must not be root")
+	}
+	if strings.Contains(prefix, "..") {
+		return "", errors.New("public_prefix must not contain '..'")
+	}
+	reserved := []string{"/admin", "/api", "/_health", "/metrics", "/alpine"}
+	for _, item := range reserved {
+		if prefix == item || strings.HasPrefix(prefix, item+"/") {
+			return "", fmt.Errorf("public_prefix %q is reserved", prefix)
+		}
+	}
+	return prefix, nil
+}
+
+func normalizeProxyHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimPrefix(strings.TrimPrefix(host, "http://"), "https://")
+	if slash := strings.IndexByte(host, '/'); slash >= 0 {
+		host = host[:slash]
+	}
+	if value, _, err := net.SplitHostPort(host); err == nil {
+		host = value
+	}
+	return strings.Trim(host, "[]")
 }
 
 func randomID() string {

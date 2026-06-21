@@ -66,10 +66,12 @@ type App struct {
 	bgWg      sync.WaitGroup
 	connectCh chan struct{}
 
-	apkUpstreams *upstream.Manager
-	apkIndex     *apkpkg.Index
-	apkVerifier  *apkpkg.Verifier
-	aptIndex     *aptpkg.Index
+	apkUpstreams             *upstream.Manager
+	apkIndex                 *apkpkg.Index
+	apkVerifier              *apkpkg.Verifier
+	aptIndex                 *aptpkg.Index
+	aptMirrors               []store.APTMirror
+	proxyHostRulesConfigured bool
 
 	loginMu       sync.Mutex
 	loginFailures map[string]loginFailure
@@ -93,6 +95,10 @@ func New(cfg *config.Config) (*App, error) {
 	}
 	sqlStore, err := store.Open(cfg.Database.Path)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureDefaultAdmin(context.Background(), sqlStore); err != nil {
+		_ = sqlStore.Close()
 		return nil, err
 	}
 	runtimeCfg, _, err := sqlStore.EnsureRuntimeConfig(context.Background(), cfg)
@@ -206,25 +212,39 @@ func New(cfg *config.Config) (*App, error) {
 	apkIndex.SetHashStore(kvStore)
 	aptIndex := aptpkg.NewIndex(cfg.Cache.Root)
 	aptIndex.SetHashStore(kvStore)
+	aptMirrors, err := sqlStore.ListAPTMirrors(context.Background(), true)
+	if err != nil {
+		_ = kvStore.Close()
+		_ = sqlStore.Close()
+		return nil, err
+	}
+	proxyHostRules, err := sqlStore.ListProxyHostRules(context.Background(), false)
+	if err != nil {
+		_ = kvStore.Close()
+		_ = sqlStore.Close()
+		return nil, err
+	}
 
 	a := &App{
-		cfg:           cfg,
-		store:         sqlStore,
-		hashStore:     kvStore,
-		metrics:       m,
-		clients:       clients,
-		mem:           mem,
-		memMax:        maxItemSize,
-		startedAt:     time.Now().UTC(),
-		locks:         cachepkg.NewKeyLocks(),
-		indexTTL:      indexTTL,
-		pkgTTL:        packageTTL,
-		connectCh:     make(chan struct{}, defaultConnectCap),
-		apkUpstreams:  apkManager,
-		apkIndex:      apkIndex,
-		apkVerifier:   verifier,
-		aptIndex:      aptIndex,
-		loginFailures: make(map[string]loginFailure),
+		cfg:                      cfg,
+		store:                    sqlStore,
+		hashStore:                kvStore,
+		metrics:                  m,
+		clients:                  clients,
+		mem:                      mem,
+		memMax:                   maxItemSize,
+		startedAt:                time.Now().UTC(),
+		locks:                    cachepkg.NewKeyLocks(),
+		indexTTL:                 indexTTL,
+		pkgTTL:                   packageTTL,
+		connectCh:                make(chan struct{}, defaultConnectCap),
+		apkUpstreams:             apkManager,
+		apkIndex:                 apkIndex,
+		apkVerifier:              verifier,
+		aptIndex:                 aptIndex,
+		aptMirrors:               aptMirrors,
+		proxyHostRulesConfigured: len(proxyHostRules) > 0,
+		loginFailures:            make(map[string]loginFailure),
 	}
 	hashEmpty, err := kvStore.Empty()
 	if err != nil {
@@ -383,6 +403,11 @@ func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) routeHTTP(w http.ResponseWriter, r *http.Request) error {
+	if a.cfg.APT.Enabled && r.Method == http.MethodGet && !isProxyRequest(r) {
+		if mirror, ok := a.matchAPTMirror(r.URL.Path); ok {
+			return a.handleAPTMirror(w, r, mirror)
+		}
+	}
 	classification := classifyRequest(r)
 	switch classification.protocol {
 	case requestProtocolAPK:
@@ -753,10 +778,34 @@ func (a *App) validateAPK(cachePath, filePath, cacheClass string, fetched bool) 
 }
 
 func (a *App) handleAPT(w http.ResponseWriter, r *http.Request) error {
+	if isProxyRequest(r) {
+		if err := a.validateAllowedHost(r); err != nil {
+			return err
+		}
+	}
 	target, err := forwardURL(r)
 	if err != nil {
 		return err
 	}
+	return a.handleAPTTarget(w, r, target, a.cfg.Proxy.UpstreamProxy)
+}
+
+func (a *App) handleAPTMirror(w http.ResponseWriter, r *http.Request, mirror store.APTMirror) error {
+	target, err := aptMirrorTarget(mirror, r)
+	if err != nil {
+		return err
+	}
+	if detectPackageRequestType(target.Path) != packageRequestAPT {
+		return ErrUnsupported
+	}
+	proxy := mirror.Proxy
+	if proxy == "" {
+		proxy = a.cfg.Proxy.UpstreamProxy
+	}
+	return a.handleAPTTarget(w, r, target, proxy)
+}
+
+func (a *App) handleAPTTarget(w http.ResponseWriter, r *http.Request, target *url.URL, proxy string) error {
 	keyPath, err := safeCacheKey(target.Path)
 	if err != nil {
 		return err
@@ -785,7 +834,7 @@ func (a *App) handleAPT(w http.ResponseWriter, r *http.Request) error {
 			copyEndToEndHeaders(upstreamReq.Header, r.Header)
 			upstreamReq.Host = target.Host
 			a.metrics.UpstreamRequests.Inc()
-			return a.clients.Client(a.cfg.Proxy.UpstreamProxy).Do(upstreamReq)
+			return a.clients.Client(proxy).Do(upstreamReq)
 		},
 		validateCache: func(_ context.Context, cachePath string) error {
 			return a.validateAPT(cachePath, cachePath, target.Path)
@@ -798,19 +847,67 @@ func (a *App) handleAPT(w http.ResponseWriter, r *http.Request) error {
 				return nil
 			}
 			if a.cfg.APT.LoadIndexAsync {
-				a.bgWg.Add(1)
-				go func() {
-					defer a.bgWg.Done()
+				a.bgWg.Go(func() {
 					if err := a.loadAPTIndex(cachePath, target.Path); err != nil {
 						slog.Warn("load apt index", "path", cachePath, "err", err)
 					}
-				}()
+				})
 				return nil
 			}
 			return a.loadAPTIndex(cachePath, target.Path)
 		},
 	}
 	return a.serveCached(w, r, req)
+}
+
+func (a *App) matchAPTMirror(requestPath string) (store.APTMirror, bool) {
+	if requestPath == "" {
+		return store.APTMirror{}, false
+	}
+	for _, mirror := range a.aptMirrors {
+		prefix := strings.TrimRight(mirror.PublicPrefix, "/")
+		if prefix == "" {
+			prefix = "/"
+		}
+		if requestPath == prefix || strings.HasPrefix(requestPath, prefix+"/") {
+			return mirror, true
+		}
+	}
+	return store.APTMirror{}, false
+}
+
+func aptMirrorTarget(mirror store.APTMirror, r *http.Request) (*url.URL, error) {
+	base, err := url.Parse(mirror.UpstreamURL)
+	if err != nil {
+		return nil, err
+	}
+	if base.Scheme != "http" && base.Scheme != "https" {
+		return nil, errors.New("apt mirror upstream_url must start with http:// or https://")
+	}
+	prefix := strings.TrimRight(mirror.PublicPrefix, "/")
+	if prefix == "" {
+		prefix = "/"
+	}
+	suffix := strings.TrimPrefix(r.URL.Path, prefix)
+	if suffix == "" {
+		suffix = "/"
+	}
+	target := *base
+	target.Path = joinURLPath(base.Path, suffix)
+	target.RawQuery = r.URL.RawQuery
+	return &target, nil
+}
+
+func joinURLPath(basePath, suffix string) string {
+	basePath = strings.TrimRight(basePath, "/")
+	suffix = strings.TrimLeft(suffix, "/")
+	if basePath == "" {
+		return "/" + suffix
+	}
+	if suffix == "" {
+		return basePath
+	}
+	return basePath + "/" + suffix
 }
 
 func (a *App) loadAPTIndex(cachePath, requestPath string) error {
@@ -945,11 +1042,11 @@ func (a *App) handleConnect(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *App) validateAllowedHost(r *http.Request) error {
-	if len(a.cfg.Proxy.AllowedHosts) == 0 {
+	if len(a.cfg.Proxy.AllowedHosts) == 0 && !a.proxyHostRulesConfigured {
 		return nil
 	}
 	host := r.Host
-	if host == "" && r.URL != nil {
+	if r.URL != nil && r.URL.Host != "" {
 		host = r.URL.Host
 	}
 	host = stripPort(host)
@@ -1258,6 +1355,7 @@ func stripPort(host string) string {
 	if host == "" {
 		return host
 	}
+	host = strings.ToLower(strings.TrimSpace(host))
 	if value, _, err := net.SplitHostPort(host); err == nil {
 		host = value
 	}

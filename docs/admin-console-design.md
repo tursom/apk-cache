@@ -9,10 +9,13 @@
 - 需要登录。
 - 单管理员即可。
 - 当前不需要操作审计日志。
+- 使用内置默认管理员账号，后台可修改用户名和密码；不再使用 bootstrap token 和 session secret。
 - 仪表盘、缓存管理、APT/APK 管理、上游管理、代理管理、配置管理、日志排障等功能基本都需要。
 - 管理页面部署在同一个 Go 服务内。
 - 允许新增管理 API。
 - 需要把现有大部分配置转到数据库内。
+- APT 除代理模式外，还需要支持传统镜像站模式。
+- 代理目标网站白名单需要在前端管理。
 
 ## 2. 目标
 
@@ -23,6 +26,7 @@
 - 用单管理员账号保护所有管理页面和管理 API。
 - 通过页面完成常见运维动作：观察、搜索、清理、配置、排障。
 - 将运行配置持久化到 SQLite，TOML/env 只保留启动引导职责。
+- 配置中心的详细产品和工程设计见 [运行配置管理设计文档](runtime-config-design.md)。
 
 ### 2.2 工程目标
 
@@ -98,9 +102,9 @@
 | --- | --- |
 | `server.listen` | HTTP server 启动前必须确定；后续页面可展示并标记修改需重启 |
 | `cache.data_root` | SQLite 默认放在 data root 下，打开 DB 前必须确定 |
-| `admin.bootstrap_token` / `ADMIN_BOOTSTRAP_TOKEN` | 首次创建管理员账号时使用 |
-| `admin.session_secret` / `ADMIN_SESSION_SECRET` | Cookie 签名和 CSRF 派生密钥，建议环境变量注入 |
 | `database.path` / `DATABASE_PATH` | 可选；默认 `${data_root}/apk-cache.db` |
+
+`admin.bootstrap_token`、`ADMIN_BOOTSTRAP_TOKEN`、`admin.session_secret` 和 `ADMIN_SESSION_SECRET` 已从新设计中移除。空数据库启动时直接创建默认单管理员账号，会话使用随机 token + DB token hash，不依赖外部 session secret。
 
 ### 5.3 迁入数据库的运行配置
 
@@ -113,6 +117,8 @@
 | apt | `enabled`, `verify_hash`, `load_index_async` | 可热更新 |
 | proxy | `enabled`, `allow_connect`, `cache_non_package_requests`, `upstream_proxy`, `allowed_hosts` | 可热更新 |
 | upstreams | `name`, `url`, `proxy`, `kind`, `enabled`, `priority` | 重建 upstream manager 后热更新 |
+
+更细的配置分组、字段交互、APT mirror 和 proxy host rules 设计见 [运行配置管理设计文档](runtime-config-design.md)。
 
 ### 5.4 首次启动迁移
 
@@ -334,18 +340,18 @@ CREATE INDEX idx_request_logs_status ON request_logs(status_code);
 
 ## 7. 认证设计
 
-### 7.1 首次管理员创建
+### 7.1 默认管理员与账号管理
 
-推荐流程：
+空数据库启动时自动创建默认单管理员：
 
-1. 如果 `admin_users` 为空，`/admin/setup` 页面可用。
-2. 创建管理员必须提供 `ADMIN_BOOTSTRAP_TOKEN`。
-3. 创建完成后立即删除 bootstrap 状态，后续只能登录。
+```text
+username: admin
+password: admin123456
+```
 
-如果没有设置 bootstrap token：
+密码只保存 Argon2id hash。首次登录后页面必须提示正在使用默认凭据，并提供修改用户名和密码的入口。修改用户名或密码后，默认凭据提示消失。
 
-- 管理 API 返回 `setup_required=true` 和 `bootstrap_configured=false`。
-- 页面提示需要设置环境变量并重启。
+不再提供 `/admin/setup` bootstrap 流程，也不再要求配置 `ADMIN_BOOTSTRAP_TOKEN`。会话使用随机 token，DB 只保存 token hash，因此不再要求配置 `ADMIN_SESSION_SECRET`。
 
 ### 7.2 登录与会话
 
@@ -356,12 +362,15 @@ POST /api/admin/v1/auth/login
 POST /api/admin/v1/auth/logout
 GET  /api/admin/v1/auth/me
 POST /api/admin/v1/auth/change-password
+GET  /api/admin/v1/account
+PUT  /api/admin/v1/account/username
+PUT  /api/admin/v1/account/password
 ```
 
 安全策略：
 
 - Cookie: `HttpOnly`, `SameSite=Lax`, TLS 下加 `Secure`。
-- 管理 API 除登录/setup 外都要求 session。
+- 管理 API 除登录外都要求 session。
 - 非 GET 请求要求 `X-CSRF-Token`。
 - 登录失败做短时内存限速。
 - Session 默认有效期 24 小时，可在 DB 设置。
@@ -458,6 +467,11 @@ GET  /api/admin/v1/apt/indexes
 GET  /api/admin/v1/apt/records
 POST /api/admin/v1/apt/indexes/reload
 POST /api/admin/v1/apt/validate
+GET    /api/admin/v1/apt/mirrors
+POST   /api/admin/v1/apt/mirrors
+PUT    /api/admin/v1/apt/mirrors/{id}
+DELETE /api/admin/v1/apt/mirrors/{id}
+POST   /api/admin/v1/apt/mirrors/{id}/test
 ```
 
 页面能力：
@@ -467,6 +481,8 @@ POST /api/admin/v1/apt/validate
 - 搜索包名、filename、sha256。
 - 手动重载 APT 索引。
 - 对指定缓存文件触发校验。
+- 管理传统镜像站模式，将 `/debian`、`/ubuntu` 等本地路径映射到真实 APT 镜像站。
+- 为每个 APT mirror 生成 sources.list 示例。
 
 ### 8.5 上游管理
 
@@ -493,6 +509,10 @@ POST   /api/admin/v1/upstreams/{id}/disable
 ```text
 GET /api/admin/v1/proxy/status
 PUT /api/admin/v1/proxy/config
+GET    /api/admin/v1/proxy/host-rules
+POST   /api/admin/v1/proxy/host-rules
+PUT    /api/admin/v1/proxy/host-rules/{id}
+DELETE /api/admin/v1/proxy/host-rules/{id}
 ```
 
 能力：
@@ -500,7 +520,7 @@ PUT /api/admin/v1/proxy/config
 - 开关通用代理。
 - 开关 CONNECT。
 - 配置 `proxy.upstream_proxy`。
-- 配置 allowed hosts。
+- 管理代理目标网站白名单。
 - 查看当前活跃 CONNECT 数、上限、拒绝次数。
 
 ### 8.7 配置管理
@@ -516,7 +536,7 @@ POST /api/admin/v1/config/reload
 响应必须标识每个字段：
 
 - 当前值。
-- 来源：default / imported / database / environment-bootstrap。
+- 来源：default / imported / database / startup。
 - 是否可编辑。
 - 是否热更新。
 - 修改后是否需要重启。
@@ -545,7 +565,6 @@ GET  /api/admin/v1/system/info
 
 ```text
 /admin/login
-/admin/setup
 /admin/dashboard
 /admin/cache
 /admin/apk
@@ -636,6 +655,7 @@ Tabs：
 - Packages/Sources。
 - 包记录。
 - by-hash。
+- 镜像站。
 
 关键能力：
 
@@ -643,6 +663,7 @@ Tabs：
 - 搜索 `.deb` filename / package / sha256。
 - 校验指定缓存。
 - 重载索引。
+- 管理传统镜像站模式并生成 sources.list 示例。
 
 ### 9.6 配置页面
 
@@ -654,7 +675,7 @@ Tabs：
 - APK。
 - APT。
 - Proxy。
-- Upstreams。
+- Hash Store。
 
 保存流程：
 
@@ -693,8 +714,10 @@ type RuntimeConfigManager struct {
 - APK/APT/proxy 开关。
 - 校验开关。
 - TTL。
-- allowed hosts。
+- proxy host rules。
 - upstream 列表。
+- APT mirror 列表。
+- hash store revalidate/trust stat。
 
 推荐首版需重启：
 
@@ -707,7 +730,7 @@ type RuntimeConfigManager struct {
 
 ### 11.1 配置兼容
 
-- 保留 `config.example.toml`，但缩减说明为 bootstrap 配置。
+- 保留 `config.example.toml`，但缩减说明为启动引导配置。
 - 旧配置文件仍能启动。
 - 首次启动时把旧配置导入 DB。
 - 后续页面修改以 DB 为准。
@@ -735,8 +758,6 @@ type RuntimeConfigManager struct {
 ```text
 DATABASE_PATH
 HASH_STORE_PATH
-ADMIN_BOOTSTRAP_TOKEN
-ADMIN_SESSION_SECRET
 ```
 
 ## 12. 安全边界
@@ -762,15 +783,21 @@ ADMIN_SESSION_SECRET
 - 配置校验失败不写 DB。
 - session token hash 和过期逻辑。
 - CSRF 校验。
+- 默认管理员创建和默认凭据状态。
+- APT mirror 路径映射。
+- proxy host rules 匹配。
 
 ### 13.2 API 测试
 
 - 未登录访问管理 API 返回 401。
-- setup 创建管理员。
+- 空 DB 自动创建默认管理员。
 - 登录、获取当前用户、退出。
+- 修改用户名。
 - 修改密码。
 - 读取/修改配置。
 - 上游 CRUD。
+- APT mirror CRUD。
+- proxy host rules CRUD。
 - 缓存列表、删除、dry run。
 
 ### 13.3 集成测试
@@ -785,7 +812,7 @@ ADMIN_SESSION_SECRET
 
 - 容器启动后 `/_health` 正常。
 - `/admin/` 返回页面。
-- 使用 bootstrap token 完成首次管理员创建。
+- 使用默认管理员登录，并能修改默认密码。
 - 登录后 dashboard API 正常。
 
 ## 14. 实施阶段
@@ -794,8 +821,8 @@ ADMIN_SESSION_SECRET
 
 - 新增 SQLite store 和 migrations。
 - 新增 Pebble hash store 目录和基础健康检查。
-- 新增 bootstrap 配置。
-- 实现管理员 setup/login/logout/me/change-password。
+- 实现默认管理员创建。
+- 实现管理员 login/logout/me/change-password 和账号修改。
 - `/admin/` 提供最小登录页。
 - CI 跑管理 API 基础测试。
 
@@ -826,6 +853,8 @@ ADMIN_SESSION_SECRET
 - APKINDEX / APK package hash records 写入 Pebble。
 - APT Release / Packages / package hash records 写入 Pebble。
 - actual file hash cache 写入 Pebble，避免重复计算。
+- APT 传统镜像站模式。
+- 代理目标网站白名单。
 - 索引重载和指定缓存校验 API。
 - APK/APT 页面。
 
@@ -835,12 +864,14 @@ ADMIN_SESSION_SECRET
 - logs 页面。
 - 诊断包下载。
 
-## 15. 待确认细节
+## 15. 已确认技术选择
 
-当前设计已按用户确认范围做默认选择。实现前仍建议确认：
-
-- 首次管理员创建是否接受 `ADMIN_BOOTSTRAP_TOKEN` 方案。
-- 是否允许引入 `modernc.org/sqlite` 作为纯 Go SQLite driver。
-- 是否允许引入 `github.com/cockroachdb/pebble` 作为本地 hash KV store。
-- 管理页面采用 React + TypeScript + Vite，构建产物仍内嵌到 Go 服务。
-- `cache.root` 修改首版是否接受“保存后重启生效”。
+- 空数据库启动时创建默认管理员 `admin` / `admin123456`。
+- 不再使用 `ADMIN_BOOTSTRAP_TOKEN`。
+- 不再使用 `ADMIN_SESSION_SECRET`。
+- `cache.root` 允许前端修改，首版保存后重启生效。
+- APT 支持代理模式和传统镜像站模式。
+- 代理目标网站白名单在前端管理。
+- 使用 `modernc.org/sqlite` 作为纯 Go SQLite driver。
+- 使用 `github.com/cockroachdb/pebble` 作为本地 hash KV store。
+- 管理页面采用 React + TypeScript + Vite，构建产物内嵌到 Go 服务。

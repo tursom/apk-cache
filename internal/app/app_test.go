@@ -29,6 +29,7 @@ import (
 
 	"github.com/tursom/apk-cache/internal/config"
 	"github.com/tursom/apk-cache/internal/hashstore"
+	"github.com/tursom/apk-cache/internal/store"
 )
 
 func testConfig(t *testing.T, upstreamURL string) *config.Config {
@@ -134,6 +135,50 @@ func TestAPTCacheIsHostScoped(t *testing.T) {
 	}
 	if hitsA.Load() != 1 || hitsB.Load() != 1 {
 		t.Fatalf("host cache isolation failed: hitsA=%d hitsB=%d", hitsA.Load(), hitsB.Load())
+	}
+}
+
+func TestAPTMirrorModeMapsAndCaches(t *testing.T) {
+	var hits atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.URL.Path != "/debian/pool/main/h/hello/hello_1_amd64.deb" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("deb-body"))
+	}))
+	defer up.Close()
+
+	a, err := New(testConfig(t, up.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.store.Close()
+	defer a.hashStore.Close()
+
+	if _, err := a.store.CreateAPTMirror(context.Background(), store.APTMirror{
+		Name:         "Debian test",
+		PublicPrefix: "/debian",
+		UpstreamURL:  up.URL + "/debian",
+		Enabled:      true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reloadRuntimeFromStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/debian/pool/main/h/hello/hello_1_amd64.deb", nil)
+		req.Host = "cache.local"
+		a.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK || rec.Body.String() != "deb-body" {
+			t.Fatalf("code=%d body=%q", rec.Code, rec.Body.String())
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("mirror response should be cached, hits=%d", hits.Load())
 	}
 }
 
@@ -448,6 +493,55 @@ func TestProxyDisabledAndAllowedHosts(t *testing.T) {
 	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, up.URL+"/plain.txt", nil))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("allowed host code=%d", rec.Code)
+	}
+}
+
+func TestProxyHostRulesApplyToAPTProxyRequests(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("deb"))
+	}))
+	defer up.Close()
+	target, err := url.Parse(up.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := New(testConfig(t, up.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.store.Close()
+	defer a.hashStore.Close()
+
+	if err := a.store.ReplaceProxyHostRules(context.Background(), []string{"other.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reloadRuntimeFromStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, up.URL+"/debian/pool/main/h/hello/hello_1_amd64.deb", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("blocked apt proxy code=%d body=%q", rec.Code, rec.Body.String())
+	}
+	connectReq := httptest.NewRequest(http.MethodConnect, "http://cache.local", nil)
+	connectReq.Host = target.Host
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, connectReq)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("blocked connect code=%d body=%q", rec.Code, rec.Body.String())
+	}
+
+	if err := a.store.ReplaceProxyHostRules(context.Background(), []string{target.Host}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.reloadRuntimeFromStore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, up.URL+"/debian/pool/main/h/hello/hello_1_amd64.deb", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "deb" {
+		t.Fatalf("allowed apt proxy code=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
 

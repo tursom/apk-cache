@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   Boxes,
   ChartNoAxesCombined,
   Database,
@@ -10,8 +11,7 @@ import {
   Network,
   PackageOpen,
   ServerCog,
-  Settings,
-  ShieldCheck
+  Settings
 } from 'lucide-react';
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
 import { api, setCSRF } from './api';
@@ -25,7 +25,7 @@ import { LogsPage } from './pages/LogsPage';
 import { ProxyPage } from './pages/ProxyPage';
 import { SystemPage } from './pages/SystemPage';
 import { UpstreamsPage } from './pages/UpstreamsPage';
-import type { CurrentUser, SetupStatus, ToastState } from './types';
+import type { CurrentUser, ToastState } from './types';
 
 type RouteID = 'dashboard' | 'cache' | 'apk' | 'apt' | 'upstreams' | 'proxy' | 'config' | 'logs' | 'system';
 
@@ -44,12 +44,11 @@ const routes: Array<{ id: RouteID; label: string; icon: ReactNode }> = [
 const routeSet = new Set(routes.map(route => route.id));
 
 export function App() {
-  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [route, setRoute] = useState<RouteID>(routeFromPath());
   const [authError, setAuthError] = useState('');
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [passwordOpen, setPasswordOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
 
   const showToast = (message: string, ok = true) => {
     setToast({ message, tone: ok ? 'ok' : 'error' });
@@ -65,15 +64,13 @@ export function App() {
 
   const boot = async () => {
     try {
-      const status = await api<SetupStatus>('/setup/status');
-      setSetupStatus(status);
       const me = await api<CurrentUser>('/auth/me').catch(() => null);
       if (me?.authenticated) {
         setCSRF(me.csrf_token);
         setUser(me);
         const next = routeFromPath();
         setRoute(next);
-        if (location.pathname === '/admin/' || location.pathname === '/admin/login' || location.pathname === '/admin/setup') {
+        if (location.pathname === '/admin/' || location.pathname === '/admin/login') {
           history.replaceState({}, '', pathForRoute(next));
         }
       }
@@ -95,7 +92,7 @@ export function App() {
   if (!user) {
     return (
       <>
-        <AuthScreen setupStatus={setupStatus} onLogin={me => { setCSRF(me.csrf_token); setUser(me); navigate(routeFromPath()); }} error={authError} setError={setAuthError} />
+        <AuthScreen onLogin={me => { setCSRF(me.csrf_token); setUser(me); navigate(routeFromPath()); }} error={authError} setError={setAuthError} />
         <Toast toast={toast} onClose={() => setToast(null)} />
       </>
     );
@@ -106,8 +103,9 @@ export function App() {
       <header>
         <strong>APK Cache Admin</strong>
         <div className="user">
+          {user.is_default_credential ? <span className="warning-pill"><AlertTriangle size={14} />默认凭据</span> : null}
           <span>{user.username || 'admin'}</span>
-          <button type="button" onClick={() => setPasswordOpen(true)}><KeyRound size={15} />修改密码</button>
+          <button type="button" onClick={() => setAccountOpen(true)}><KeyRound size={15} />账号安全</button>
           <button type="button" onClick={() => void logout()}><LogOut size={15} />退出</button>
         </div>
       </header>
@@ -123,34 +121,27 @@ export function App() {
           <RouteView route={route} toast={showToast} />
         </main>
       </div>
-      {passwordOpen ? <PasswordDialog onClose={() => setPasswordOpen(false)} toast={showToast} /> : null}
+      {accountOpen ? <AccountDialog user={user} onUserChange={setUser} onClose={() => setAccountOpen(false)} toast={showToast} /> : null}
       <Toast toast={toast} onClose={() => setToast(null)} />
     </>
   );
 }
 
 function AuthScreen({
-  setupStatus,
   onLogin,
   error,
   setError
 }: {
-  setupStatus: SetupStatus | null;
   onLogin: (user: CurrentUser) => void;
   error: string;
   setError: (message: string) => void;
 }) {
-  const setupRequired = setupStatus?.setup_required;
-  const [bootstrapToken, setBootstrapToken] = useState('');
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError('');
     try {
-      if (setupRequired) {
-        await api('/setup', { method: 'POST', body: { bootstrap_token: bootstrapToken, username, password } });
-      }
       const me = await api<CurrentUser>('/auth/login', { method: 'POST', body: { username, password } });
       onLogin(me);
     } catch (err) {
@@ -162,15 +153,12 @@ function AuthScreen({
       <form className="panel auth-card" onSubmit={event => void submit(event)}>
         <h1>APK Cache Admin</h1>
         <div className="body form">
-          {setupRequired && !setupStatus?.bootstrap_configured ? <ErrorMessage message="需要配置 ADMIN_BOOTSTRAP_TOKEN 后重启服务" /> : null}
-          {setupRequired ? (
-            <label><span>Bootstrap Token</span><input type="password" value={bootstrapToken} autoComplete="off" onChange={event => setBootstrapToken(event.target.value)} /></label>
-          ) : null}
+          <p className="hint">默认管理员为 admin / admin123456，首次登录后请立即修改。</p>
           <label><span>用户名</span><input value={username} autoComplete="username" onChange={event => setUsername(event.target.value)} /></label>
-          <label><span>密码</span><input type="password" value={password} autoComplete={setupRequired ? 'new-password' : 'current-password'} onChange={event => setPassword(event.target.value)} /></label>
-          <button className="primary" type="submit" disabled={setupRequired && !setupStatus?.bootstrap_configured}>
-            {setupRequired ? <ShieldCheck size={15} /> : <Lock size={15} />}
-            {setupRequired ? '创建管理员并登录' : '登录'}
+          <label><span>密码</span><input type="password" value={password} autoComplete="current-password" onChange={event => setPassword(event.target.value)} /></label>
+          <button className="primary" type="submit">
+            <Lock size={15} />
+            登录
           </button>
           {error ? <ErrorMessage message={error} /> : null}
         </div>
@@ -179,32 +167,68 @@ function AuthScreen({
   );
 }
 
-function PasswordDialog({ onClose, toast }: { onClose: () => void; toast: (message: string, ok?: boolean) => void }) {
+function AccountDialog({
+  user,
+  onUserChange,
+  onClose,
+  toast
+}: {
+  user: CurrentUser;
+  onUserChange: (user: CurrentUser) => void;
+  onClose: () => void;
+  toast: (message: string, ok?: boolean) => void;
+}) {
+  const [username, setUsername] = useState(user.username);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
-  const submit = async (event: FormEvent) => {
+  const saveUsername = async (event: FormEvent) => {
     event.preventDefault();
+    setError('');
     try {
-      await api('/auth/change-password', { method: 'POST', body: { old_password: oldPassword, new_password: newPassword } });
+      const result = await api<{ username: string; is_default_credential: boolean }>('/account/username', { method: 'PUT', body: { username } });
+      onUserChange({ ...user, username: result.username, is_default_credential: result.is_default_credential });
+      toast('用户名已修改');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  const savePassword = async (event: FormEvent) => {
+    event.preventDefault();
+    setError('');
+    try {
+      await api('/account/password', { method: 'PUT', body: { old_password: oldPassword, new_password: newPassword } });
+      onUserChange({ ...user, username, is_default_credential: false });
       toast('密码已修改');
-      onClose();
+      setOldPassword('');
+      setNewPassword('');
     } catch (err) {
       setError((err as Error).message);
     }
   };
   return (
     <div className="modal-backdrop">
-      <form className="panel modal form" onSubmit={event => void submit(event)}>
-        <h2>修改密码</h2>
-        <label><span>当前密码</span><input type="password" value={oldPassword} autoComplete="current-password" onChange={event => setOldPassword(event.target.value)} /></label>
-        <label><span>新密码</span><input type="password" value={newPassword} autoComplete="new-password" onChange={event => setNewPassword(event.target.value)} /></label>
+      <div className="panel modal form">
+        <h2>账号安全</h2>
+        {user.is_default_credential ? <ErrorMessage message="当前仍在使用默认管理员凭据。" /> : null}
+        <form className="form" onSubmit={event => void saveUsername(event)}>
+          <label><span>用户名</span><input value={username} autoComplete="username" onChange={event => setUsername(event.target.value)} /></label>
+          <div className="actions">
+            <button type="submit">保存用户名</button>
+          </div>
+        </form>
+        <form className="form" onSubmit={event => void savePassword(event)}>
+          <label><span>当前密码</span><input type="password" value={oldPassword} autoComplete="current-password" onChange={event => setOldPassword(event.target.value)} /></label>
+          <label><span>新密码</span><input type="password" value={newPassword} autoComplete="new-password" onChange={event => setNewPassword(event.target.value)} /></label>
+          <div className="actions">
+            <button className="primary" type="submit">保存密码</button>
+          </div>
+        </form>
         {error ? <ErrorMessage message={error} /> : null}
         <div className="actions">
           <button type="button" onClick={onClose}>取消</button>
-          <button className="primary" type="submit">保存</button>
         </div>
-      </form>
+      </div>
     </div>
   );
 }
@@ -226,7 +250,7 @@ function RouteView({ route, toast }: { route: RouteID; toast: (message: string, 
 
 function routeFromPath(): RouteID {
   const raw = location.pathname.replace(/^\/admin\/?/, '').replace(/\/$/, '');
-  if (!raw || raw === 'login' || raw === 'setup') return 'dashboard';
+  if (!raw || raw === 'login') return 'dashboard';
   return routeSet.has(raw as RouteID) ? raw as RouteID : 'dashboard';
 }
 

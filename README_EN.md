@@ -13,14 +13,14 @@ The project has been rebuilt around a smaller runtime core. It keeps package cac
 ## Features
 
 - APK caching: caches `.apk` packages and `APKINDEX.tar.gz`.
-- APT caching: caches `.deb`, `Release`, `InRelease`, `Packages*`, `Sources*`, and `by-hash` requests in HTTP proxy mode.
+- APT caching: supports HTTP proxy mode and traditional mirror mode, caching `.deb`, `Release`, `InRelease`, `Packages*`, `Sources*`, and `by-hash` requests.
 - Unified cache pipeline: memory cache -> disk cache -> upstream.
 - Concurrent safety: requests for the same cache key are serialized to avoid duplicate downloads and corrupted writes.
 - Integrity validation: APK supports APKINDEX hash checks and RSA signature verification; APT supports Release/Packages-index SHA256 checks, by-hash, and package-file validation.
 - Multiple APK upstreams: configured APK upstreams are tried with failover.
 - Upstream proxy support: APK upstreams can have their own proxy; APT and generic proxy traffic use `proxy.upstream_proxy`.
 - HTTPS tunneling: supports `CONNECT` for HTTPS APT sources.
-- Admin console: embedded `/admin/` page and `/api/admin/v1/*` APIs with single-admin login.
+- Admin console: embedded `/admin/` page and `/api/admin/v1/*` APIs with default single-admin login, account updates, runtime configuration, APT mirror management, and proxy host allowlist management.
 - Persistent configuration: imports TOML/env runtime settings on first boot, then treats SQLite as the source of truth.
 - Persistent hashes: stores APK/APT expected hashes, actual-hash cache, and APT by-hash mappings in Pebble.
 - Operations endpoints: `/_health`, `/metrics`, and `/admin/`.
@@ -59,16 +59,12 @@ The repository includes [docker-compose.yml](docker-compose.yml). The default im
 Build from the current source tree and start:
 
 ```sh
-ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
-ADMIN_SESSION_SECRET='replace-with-random-secret' \
 docker compose up -d --build
 ```
 
 Deploy only with the image already published on GitHub:
 
 ```sh
-ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
-ADMIN_SESSION_SECRET='replace-with-random-secret' \
 docker compose up -d
 ```
 
@@ -76,8 +72,6 @@ Use a different GitHub tag:
 
 ```sh
 APK_CACHE_IMAGE=ghcr.io/tursom/apk-cache:v1.2.3 \
-ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
-ADMIN_SESSION_SECRET='replace-with-random-secret' \
 docker compose up -d
 ```
 
@@ -95,11 +89,11 @@ Common variables:
 - `APK_CACHE_HTTP_PORT`: host port, default `3142`.
 - `APK_CACHE_CACHE_DIR`: host cache directory, default `./cache`.
 - `APK_CACHE_DATA_DIR`: host data directory, default `./data`.
-- `APK_UPSTREAM`: APK upstream, default `https://dl-cdn.alpinelinux.org`.
-- `UPSTREAM_PROXY`: outbound proxy for APT and generic proxy traffic.
 - `GOPROXY`: Go module proxy for the build stage.
 
-First-time admin setup requires a bootstrap token:
+`docker-compose.yml` no longer injects runtime configuration environment variables. First boot imports built-in defaults into SQLite; afterwards manage runtime settings, APK upstreams, APT mirrors, and proxy host rules from `/admin/`.
+
+First-time admin access:
 
 ```sh
 docker run -d \
@@ -107,11 +101,10 @@ docker run -d \
   -p 3142:3142 \
   -v "$PWD/cache:/app/cache" \
   -v "$PWD/data:/app/data" \
-  -e ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
   ghcr.io/tursom/apk-cache:latest
 ```
 
-Open `http://127.0.0.1:3142/admin/` and create the single administrator with the bootstrap token. After setup, normal admin login uses the configured username and password.
+Open `http://127.0.0.1:3142/admin/` and log in with the default administrator `admin` / `admin123456`. Change the username and password immediately from Account Security; the default-credential warning disappears after either is changed.
 
 ### Build From Source
 
@@ -171,7 +164,7 @@ Example APK requests:
 
 ### Debian/Ubuntu APT
 
-APT uses APK Cache as an HTTP proxy.
+APT can use APK Cache as an HTTP proxy.
 
 Create `/etc/apt/apt.conf.d/01-apk-cache-proxy`:
 
@@ -191,6 +184,22 @@ Notes:
 
 - `http://` APT repositories can be parsed and cached.
 - `https://` APT repositories usually use `CONNECT` TLS tunnels. This service forwards those tunnels, but it does not decrypt or cache TLS contents.
+- Proxy mode can be restricted by the admin-console host allowlist; when rules exist, both HTTP APT proxy requests and HTTPS `CONNECT` tunnels must match an enabled host rule.
+
+APT also supports traditional mirror mode. First add a mirror under `/admin/apt`, for example:
+
+```text
+Public prefix: /debian
+Upstream URL: https://deb.debian.org/debian
+```
+
+Then point `sources.list` directly at this service:
+
+```text
+deb http://cache.example:3142/debian bookworm main
+```
+
+Mirror mode does not decrypt client TLS. The service fetches only the configured upstream and stores cache files by the real upstream host and path.
 
 ## Configuration
 
@@ -200,68 +209,32 @@ The default config path is `config.toml`; use `-config` to choose another file:
 ./apk-cache -config /path/to/config.toml
 ```
 
-See [config.example.toml](config.example.toml) for a complete example.
+See [config.example.toml](config.example.toml) for a bootstrap example.
 
 ### Example
 
 ```toml
+# APK Cache bootstrap configuration.
+#
+# Most runtime settings are imported into SQLite on first boot and should be
+# managed later from /admin/. Existing DB settings win over TOML/env values.
+
 [server]
 listen = ":3142"
 
-[database]
-path = ""
+[cache]
+# Used before SQLite opens. Empty DB will import the built-in runtime defaults.
+data_root = "./data"
+# Optional first-import override for disk cache files.
+# root = "./cache"
 
-[admin]
-bootstrap_token = ""
-session_secret = ""
+[database]
+# Empty means "${cache.data_root}/apk-cache.db".
+path = ""
 
 [hash_store]
+# Empty means "${cache.data_root}/hash.pebble".
 path = ""
-rebuild_on_corruption = false
-trust_file_stat = true
-actual_revalidate_interval = "24h"
-
-[[upstreams]]
-name = "Official Alpine CDN"
-url = "https://dl-cdn.alpinelinux.org"
-kind = "apk"
-# proxy = "socks5://127.0.0.1:1080"
-
-[cache]
-root = "./cache"
-data_root = "./data"
-index_ttl = "24h"
-package_ttl = "720h"
-
-[cache.memory]
-enabled = true
-max_size = "256MB"
-max_item_size = "16MB"
-ttl = "30m"
-max_items = 2048
-
-[transport]
-timeout = "30s"
-idle_conn_timeout = "90s"
-max_idle_conns = 128
-
-[apk]
-enabled = true
-verify_hash = true
-verify_signature = true
-keys_dir = ""
-
-[apt]
-enabled = true
-verify_hash = true
-load_index_async = true
-
-[proxy]
-enabled = true
-allow_connect = true
-cache_non_package_requests = false
-upstream_proxy = ""
-allowed_hosts = []
 ```
 
 ### Configuration Reference
@@ -270,8 +243,6 @@ allowed_hosts = []
 | --- | --- | --- |
 | `server.listen` | `:3142` | HTTP listen address |
 | `database.path` | `${cache.data_root}/apk-cache.db` | SQLite database path; empty uses the default path |
-| `admin.bootstrap_token` | empty | Required for first-time admin creation; prefer `ADMIN_BOOTSTRAP_TOKEN` |
-| `admin.session_secret` | empty | HMAC key for session/CSRF token hashes; prefer an environment variable in production |
 | `hash_store.path` | `${cache.data_root}/hash.pebble` | Pebble hash-store path |
 | `hash_store.rebuild_on_corruption` | `false` | Allow deleting and rebuilding the hash store after corruption |
 | `hash_store.trust_file_stat` | `true` | Reuse actual-hash cache entries when size and mtime match |
@@ -303,7 +274,7 @@ allowed_hosts = []
 | `proxy.allow_connect` | `true` | Allow `CONNECT` tunnels |
 | `proxy.cache_non_package_requests` | `false` | Cache non APK/APT HTTP requests |
 | `proxy.upstream_proxy` | empty | Outbound proxy for APT and generic proxy traffic |
-| `proxy.allowed_hosts` | `[]` | If non-empty, only these target hosts are allowed |
+| `proxy.allowed_hosts` | `[]` | Compatibility field for first import; maintain the host allowlist in the admin console afterwards |
 
 Supported proxy URL schemes:
 
@@ -330,8 +301,6 @@ At container startup, `entrypoint.sh` generates a temporary TOML config from env
 | `CACHE_ROOT` / `CACHE_DIR` | `/app/cache` | `cache.root` |
 | `DATA_ROOT` | `/app/data` | `cache.data_root` |
 | `DATABASE_PATH` | empty | `database.path`; empty uses `${DATA_ROOT}/apk-cache.db` |
-| `ADMIN_BOOTSTRAP_TOKEN` | empty | `admin.bootstrap_token` |
-| `ADMIN_SESSION_SECRET` | empty | `admin.session_secret` |
 | `HASH_STORE_PATH` | empty | `hash_store.path`; empty uses `${DATA_ROOT}/hash.pebble` |
 | `HASH_STORE_REBUILD_ON_CORRUPTION` | `false` | `hash_store.rebuild_on_corruption` |
 | `HASH_STORE_TRUST_FILE_STAT` | `true` | `hash_store.trust_file_stat` |
@@ -358,7 +327,7 @@ At container startup, `entrypoint.sh` generates a temporary TOML config from env
 | `PROXY_ENABLED` | `true` | `proxy.enabled` |
 | `PROXY_ALLOW_CONNECT` | `true` | `proxy.allow_connect` |
 | `PROXY_CACHE_NON_PACKAGE_REQUESTS` | `false` | `proxy.cache_non_package_requests` |
-| `PROXY_ALLOWED_HOSTS` | empty | Comma-separated `proxy.allowed_hosts` |
+| `PROXY_ALLOWED_HOSTS` | empty | Comma-separated initial proxy host allowlist; ignored after DB settings already exist |
 
 Docker example:
 
@@ -381,18 +350,19 @@ Every request enters the same HTTP handler:
 1. `/_health` returns health information.
 2. `/metrics` returns Prometheus metrics.
 3. `/admin/` returns the embedded admin console.
-4. `/api/admin/v1/*` enters the admin API; all endpoints except setup/login require a session and CSRF token.
+4. `/api/admin/v1/*` enters the admin API; all endpoints except login require a session and CSRF token.
 5. `CONNECT` enters the tunnel proxy.
 6. Other requests are classified as APK, APT, or generic proxy traffic.
 
 ### Configuration And Storage
 
-The service still reads TOML/env on startup, but those inputs mainly bootstrap the listen address, data directory, database path, and first admin setup. After SQLite opens, migrations run and runtime configuration is loaded as follows:
+The service still reads TOML/env on startup, but those inputs mainly bootstrap the listen address, data directory, database path, and first runtime-configuration import. After SQLite opens, migrations run and runtime configuration is loaded as follows:
 
-1. If `settings` is empty, the merged TOML/env runtime configuration is imported into SQLite.
-2. If SQLite already has settings, SQLite wins; runtime settings in TOML/env no longer overwrite the database.
-3. Upstreams, admin users, sessions, cache objects, request logs, and management summaries are stored in SQLite.
-4. APK/APT expected hashes, actual-hash cache, source mappings, APT by-hash mappings, and path dictionaries are stored in Pebble.
+1. If no administrator exists, the service creates `admin` / `admin123456`.
+2. If `settings` is empty, the merged TOML/env runtime configuration is imported into SQLite.
+3. If SQLite already has settings, SQLite wins; runtime settings in TOML/env no longer overwrite the database.
+4. APK upstreams, APT mirrors, proxy host rules, admin users, sessions, cache objects, request logs, and management summaries are stored in SQLite.
+5. APK/APT expected hashes, actual-hash cache, source mappings, APT by-hash mappings, and path dictionaries are stored in Pebble.
 
 After a setting is saved in the admin console, a restart will not accidentally revert it from an old TOML file. Startup-time settings such as `server.listen`, `cache.root`, `cache.data_root`, and `hash_store.path` are marked as restart-required by the API.
 
@@ -443,7 +413,7 @@ Actual file hashes are cached in Pebble. A cached actual hash is reused when fil
 - TLS is not inspected.
 - TLS contents are not cached.
 - `proxy.allow_connect=false` disables tunnels.
-- `proxy.allowed_hosts` can restrict destination hosts.
+- The admin-console proxy host allowlist can restrict destination hosts.
 - Concurrent tunnels have a fixed limit to prevent unbounded connection usage.
 
 ## Operations Endpoints
@@ -452,19 +422,20 @@ Actual file hashes are cached in Pebble. A cached actual hash is reused when fil
 
 Embedded admin console. First-time flow:
 
-1. Set `ADMIN_BOOTSTRAP_TOKEN` and start the service.
-2. Open `/admin/` and use the setup page.
-3. Enter the bootstrap token, username, and password to create the single admin.
-4. Later access uses normal admin login.
+1. Start the service.
+2. Open `/admin/`.
+3. Log in with `admin` / `admin123456`.
+4. Change the username and password in Account Security.
+5. Later access uses normal admin login.
 
 The first admin console includes:
 
 - Dashboard: health, upstream status, cache-object count, CONNECT count, and hash-store status.
-- Configuration: inspect and update SQLite-backed runtime settings, including hot-reload vs restart-required markers.
+- Configuration: inspect and update SQLite-backed runtime settings grouped by product area, including hot-reload vs restart-required markers.
 - Upstreams: add, enable, disable, and delete APK upstreams.
-- Proxy: enable/disable the generic proxy, CONNECT, non-package caching, and allowed hosts.
+- Proxy: enable/disable the generic proxy, CONNECT, non-package caching, and the target-host allowlist.
 - Cache: search cache objects, delete objects, dry-run batch deletion, reconcile disk metadata, clear memory cache, and prewarm URLs.
-- APK/APT: inspect indexes and parsed records, reload indexes, and trigger APT validation.
+- APK/APT: inspect indexes and parsed records, manage APT mirrors, generate sources.list lines, reload indexes, and trigger APT validation.
 - Logs, System, and Hash: inspect recent request logs, error logs, system information, diagnostic packages, and Pebble hash-store statistics.
 
 Frontend source lives in `internal/admin/web` and uses React + TypeScript + Vite. The production build is written to `internal/admin/static` and embedded into the Go binary. `./build.sh` runs the frontend build automatically.

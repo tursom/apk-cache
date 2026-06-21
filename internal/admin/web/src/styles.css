@@ -119,6 +119,17 @@ header .user button {
   color: #f6fbf9;
 }
 
+.warning-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fff5e7;
+  color: #7a4700;
+  font-size: 12px;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 220px minmax(0, 1fr);
@@ -245,6 +256,12 @@ main {
   gap: 10px;
 }
 
+.hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .form label span,
 .field span {
   display: block;
@@ -263,6 +280,11 @@ main {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.inline-check {
+  margin: 0;
+  min-height: 34px;
 }
 
 .check-row span {
@@ -332,6 +354,21 @@ tr:last-child td {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.setting-name {
+  display: grid;
+  gap: 3px;
+  min-width: 220px;
+}
+
+.setting-name strong {
+  font-weight: 650;
+}
+
+.setting-name span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .status {

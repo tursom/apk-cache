@@ -1,63 +1,33 @@
-# APK Cache example configuration
+# APK Cache bootstrap configuration.
+#
+# Most runtime settings are imported into SQLite on first boot and should be
+# managed later from /admin/. Existing DB settings win over TOML/env values.
 
 [server]
 listen = ":3142"
+
+[cache]
+# Used before SQLite opens. Empty DB will import the built-in runtime defaults.
+data_root = "./data"
+# Optional first-import override for disk cache files.
+# root = "./cache"
 
 [database]
 # Empty means "${cache.data_root}/apk-cache.db".
 path = ""
 
-[admin]
-# Required only for first-time /admin/setup.
-bootstrap_token = ""
-# Prefer ADMIN_SESSION_SECRET in production.
-session_secret = ""
-
 [hash_store]
 # Empty means "${cache.data_root}/hash.pebble".
 path = ""
-rebuild_on_corruption = false
-trust_file_stat = true
-actual_revalidate_interval = "24h"
 
-[[upstreams]]
-name = "Official Alpine CDN"
-url = "https://dl-cdn.alpinelinux.org"
-kind = "apk"
+# Optional first-import examples. After DB initialization, manage these from
+# /admin/ instead of editing this file.
+#
+# [[upstreams]]
+# name = "Official Alpine CDN"
+# url = "https://dl-cdn.alpinelinux.org"
+# kind = "apk"
 # proxy = "socks5://127.0.0.1:1080"
-
-[cache]
-root = "./cache"
-data_root = "./data"
-index_ttl = "24h"
-package_ttl = "720h"
-
-[cache.memory]
-enabled = true
-max_size = "256MB"
-max_item_size = "16MB"
-ttl = "30m"
-max_items = 2048
-
-[transport]
-timeout = "30s"
-idle_conn_timeout = "90s"
-max_idle_conns = 128
-
-[apk]
-enabled = true
-verify_hash = true
-verify_signature = true
-keys_dir = ""
-
-[apt]
-enabled = true
-verify_hash = true
-load_index_async = true
-
-[proxy]
-enabled = true
-allow_connect = true
-cache_non_package_requests = false
-upstream_proxy = ""
-allowed_hosts = []
+#
+# [proxy]
+# allowed_hosts = ["deb.debian.org", "security.debian.org"]

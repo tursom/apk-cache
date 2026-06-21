@@ -4,15 +4,13 @@ export type AdminResponse<T> = {
   error?: { code: string; message: string } | null;
 };
 
-export type SetupStatus = {
-  setup_required: boolean;
-  bootstrap_configured: boolean;
-};
-
 export type CurrentUser = {
   authenticated: boolean;
   username: string;
   csrf_token: string;
+  is_default_credential: boolean;
+  last_login_at?: string;
+  default_username?: string;
 };
 
 export type Setting = {
@@ -29,10 +27,14 @@ export type Setting = {
 export type SettingSchema = {
   key: string;
   group: string;
+  title: string;
+  description: string;
   value_type: Setting['value_type'];
+  control: string;
   editable: boolean;
   hot_reload: boolean;
   restart_required: boolean;
+  sensitive: boolean;
 };
 
 export type Upstream = {
@@ -109,6 +111,26 @@ export type APTRecord = {
   package_name?: string;
   size_bytes: number;
   sha256: string;
+};
+
+export type APTMirror = {
+  id: number;
+  name: string;
+  public_prefix: string;
+  upstream_url: string;
+  proxy: string;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProxyHostRule = {
+  id: number;
+  host: string;
+  enabled: boolean;
+  description: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type ToastState = {

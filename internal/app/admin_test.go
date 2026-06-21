@@ -10,9 +10,8 @@ import (
 	"time"
 )
 
-func TestAdminSetupLoginAndConfigUpdate(t *testing.T) {
+func TestAdminDefaultLoginAccountAndConfigUpdate(t *testing.T) {
 	cfg := testConfig(t, "http://example.invalid")
-	cfg.Admin.BootstrapToken = "bootstrap-secret"
 	a, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -43,33 +42,22 @@ func TestAdminSetupLoginAndConfigUpdate(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/admin/v1/setup/status", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("setup status code=%d body=%s", rec.Code, rec.Body.String())
-	}
-	var setup struct {
-		OK   bool `json:"ok"`
-		Data struct {
-			SetupRequired bool `json:"setup_required"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &setup); err != nil {
-		t.Fatal(err)
-	}
-	if !setup.OK || !setup.Data.SetupRequired {
-		t.Fatalf("unexpected setup response: %s", rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/admin/v1/setup", strings.NewReader(`{"bootstrap_token":"bootstrap-secret","username":"admin","password":"password123"}`)))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("setup code=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	rec = httptest.NewRecorder()
-	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/admin/v1/auth/login", strings.NewReader(`{"username":"admin","password":"password123"}`)))
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/admin/v1/auth/login", strings.NewReader(`{"username":"admin","password":"admin123456"}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var login struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Username            string `json:"username"`
+			IsDefaultCredential bool   `json:"is_default_credential"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &login); err != nil {
+		t.Fatal(err)
+	}
+	if !login.OK || login.Data.Username != "admin" || !login.Data.IsDefaultCredential {
+		t.Fatalf("unexpected login response: %s", rec.Body.String())
 	}
 	var sessionCookie, csrfCookie *http.Cookie
 	for _, cookie := range rec.Result().Cookies() {
@@ -84,7 +72,35 @@ func TestAdminSetupLoginAndConfigUpdate(t *testing.T) {
 		t.Fatalf("missing auth cookies: %#v", rec.Result().Cookies())
 	}
 
-	req := httptest.NewRequest(http.MethodPut, "/api/admin/v1/config", strings.NewReader(`{"settings":{"cache.index_ttl":"48h"}}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/admin/v1/proxy/host-rules", strings.NewReader(`{"host":"deb.example","enabled":true,"description":"test"}`))
+	req.AddCookie(sessionCookie)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create host rule code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/admin/v1/apt/mirrors", strings.NewReader(`{"name":"Debian","public_prefix":"/debian","upstream_url":"http://example.invalid/debian","enabled":true}`))
+	req.AddCookie(sessionCookie)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create apt mirror code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/v1/account", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"is_default_credential":true`) {
+		t.Fatalf("account code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/v1/config", strings.NewReader(`{"settings":{"cache.index_ttl":"48h"}}`))
 	req.AddCookie(sessionCookie)
 	rec = httptest.NewRecorder()
 	a.Handler().ServeHTTP(rec, req)
@@ -103,6 +119,47 @@ func TestAdminSetupLoginAndConfigUpdate(t *testing.T) {
 	}
 	if a.indexTTL != 48*time.Hour {
 		t.Fatalf("indexTTL=%s", a.indexTTL)
+	}
+
+	oldCacheRoot := a.cfg.Cache.Root
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/v1/config", strings.NewReader(`{"settings":{"cache.root":"/tmp/apk-cache-next-root"}}`))
+	req.AddCookie(sessionCookie)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"cache.root"`) {
+		t.Fatalf("cache.root update code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if a.cfg.Cache.Root != oldCacheRoot {
+		t.Fatalf("cache root switched without restart: %s", a.cfg.Cache.Root)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/v1/account/username", strings.NewReader(`{"username":"rootadmin"}`))
+	req.AddCookie(sessionCookie)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("username update code=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/api/admin/v1/account/password", strings.NewReader(`{"old_password":"admin123456","new_password":"password123"}`))
+	req.AddCookie(sessionCookie)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("password update code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/admin/v1/account", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"is_default_credential":false`) {
+		t.Fatalf("account after update code=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/admin/v1/dashboard/summary", nil)

@@ -13,14 +13,14 @@ APK Cache 是一个面向 Linux 包仓库的 HTTP 缓存代理服务，当前实
 ## 功能概览
 
 - APK 缓存：缓存 `.apk` 包和 `APKINDEX.tar.gz`。
-- APT 缓存：通过 HTTP 代理模式缓存 `.deb`、`Release`、`InRelease`、`Packages*`、`Sources*` 和 `by-hash` 请求。
+- APT 缓存：支持 HTTP 代理模式和传统镜像站模式，缓存 `.deb`、`Release`、`InRelease`、`Packages*`、`Sources*` 和 `by-hash` 请求。
 - 统一缓存流水线：内存缓存 -> 磁盘缓存 -> 上游回源。
 - 并发安全：同一缓存 key 使用文件级互斥，避免并发重复下载和写坏缓存。
 - 完整性校验：APK 支持 APKINDEX hash 和 RSA 签名校验；APT 支持 Release/Packages 索引 SHA256、by-hash 和包文件校验。
 - 多 APK 上游：支持多个 APK upstream，按健康状态和顺序 failover。
 - 上游代理：APK upstream 可单独配置代理；APT/通用代理可使用统一 `proxy.upstream_proxy`。
 - HTTPS 隧道：支持 `CONNECT`，用于 HTTPS APT 源透传。
-- 管理台：内置 `/admin/` 页面和 `/api/admin/v1/*` 管理 API，支持单管理员登录。
+- 管理台：内置 `/admin/` 页面和 `/api/admin/v1/*` 管理 API，支持默认单管理员登录、账号修改、运行配置、APT mirror 和代理白名单管理。
 - 配置持久化：首次启动从 TOML/env 导入运行配置，之后以 SQLite 中的配置为准。
 - Hash 持久化：使用 Pebble 保存 APK/APT expected hash、actual hash 缓存和 APT by-hash 映射。
 - 运维端点：`/_health`、`/metrics`、`/admin/`。
@@ -59,16 +59,12 @@ curl http://127.0.0.1:3142/metrics
 从当前源码构建并启动：
 
 ```sh
-ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
-ADMIN_SESSION_SECRET='replace-with-random-secret' \
 docker compose up -d --build
 ```
 
 只使用 GitHub 上已经发布的镜像部署：
 
 ```sh
-ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
-ADMIN_SESSION_SECRET='replace-with-random-secret' \
 docker compose up -d
 ```
 
@@ -76,8 +72,6 @@ docker compose up -d
 
 ```sh
 APK_CACHE_IMAGE=ghcr.io/tursom/apk-cache:v1.2.3 \
-ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
-ADMIN_SESSION_SECRET='replace-with-random-secret' \
 docker compose up -d
 ```
 
@@ -95,11 +89,11 @@ docker compose up -d
 - `APK_CACHE_HTTP_PORT`：宿主机端口，默认 `3142`。
 - `APK_CACHE_CACHE_DIR`：宿主机缓存目录，默认 `./cache`。
 - `APK_CACHE_DATA_DIR`：宿主机数据目录，默认 `./data`。
-- `APK_UPSTREAM`：APK 上游，默认 `https://dl-cdn.alpinelinux.org`。
-- `UPSTREAM_PROXY`：APT/通用代理出站代理。
 - `GOPROXY`：构建阶段 Go module 代理。
 
-首次进入管理台需要设置 bootstrap token：
+`docker-compose.yml` 不再注入运行配置环境变量。首次启动会使用内置默认值导入 SQLite，之后请在 `/admin/` 管理运行配置、APK upstream、APT mirror 和代理白名单。
+
+首次进入管理台：
 
 ```sh
 docker run -d \
@@ -107,11 +101,10 @@ docker run -d \
   -p 3142:3142 \
   -v "$PWD/cache:/app/cache" \
   -v "$PWD/data:/app/data" \
-  -e ADMIN_BOOTSTRAP_TOKEN='change-me-once' \
   ghcr.io/tursom/apk-cache:latest
 ```
 
-然后打开 `http://127.0.0.1:3142/admin/`，使用 bootstrap token 创建单管理员账号。创建完成后，后续只需要管理员用户名和密码登录。
+然后打开 `http://127.0.0.1:3142/admin/`，使用默认管理员 `admin` / `admin123456` 登录。首次登录后应立即在“账号安全”里修改用户名和密码；修改后默认凭据提示会消失。
 
 ### 从源码构建
 
@@ -171,7 +164,7 @@ APK 请求示例：
 
 ### Debian/Ubuntu APT
 
-APT 通过 HTTP 代理方式使用 APK Cache。
+APT 可以通过 HTTP 代理方式使用 APK Cache。
 
 创建 `/etc/apt/apt.conf.d/01-apk-cache-proxy`：
 
@@ -191,6 +184,22 @@ apt-get install curl
 
 - `http://` APT 源可以被解析和缓存。
 - `https://` APT 源通常通过 `CONNECT` 建立 TLS 隧道，当前服务会透传，但不会解密或缓存 TLS 内部内容。
+- 代理模式可在管理台配置目标网站白名单；白名单非空时，HTTP APT 和 HTTPS `CONNECT` 都只允许命中启用规则的 host。
+
+APT 也支持传统镜像站模式。先在管理台 `/admin/apt` 的“镜像站”tab 增加映射，例如：
+
+```text
+本地路径前缀: /debian
+上游 URL: https://deb.debian.org/debian
+```
+
+然后客户端 `sources.list` 可以直接指向本服务：
+
+```text
+deb http://cache.example:3142/debian bookworm main
+```
+
+镜像站模式不会解密客户端 TLS；服务只请求配置好的 upstream，并按真实 upstream host 和路径归档缓存。
 
 ## 配置文件
 
@@ -200,68 +209,32 @@ apt-get install curl
 ./apk-cache -config /path/to/config.toml
 ```
 
-完整示例见 [config.example.toml](config.example.toml)。
+启动引导示例见 [config.example.toml](config.example.toml)。
 
 ### 配置示例
 
 ```toml
+# APK Cache bootstrap configuration.
+#
+# Most runtime settings are imported into SQLite on first boot and should be
+# managed later from /admin/. Existing DB settings win over TOML/env values.
+
 [server]
 listen = ":3142"
 
-[database]
-path = ""
+[cache]
+# Used before SQLite opens. Empty DB will import the built-in runtime defaults.
+data_root = "./data"
+# Optional first-import override for disk cache files.
+# root = "./cache"
 
-[admin]
-bootstrap_token = ""
-session_secret = ""
+[database]
+# Empty means "${cache.data_root}/apk-cache.db".
+path = ""
 
 [hash_store]
+# Empty means "${cache.data_root}/hash.pebble".
 path = ""
-rebuild_on_corruption = false
-trust_file_stat = true
-actual_revalidate_interval = "24h"
-
-[[upstreams]]
-name = "Official Alpine CDN"
-url = "https://dl-cdn.alpinelinux.org"
-kind = "apk"
-# proxy = "socks5://127.0.0.1:1080"
-
-[cache]
-root = "./cache"
-data_root = "./data"
-index_ttl = "24h"
-package_ttl = "720h"
-
-[cache.memory]
-enabled = true
-max_size = "256MB"
-max_item_size = "16MB"
-ttl = "30m"
-max_items = 2048
-
-[transport]
-timeout = "30s"
-idle_conn_timeout = "90s"
-max_idle_conns = 128
-
-[apk]
-enabled = true
-verify_hash = true
-verify_signature = true
-keys_dir = ""
-
-[apt]
-enabled = true
-verify_hash = true
-load_index_async = true
-
-[proxy]
-enabled = true
-allow_connect = true
-cache_non_package_requests = false
-upstream_proxy = ""
-allowed_hosts = []
 ```
 
 ### 配置项说明
@@ -270,8 +243,6 @@ allowed_hosts = []
 | --- | --- | --- |
 | `server.listen` | `:3142` | HTTP 监听地址 |
 | `database.path` | `${cache.data_root}/apk-cache.db` | SQLite 数据库路径；为空时使用默认路径 |
-| `admin.bootstrap_token` | 空 | 首次创建管理员时需要；建议用 `ADMIN_BOOTSTRAP_TOKEN` 注入 |
-| `admin.session_secret` | 空 | session/CSRF token hash 的 HMAC 密钥；生产建议用环境变量注入 |
 | `hash_store.path` | `${cache.data_root}/hash.pebble` | Pebble hash store 路径 |
 | `hash_store.rebuild_on_corruption` | `false` | hash store 损坏时是否允许删除后重建 |
 | `hash_store.trust_file_stat` | `true` | actual hash 缓存是否信任 size + mtime |
@@ -303,7 +274,7 @@ allowed_hosts = []
 | `proxy.allow_connect` | `true` | 是否允许 `CONNECT` 隧道 |
 | `proxy.cache_non_package_requests` | `false` | 是否缓存非 APK/APT 普通 HTTP 请求 |
 | `proxy.upstream_proxy` | 空 | APT 和通用代理使用的出站代理 |
-| `proxy.allowed_hosts` | `[]` | 非空时只允许代理这些目标 host |
+| `proxy.allowed_hosts` | `[]` | 兼容首次导入字段；后续请在管理台代理白名单中维护 |
 
 支持的代理 URL：
 
@@ -330,8 +301,6 @@ http://user:password@proxy.example:8080
 | `CACHE_ROOT` / `CACHE_DIR` | `/app/cache` | `cache.root` |
 | `DATA_ROOT` | `/app/data` | `cache.data_root` |
 | `DATABASE_PATH` | 空 | `database.path`；为空时使用 `${DATA_ROOT}/apk-cache.db` |
-| `ADMIN_BOOTSTRAP_TOKEN` | 空 | `admin.bootstrap_token` |
-| `ADMIN_SESSION_SECRET` | 空 | `admin.session_secret` |
 | `HASH_STORE_PATH` | 空 | `hash_store.path`；为空时使用 `${DATA_ROOT}/hash.pebble` |
 | `HASH_STORE_REBUILD_ON_CORRUPTION` | `false` | `hash_store.rebuild_on_corruption` |
 | `HASH_STORE_TRUST_FILE_STAT` | `true` | `hash_store.trust_file_stat` |
@@ -358,7 +327,7 @@ http://user:password@proxy.example:8080
 | `PROXY_ENABLED` | `true` | `proxy.enabled` |
 | `PROXY_ALLOW_CONNECT` | `true` | `proxy.allow_connect` |
 | `PROXY_CACHE_NON_PACKAGE_REQUESTS` | `false` | `proxy.cache_non_package_requests` |
-| `PROXY_ALLOWED_HOSTS` | 空 | 逗号分隔的 `proxy.allowed_hosts` |
+| `PROXY_ALLOWED_HOSTS` | 空 | 逗号分隔的首次导入代理白名单；DB 已有配置后不再覆盖 |
 
 Docker 示例：
 
@@ -381,18 +350,19 @@ docker run -d \
 1. `/_health` 返回健康检查。
 2. `/metrics` 返回 Prometheus 指标。
 3. `/admin/` 返回内嵌管理页面。
-4. `/api/admin/v1/*` 进入管理 API，除 setup/login 外需要 session 和 CSRF。
+4. `/api/admin/v1/*` 进入管理 API，除 login 外需要 session 和 CSRF。
 5. `CONNECT` 进入隧道代理。
 6. 普通请求按路径或 URL 判断为 APK、APT 或通用代理。
 
 ### 配置与数据存储
 
-启动时仍会读取 TOML/env，但它们主要负责监听地址、数据目录、数据库路径和首次管理员 bootstrap。服务打开 SQLite 后会执行迁移：
+启动时仍会读取 TOML/env，但它们主要负责监听地址、数据目录、数据库路径和首次运行配置导入。服务打开 SQLite 后会执行迁移：
 
-1. 如果 `settings` 为空，将当前 TOML/env 合并后的运行配置导入 SQLite。
-2. 如果 SQLite 已有配置，以 SQLite 为准；TOML/env 中的运行配置不再覆盖数据库。
-3. 上游列表、管理员、session、缓存对象、请求日志和管理摘要保存在 SQLite。
-4. APK/APT expected hash、actual hash 缓存、source mapping、APT by-hash 映射和路径字典保存在 Pebble。
+1. 如果没有管理员，自动创建 `admin` / `admin123456` 默认单管理员。
+2. 如果 `settings` 为空，将当前 TOML/env 合并后的运行配置导入 SQLite。
+3. 如果 SQLite 已有配置，以 SQLite 为准；TOML/env 中的运行配置不再覆盖数据库。
+4. APK upstream、APT mirror、代理白名单、管理员、session、缓存对象、请求日志和管理摘要保存在 SQLite。
+5. APK/APT expected hash、actual hash 缓存、source mapping、APT by-hash 映射和路径字典保存在 Pebble。
 
 这意味着管理台保存配置后，重启服务不会被旧 TOML 意外覆盖。`server.listen`、`cache.root`、`cache.data_root`、`hash_store.path` 等启动期配置会在 API 中标记为需要重启。
 
@@ -443,7 +413,7 @@ APT 校验由 `internal/apt` 实现：
 - 不解析 TLS。
 - 不缓存 TLS 内部内容。
 - 可通过 `proxy.allow_connect=false` 禁用。
-- 可通过 `proxy.allowed_hosts` 限制目标 host。
+- 可通过管理台代理白名单限制目标 host。
 - 并发隧道有固定上限，防止无限占用连接。
 
 ## 运维端点
@@ -452,19 +422,20 @@ APT 校验由 `internal/apt` 实现：
 
 内置管理台。首次使用流程：
 
-1. 设置 `ADMIN_BOOTSTRAP_TOKEN` 并启动服务。
-2. 打开 `/admin/`，进入 setup 页面。
-3. 输入 bootstrap token、用户名和密码创建单管理员。
-4. 后续通过登录态访问管理页面和管理 API。
+1. 启动服务。
+2. 打开 `/admin/`。
+3. 使用默认管理员 `admin` / `admin123456` 登录。
+4. 在“账号安全”里修改用户名和密码。
+5. 后续通过登录态访问管理页面和管理 API。
 
 管理台首版提供：
 
 - 仪表盘：健康状态、上游状态、缓存对象数量、CONNECT 数、hash store 状态。
-- 配置管理：查看和修改 SQLite 中的运行配置，标识热更新/需重启字段。
+- 配置管理：按业务分组查看和修改 SQLite 中的运行配置，标识热更新/需重启字段。
 - 上游管理：新增、启用、禁用、删除 APK upstream。
-- 代理管理：开关通用代理、CONNECT、非包请求缓存和 allowed hosts。
+- 代理管理：开关通用代理、CONNECT、非包请求缓存和目标网站白名单。
 - 缓存管理：搜索缓存对象、删除缓存、批量 dry-run 删除、扫描磁盘回填元数据、清空内存缓存和预热。
-- APK/APT：查看索引和解析记录，手动重载索引，触发 APT 校验。
+- APK/APT：查看索引和解析记录，管理 APT mirror，生成 sources.list，手动重载索引，触发 APT 校验。
 - 日志、系统与 Hash：查看最近请求日志、错误日志、系统信息、诊断包和 Pebble hash store 统计。
 
 前端源码位于 `internal/admin/web`，使用 React + TypeScript + Vite；生产构建输出到 `internal/admin/static` 后由 Go 二进制内嵌。`./build.sh` 会自动执行前端构建。
