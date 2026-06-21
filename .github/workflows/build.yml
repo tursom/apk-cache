@@ -144,12 +144,18 @@ jobs:
       - name: Smoke test Docker image
         run: |
           set -eu
+          cookie_jar="$(mktemp)"
           cid="$(docker run -d -p 3142:3142 apk-cache:ci)"
-          trap 'docker logs "$cid" || true; docker rm -f "$cid" || true' EXIT
+          trap 'docker logs "$cid" || true; docker rm -f "$cid" || true; rm -f "$cookie_jar" || true' EXIT
           for i in $(seq 1 30); do
             if curl -fsS http://127.0.0.1:3142/_health; then
               curl -fsS http://127.0.0.1:3142/admin/ >/dev/null
-              curl -fsS http://127.0.0.1:3142/api/admin/v1/setup/status | grep -q '"ok":true'
+              curl -fsS -c "$cookie_jar" \
+                -H 'Content-Type: application/json' \
+                -d '{"username":"admin","password":"admin123456"}' \
+                http://127.0.0.1:3142/api/admin/v1/auth/login | grep -q '"authenticated":true'
+              curl -fsS -b "$cookie_jar" \
+                http://127.0.0.1:3142/api/admin/v1/auth/me | grep -q '"authenticated":true'
               exit 0
             fi
             sleep 1
