@@ -1,0 +1,10 @@
+# Real APK fixture data fetched from dl-cdn.alpinelinux.org on 2026-06-21.
+index_url=https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/APKINDEX.tar.gz
+package_url=https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/lua5.4-microlight-1.1.1-r4.apk
+package_filename=lua5.4-microlight-1.1.1-r4.apk
+package_name=lua5.4-microlight
+package_version=1.1.1-r4
+package_size=10003
+index_checksum_field=Q1T9Vj285SmVvHLniiX4jJuKs6NZ0=
+index_checksum_algorithm=sha1
+index_checksum_hex=4fd563dbce52995bc72e78a25f88c9b8ab3a359d

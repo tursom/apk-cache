@@ -2,132 +2,144 @@ name: Build and Release
 
 on:
   push:
-    tags:
-      - 'v*'
     branches:
+      - main
       - master
+    tags:
+      - "v*"
   pull_request:
     branches:
+      - main
       - master
 
 env:
-  GO_VERSION: '1.25'
   DOCKER_REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-binary:
-    name: Build Binary (${{ matrix.os }}-${{ matrix.arch }})
+  test:
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [linux, windows, darwin]
-        arch: [amd64, arm64]
-        include:
-          - os: linux
-            arch: 386
-          - os: windows
-            arch: 386
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
           cache: true
 
-      - name: Install Node.js and html-minifier
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
+      - name: Download modules
+        run: go mod download
 
-      - name: Install html-minifier
-        run: npm install -g html-minifier
+      - name: Run tests
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
 
-      - name: Build binary
-        env:
-          GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matrix.arch }}
-          CGO_ENABLED: 0
-        run: |
-          cd cmd/apk-cache
-
-          # Compress admin.html
-          ADMIN_HTML="admin.html"
-          ADMIN_MIN_HTML="admin_min.html"
-
-          if [ -f "$ADMIN_HTML" ]; then
-            # Simple compression using perl
-            perl -pe 's/^\s+//g; s/\s+$//g; s/>\s+</></g' "$ADMIN_HTML" > "$ADMIN_MIN_HTML"
-
-            # Create gzip version
-            gzip -9 -c "$ADMIN_MIN_HTML" > "${ADMIN_MIN_HTML}.gz"
-          fi
-
-          # Build
-          EXT=""
-          if [ "$GOOS" = "windows" ]; then
-            EXT=".exe"
-          fi
-
-          OUTPUT_NAME="apk-cache-${GOOS}-${GOARCH}${EXT}"
-          go build -ldflags="-s -w" -trimpath -o "$OUTPUT_NAME" .
-
-      - name: Upload artifact
+      - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: apk-cache-${{ matrix.os }}-${{ matrix.arch }}
-          path: cmd/apk-cache/apk-cache-*
-          retention-days: 5
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  build-binary:
+    name: Build Binary (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: "386"
+          - goos: windows
+            goarch: amd64
+            ext: .exe
+          - goos: windows
+            goarch: arm64
+            ext: .exe
+          - goos: windows
+            goarch: "386"
+            ext: .exe
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          output="apk-cache-${GOOS}-${GOARCH}${{ matrix.ext }}"
+          go build -trimpath -ldflags="-s -w" -o "dist/${output}" ./cmd/apk-cache
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-cache-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          retention-days: 7
 
   build-docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
-    needs: build-binary
+    needs: test
     permissions:
       contents: read
       packages: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Install Node.js for build.sh
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install html-minifier
-        run: npm install -g html-minifier
-
-      - name: Set up Go for build.sh
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Build Docker image (no push)
-        uses: docker/build-push-action@v5
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: false
-          tags: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:test
-          platforms: |
-            linux/amd64
           load: true
+          tags: apk-cache:ci
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Run tests
+      - name: Smoke test Docker image
         run: |
-          # Run the test script with the built image
-          ./run_test.sh --image ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:test
+          set -eu
+          cid="$(docker run -d -p 3142:3142 apk-cache:ci)"
+          trap 'docker logs "$cid" || true; docker rm -f "$cid" || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3142/_health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "apk-cache container did not become healthy" >&2
+          exit 1
 
-      - name: Log in to Container Registry
+      - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
@@ -135,26 +147,27 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract Docker metadata
+        if: github.event_name != 'pull_request'
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=branch
+            type=ref,event=tag
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
             type=sha
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: |
@@ -166,31 +179,27 @@ jobs:
           cache-to: type=gha,mode=max
 
   release:
-    name: Create Release
+    name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-binary, build-docker]
+    needs:
+      - build-binary
+      - build-docker
     if: startsWith(github.ref, 'refs/tags/v')
-
     permissions:
       contents: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
+      - name: Download binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: apk-cache-*
+          merge-multiple: true
 
-      - name: Display structure of downloaded files
-        run: ls -R artifacts
-
-      - name: Create Release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/**/*
+          files: artifacts/*
           draft: false
           generate_release_notes: true
         env:

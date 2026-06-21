@@ -1,496 +1,433 @@
 # APK Cache
 
-English | [简体中文](README.md)
+[Simplified Chinese](README.md) | English
 
-A proxy server for caching Alpine Linux APK packages, supporting SOCKS5/HTTP proxy, APT package caching, HTTP/HTTPS proxy and multi-language interface.
+APK Cache is an HTTP caching proxy for Linux package repositories. The current implementation focuses on three core paths:
+
+- Alpine Linux APK cache proxy
+- Debian/Ubuntu APT HTTP proxy cache
+- Generic HTTP/HTTPS proxy forwarding, mainly for APT HTTPS `CONNECT` tunnels
+
+The project has been rebuilt around a smaller runtime core. It keeps package caching, validation, proxying, observability, Docker deployment, and CI/CD. The old web dashboard, old i18n layer, and disconnected rate-limit/quota/policy subsystems are not part of the current version.
 
 ## Features
 
-- 🚀 **Automatic Caching** - Automatic caching of Alpine Linux APK packages
-- 📦 **Three-Tier Cache** - Memory → File → Upstream caching architecture
-- 🔄 **Smart Caching** - Serve directly from local cache on cache hits, fetch from upstream on misses
-- 🌐 **Proxy Support** - Support SOCKS5/HTTP proxy for upstream access
-- 📦 **APT Package Caching** - Support for Debian/Ubuntu APT package caching
-- 🔄 **HTTP/HTTPS Proxy** - Support for HTTP/HTTPS proxy functionality, can cache APT and APK packages
-- 💾 **Flexible Configuration** - Configurable cache directory, listening address and caching strategies
-- ⏱️ **Expiration Policies** - Flexible cache expiration times and automatic cleanup mechanisms
-- 🧹 **Automatic Cleanup** - Automatic cleanup of expired cache and disk space management
-- 🔒 **Concurrent Safety** - File-level lock management to avoid concurrent download conflicts
-- 🌍 **Multi-language Interface** - Support for Chinese/English interface and error messages
-- 📊 **Monitoring Metrics** - Prometheus monitoring metrics and real-time statistics
-- 🎛️ **Web Management Interface** - Modern management dashboard
-- 💰 **Cache Quota** - Cache quota management (supports LRU/LFU/FIFO cleanup strategies)
-- 🚀 **Memory Cache** - High-performance memory cache layer, reducing disk I/O
-- 🩺 **Health Check** - Upstream server status monitoring and self-healing mechanisms
-- 🚦 **Request Rate Limiting** - Token bucket algorithm for request frequency limiting
-- 🔍 **Data Integrity** - SHA-256 file checksum validation and automatic repair
-- 🎯 **Fine-grained Cache Policy** - Adaptive caching based on size/type/access frequency
-- 🔐 **Authentication** - Support for proxy authentication and management interface authentication
-- 📈 **Failover Support** - Multiple upstream servers support and automatic failover
-- 🛡️ **Security Enhancements** - IP whitelisting, reverse proxy support and path security validation
+- APK caching: caches `.apk` packages and `APKINDEX.tar.gz`.
+- APT caching: caches `.deb`, `Release`, `InRelease`, `Packages*`, `Sources*`, and `by-hash` requests in HTTP proxy mode.
+- Unified cache pipeline: memory cache -> disk cache -> upstream.
+- Concurrent safety: requests for the same cache key are serialized to avoid duplicate downloads and corrupted writes.
+- Integrity validation: APK supports APKINDEX hash checks and RSA signature verification; APT supports Release/Packages-index SHA256 checks, by-hash, and package-file validation.
+- Multiple APK upstreams: configured APK upstreams are tried with failover.
+- Upstream proxy support: APK upstreams can have their own proxy; APT and generic proxy traffic use `proxy.upstream_proxy`.
+- HTTPS tunneling: supports `CONNECT` for HTTPS APT sources.
+- Operations endpoints: `/_health` and `/metrics`.
+- Docker deployment: entrypoint generates runtime TOML from environment variables.
+- CI/CD: GitHub Actions runs tests, binary builds, Docker build/smoke test, and tag releases.
 
 ## Quick Start
 
-### Using Docker (Recommended)
+### Docker
 
-```bash
-# Pull and run
+```sh
 docker run -d \
   --name apk-cache \
   -p 3142:3142 \
-  -v ./cache:/app/cache \
+  -v "$PWD/cache:/app/cache" \
+  -v "$PWD/data:/app/data" \
   ghcr.io/tursom/apk-cache:latest
 ```
 
-Visit http://localhost:3142/_admin/ to view the management interface.
+Health check:
 
-### Build from Source
+```sh
+curl http://127.0.0.1:3142/_health
+```
 
-**You must use the build script** because pre-compressed HTML files are required for the management interface:
+Prometheus metrics:
 
-```bash
-git clone https://github.com/tursom/apk-cache.git
-cd apk-cache
+```sh
+curl http://127.0.0.1:3142/metrics
+```
+
+### Build From Source
+
+Requirements:
+
+- Go `1.25.4` or a compatible version
+- Optional: Docker, for container builds and smoke tests
+
+Build:
+
+```sh
 ./build.sh
 ```
 
-The build script automatically:
-- Detects available HTML compression tools in the system
-- Compresses the management interface HTML files
-- Generates gzip versions with maximum compression ratio
-- Executes optimized Go build
+Run:
 
-**Note**: Direct use of `go build` will fail due to missing pre-compressed HTML files.
-
-### Run
-
-```bash
-# Run with default configuration
-./apk-cache
-
-# Use configuration file
+```sh
+cp config.example.toml config.toml
 ./apk-cache -config config.toml
 ```
 
-The current version is intended to be configured through `config.toml`. To route APT outbound traffic and `ProxyAdapter` traffic through an upstream proxy, set `[proxy].upstream_proxy` to a `socks5://`, `http://`, or `https://` URL.
+Test:
 
-## Configure Alpine Linux to Use Cache Server
-
-Edit `/etc/apk/repositories`:
-
-```bash
-sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
+```sh
+go test ./...
+go test ./... -coverprofile=coverage.out
 ```
 
-Or use in Dockerfile:
+## Client Configuration
+
+### Alpine APK
+
+Point Alpine repositories at the APK Cache service. If the service is available at `http://cache.example:3142`:
+
+```sh
+sed -i 's|https://dl-cdn.alpinelinux.org|http://cache.example:3142|g' /etc/apk/repositories
+apk update
+apk add curl
+```
+
+Dockerfile example:
 
 ```dockerfile
-FROM alpine:3.22
+FROM alpine:3.23
 
-# Configure to use APK cache server
-RUN sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
-
-# Install packages (will use cache)
-RUN apk update && apk add --no-cache curl wget git
+RUN sed -i 's|https://dl-cdn.alpinelinux.org|http://cache.example:3142|g' /etc/apk/repositories \
+    && apk add --no-cache curl
 ```
 
-## Configure Debian/Ubuntu to Use APT Cache Server
+Example APK requests:
 
-APT proxy functionality must be used through HTTP proxy mode and does not support direct URL access.
-
-### Configure APT to Use HTTP Proxy
-
-Method 1: Create proxy configuration file
-
-```bash
-echo 'Acquire::HTTP::Proxy "http://your-cache-server:3142";
-Acquire::HTTPS::Proxy "http://your-cache-server:3142";' > /etc/apt/apt.conf.d/01proxy
+```text
+/alpine/v3.23/main/x86_64/APKINDEX.tar.gz
+/alpine/v3.23/main/x86_64/busybox-1.37.0-r0.apk
 ```
 
-Method 2: Edit existing configuration file
+### Debian/Ubuntu APT
 
-Edit `/etc/apt/apt.conf.d/95proxies`:
+APT uses APK Cache as an HTTP proxy.
 
-```bash
-Acquire::HTTP::Proxy "http://your-cache-server:3142";
-Acquire::HTTPS::Proxy "http://your-cache-server:3142";
+Create `/etc/apt/apt.conf.d/01-apk-cache-proxy`:
+
+```conf
+Acquire::HTTP::Proxy "http://cache.example:3142";
+Acquire::HTTPS::Proxy "http://cache.example:3142";
 ```
 
-If you want APT packages to be cached, prefer `http://` repository URLs in `sources.list`. `https://` repositories usually use `CONNECT` tunnels, which this version can forward but does not inspect or cache.
+Then run:
 
-## Main Configuration Parameters
-
-| Parameter | Default Value | Description |
-|-----------|---------------|-------------|
-| `-addr` | `:3142` | Listening address |
-| `-cache` | `./cache` | Cache directory path |
-| `-upstream` | `https://dl-cdn.alpinelinux.org` | Upstream server address |
-| `-proxy` | (empty) | Proxy address (supports SOCKS5/HTTP protocols) |
-| `-index-cache` | `24h` | Index file cache duration |
-| `-pkg-cache` | `0` | Package file cache duration (0 = never expire) |
-| `-cleanup-interval` | `1h` | Automatic cleanup interval (0 = disabled) |
-| `-locale` | (empty) | Language (en/zh), auto-detect if empty |
-| `-admin-user` | `admin` | Admin dashboard username |
-| `-admin-password` | (empty) | Admin dashboard password (empty = no auth) |
-| `-config` | (empty) | Config file path (optional) |
-| `-proxy-auth` | `false` | Enable proxy authentication |
-| `-proxy-user` | `proxy` | Proxy authentication username |
-| `-proxy-password` | (empty) | Proxy authentication password (empty = no auth) |
-| `-proxy-auth-exempt-ips` | (empty) | Comma-separated list of IP ranges exempt from proxy auth (CIDR format) |
-| `-trusted-reverse-proxy-ips` | (empty) | Comma-separated list of trusted reverse proxy IPs |
-| `-cache-max-size` | (empty) | Maximum cache size (e.g., `10GB`, `1TB`) |
-| `-cache-clean-strategy` | `LRU` | Cache cleanup strategy (`LRU`/`LFU`/`FIFO`) |
-| `-memory-cache` | `false` | Enable memory cache |
-| `-memory-cache-size` | `100MB` | Memory cache size |
-| `-memory-cache-max-items` | `1000` | Maximum number of items in memory cache |
-| `-memory-cache-ttl` | `30m` | Memory cache item expiration time |
-| `-memory-cache-max-file-size` | `10MB` | Maximum file size for memory caching |
-| `-health-check-interval` | `30s` | Health check interval |
-| `-health-check-timeout` | `10s` | Health check timeout |
-| `-enable-self-healing` | `true` | Enable self-healing mechanisms |
-| `-rate-limit` | `false` | Enable request rate limiting |
-| `-rate-limit-rate` | `100` | Rate limit (requests per second) |
-| `-rate-limit-burst` | `200` | Rate limit burst capacity |
-| `-rate-limit-exempt-paths` | `/_health` | Paths exempt from rate limiting (comma-separated) |
-| `-data-integrity-check-interval` | `1h` | Data integrity check interval (0 = disabled) |
-| `-data-integrity-auto-repair` | `true` | Enable automatic repair of corrupted files |
-| `-data-integrity-periodic-check` | `true` | Enable periodic data integrity checks |
-| `-data-integrity-initialize-existing-files` | `false` | Initialize existing files hash records on startup |
-| `-cache-policy` | `default` | Fine-grained cache policy (default/size/type/frequency/adaptive) |
-| `-cache-policy-size-small` | `1MB` | Small file threshold |
-| `-cache-policy-size-medium` | `10MB` | Medium file threshold |
-| `-cache-policy-size-large` | `100MB` | Large file threshold |
-| `-cache-policy-hot-threshold` | `100` | Hot file threshold (accesses per day) |
-| `-cache-policy-cold-threshold` | `1` | Cold file threshold (accesses per day) |
-| `-cache-policy-adaptive` | `false` | Enable adaptive policy adjustment |
-| `-cache-policy-adjust-interval` | `1h` | Adaptive policy adjustment interval |
-
-## Configuration File Example
-
-For a complete configuration example, please refer to the [`config.example.toml`](config.example.toml) file.
-
-Create `config.toml` and refer to the example file for configuration:
-
-```bash
-# Copy example configuration file
-cp config.example.toml config.toml
-
-# Edit configuration file
-vim config.toml
+```sh
+apt-get update
+apt-get install curl
 ```
 
-Main configuration sections include:
-- `[server]` - Server basic configuration
-- `[[upstreams]]` - Upstream servers list (supports multiple)
-- `[cache]` - Cache configuration
-- `[transport]` - Outbound HTTP timeout and connection pool settings
-- `[apk]` - APK caching and verification configuration
-- `[apt]` - APT caching and index verification configuration
-- `[proxy]` - Generic HTTP/HTTPS proxy configuration
+Notes:
 
-### APK Verification Options
+- `http://` APT repositories can be parsed and cached.
+- `https://` APT repositories usually use `CONNECT` TLS tunnels. This service forwards those tunnels, but it does not decrypt or cache TLS contents.
+
+## Configuration
+
+The default config path is `config.toml`; use `-config` to choose another file:
+
+```sh
+./apk-cache -config /path/to/config.toml
+```
+
+See [config.example.toml](config.example.toml) for a complete example.
+
+### Example
 
 ```toml
+[server]
+listen = ":3142"
+
+[[upstreams]]
+name = "Official Alpine CDN"
+url = "https://dl-cdn.alpinelinux.org"
+kind = "apk"
+# proxy = "socks5://127.0.0.1:1080"
+
+[cache]
+root = "./cache"
+data_root = "./data"
+index_ttl = "24h"
+package_ttl = "720h"
+
+[cache.memory]
+enabled = true
+max_size = "256MB"
+max_item_size = "16MB"
+ttl = "30m"
+max_items = 2048
+
+[transport]
+timeout = "30s"
+idle_conn_timeout = "90s"
+max_idle_conns = 128
+
 [apk]
 enabled = true
 verify_hash = true
 verify_signature = true
 keys_dir = ""
-```
 
-- `verify_hash`: validate cached and freshly downloaded `.apk` files against `APKINDEX`
-- `verify_signature`: require a recognizable APK/APKINDEX signature before caching
-- `keys_dir`: optional directory of additional trusted RSA public keys loaded alongside built-in keys
+[apt]
+enabled = true
+verify_hash = true
+load_index_async = true
 
-### ProxyAdapter Upstream Proxy
-
-```toml
 [proxy]
 enabled = true
 allow_connect = true
 cache_non_package_requests = false
-upstream_proxy = "socks5://127.0.0.1:1080"
+upstream_proxy = ""
+allowed_hosts = []
 ```
 
-- `upstream_proxy`: affects outbound APT requests plus outbound `ProxyAdapter` traffic and `CONNECT` tunnels; it does not change `[[upstreams]].proxy` for APK fetches
-- `allowed_hosts`: still matches the target host, not the upstream proxy host
+### Configuration Reference
 
-## Docker Compose Example
+| Key | Default | Description |
+| --- | --- | --- |
+| `server.listen` | `:3142` | HTTP listen address |
+| `upstreams[].name` | `Official Alpine CDN` | APK upstream display name |
+| `upstreams[].url` | `https://dl-cdn.alpinelinux.org` | APK upstream base URL |
+| `upstreams[].kind` | `apk` | Only APK upstreams are used for APK fetches |
+| `upstreams[].proxy` | empty | Outbound proxy for this APK upstream |
+| `cache.root` | `./cache` | Disk cache directory |
+| `cache.data_root` | `./data` | Runtime data directory, reserved for future use |
+| `cache.index_ttl` | `24h` | Index-file cache TTL |
+| `cache.package_ttl` | `720h` | Package-file cache TTL; `0` means never expire |
+| `cache.memory.enabled` | `true` | Enable memory cache |
+| `cache.memory.max_size` | `256MB` | Maximum memory-cache size |
+| `cache.memory.max_item_size` | `16MB` | Maximum single file size allowed in memory cache |
+| `cache.memory.ttl` | `30m` | Memory-cache item TTL |
+| `cache.memory.max_items` | `2048` | Maximum memory-cache item count |
+| `transport.timeout` | `30s` | Upstream HTTP client timeout |
+| `transport.idle_conn_timeout` | `90s` | Idle connection timeout |
+| `transport.max_idle_conns` | `128` | Max idle connections |
+| `apk.enabled` | `true` | Enable APK handling |
+| `apk.verify_hash` | `true` | Validate `.apk` files against APKINDEX |
+| `apk.verify_signature` | `true` | Verify APK/APKINDEX RSA signatures |
+| `apk.keys_dir` | empty | Directory with extra Alpine RSA public keys |
+| `apt.enabled` | `true` | Enable APT handling |
+| `apt.verify_hash` | `true` | Validate APT by-hash, files referenced by Release indexes, and package-file SHA256 |
+| `apt.load_index_async` | `true` | Load newly cached APT indexes asynchronously |
+| `proxy.enabled` | `true` | Enable generic HTTP/HTTPS proxying |
+| `proxy.allow_connect` | `true` | Allow `CONNECT` tunnels |
+| `proxy.cache_non_package_requests` | `false` | Cache non APK/APT HTTP requests |
+| `proxy.upstream_proxy` | empty | Outbound proxy for APT and generic proxy traffic |
+| `proxy.allowed_hosts` | `[]` | If non-empty, only these target hosts are allowed |
 
-```yaml
-version: '3.8'
-services:
-  apk-cache:
-    image: ghcr.io/tursom/apk-cache:latest
-    ports:
-      - "3142:3142"
-    volumes:
-      - ./cache:/app/cache
-    environment:
-      - ADDR=:3142
-      - CACHE_DIR=/app/cache
-      - INDEX_CACHE=24h
-      - MEMORY_CACHE_ENABLED=true
-      - MEMORY_CACHE_SIZE=100MB
-      - HEALTH_CHECK_INTERVAL=30s
-      - ENABLE_SELF_HEALING=true
-      - RATE_LIMIT_ENABLED=true
-      - RATE_LIMIT_RATE=100
-      - RATE_LIMIT_BURST=200
-      - RATE_LIMIT_EXEMPT_PATHS=/_health
-      - DATA_INTEGRITY_CHECK_INTERVAL=1h
-      - DATA_INTEGRITY_AUTO_REPAIR=true
-      - DATA_INTEGRITY_PERIODIC_CHECK=true
-    restart: unless-stopped
+Supported proxy URL schemes:
+
+```text
+socks5://127.0.0.1:1080
+http://127.0.0.1:8080
+https://127.0.0.1:8443
 ```
 
-## Management Interface
+HTTP proxy credentials can be embedded in the URL:
 
-Visit `http://your-server:3142/_admin/` to view:
-
-- Real-time statistics (cache hit rate, download volume, etc.)
-- Total cache size and file count
-- One-click cache clearing function
-- Prometheus metrics link
-
-## Monitoring
-
-Visit `http://your-server:3142/metrics` to get Prometheus metrics:
-
-### Cache Performance Metrics
-- `apk_cache_hits_total` - Cache hit count
-- `apk_cache_misses_total` - Cache miss count
-- `apk_cache_download_bytes_total` - Total download bytes
-
-### Memory Cache Metrics
-- `apk_cache_memory_hits_total` - Memory cache hit count
-- `apk_cache_memory_misses_total` - Memory cache miss count
-- `apk_cache_memory_size_bytes` - Current memory cache size
-- `apk_cache_memory_items_total` - Memory cache item count
-- `apk_cache_memory_evictions_total` - Memory cache eviction count
-
-### Health Check Metrics
-- `apk_cache_health_status` - Component health status (1=healthy, 0=unhealthy)
-  - `component="upstream"` - Upstream server health status
-  - `component="filesystem"` - Filesystem health status
-  - `component="memory_cache"` - Memory cache health status
-  - `component="cache_quota"` - Cache quota health status
-- `apk_cache_health_check_duration_seconds` - Health check duration
-  - `component="upstream"` - Upstream server check duration
-  - `component="filesystem"` - Filesystem check duration
-  - `component="memory_cache"` - Memory cache check duration
-  - `component="cache_quota"` - Cache quota check duration
-- `apk_cache_health_check_errors_total` - Health check error count
-  - `component="upstream"` - Upstream server check errors
-  - `component="filesystem"` - Filesystem check errors
-  - `component="memory_cache"` - Memory cache check errors
-  - `component="cache_quota"` - Cache quota check errors
-
-### Upstream Server Metrics
-- `apk_cache_upstream_healthy_count` - Number of healthy upstream servers
-- `apk_cache_upstream_total_count` - Total number of upstream servers
-- `apk_cache_upstream_failover_count` - Number of failover events
-
-### Request Rate Limiting Metrics
-- `apk_cache_rate_limit_allowed_total` - Number of allowed requests
-- `apk_cache_rate_limit_rejected_total` - Number of rejected requests
-- `apk_cache_rate_limit_tokens_current` - Current token count
-
-### Data Integrity Verification Metrics
-- `apk_cache_data_integrity_checks_total` - Number of data integrity checks
-- `apk_cache_data_integrity_corrupted_files_total` - Number of corrupted files
-- `apk_cache_data_integrity_repaired_files_total` - Number of data integrity repairs
-- `apk_cache_data_integrity_check_duration_seconds` - Data integrity check duration
-- `apk_cache_apk_hash_failures_total` - Number of APK hash validation failures
-- `apk_cache_apk_signature_failures_total` - Number of APK signature validation failures
-- `apk_cache_apk_bypass_responses_total` - Number of APK responses bypassed from cache after signature validation failures
-
-## Fine-grained Cache Policy
-
-### Overview
-
-Fine-grained cache policy allows applying different caching rules to different types of files, optimizing cache efficiency and resource utilization. The following policy types are supported:
-
-### Policy Types
-
-#### 1. default
-No fine-grained policy is applied. Uses global configuration (`index-cache`, `pkg-cache`) to control cache duration.
-
-#### 2. size (Size-based Policy)
-Applies different caching rules based on file size:
-
-| File Type | Size Range | Priority | Memory Cache | Default TTL |
-|-----------|------------|----------|--------------|-------------|
-| Small | < size_small | High | Enabled | 1 day |
-| Medium | size_small ~ size_medium | Normal | Enabled | 7 days |
-| Large | >= size_medium | Low | Disabled | 30 days |
-
-Default thresholds: `size_small=1MB`, `size_medium=10MB`, `size_large=100MB`
-
-#### 3. type (Type-based Policy)
-Applies different caching rules based on filename pattern (regular expression):
-
-```toml
-[[fine_grained_policy.type_rules]]
-pattern = "^linux-lts.*\\.apk$"    # Kernel related packages
-priority = "high"                    # High priority
-ttl = "7d"                          # 7 days TTL
-memory_cache = true                  # Enable memory cache
-preload = true                      # Allow preload
-
-[[fine_grained_policy.type_rules]]
-pattern = ".*-debug$"               # Debug packages
-priority = "low"                    # Low priority
-ttl = "30d"                         # 30 days TTL
+```text
+http://user:password@proxy.example:8080
 ```
 
-#### 4. frequency (Frequency-based Policy)
-Dynamically adjusts caching policy based on file access frequency (daily access count):
+## Docker Environment Variables
 
-| File Type | Daily Access Count | Priority | Memory Cache |
-|-----------|-------------------|----------|--------------|
-| Hot | > hot_threshold | High | Enabled |
-| Normal | cold_threshold ~ hot_threshold | Normal | Normal |
-| Cold | <= cold_threshold | Low | Disabled |
+At container startup, `entrypoint.sh` generates a temporary TOML config from environment variables and executes `/app/apk-cache -config <generated>`.
 
-Default thresholds: `hot_threshold=100`, `cold_threshold=1`
+| Environment variable | Default | Config target |
+| --- | --- | --- |
+| `CONFIG` | `/tmp/apk-cache.toml` | Generated config path |
+| `LISTEN` / `ADDR` | `:3142` | `server.listen` |
+| `CACHE_ROOT` / `CACHE_DIR` | `/app/cache` | `cache.root` |
+| `DATA_ROOT` | `/app/data` | `cache.data_root` |
+| `APK_UPSTREAM` / `UPSTREAM` | `https://dl-cdn.alpinelinux.org` | APK upstream URL |
+| `APK_UPSTREAM_PROXY` / `PROXY` | empty | APK upstream proxy |
+| `UPSTREAM_PROXY` | empty | `proxy.upstream_proxy` |
+| `INDEX_TTL` | `24h` | `cache.index_ttl` |
+| `PACKAGE_TTL` | `720h` | `cache.package_ttl` |
+| `MEMORY_CACHE_ENABLED` | `true` | `cache.memory.enabled` |
+| `MEMORY_CACHE_SIZE` | `256MB` | `cache.memory.max_size` |
+| `MEMORY_CACHE_MAX_ITEM_SIZE` | `16MB` | `cache.memory.max_item_size` |
+| `MEMORY_CACHE_TTL` | `30m` | `cache.memory.ttl` |
+| `MEMORY_CACHE_MAX_ITEMS` | `2048` | `cache.memory.max_items` |
+| `TRANSPORT_TIMEOUT` | `30s` | `transport.timeout` |
+| `TRANSPORT_IDLE_CONN_TIMEOUT` | `90s` | `transport.idle_conn_timeout` |
+| `TRANSPORT_MAX_IDLE_CONNS` | `128` | `transport.max_idle_conns` |
+| `APK_ENABLED` | `true` | `apk.enabled` |
+| `APK_VERIFY_HASH` | `true` | `apk.verify_hash` |
+| `APK_VERIFY_SIGNATURE` | `true` | `apk.verify_signature` |
+| `APT_ENABLED` | `true` | `apt.enabled` |
+| `APT_VERIFY_HASH` | `true` | `apt.verify_hash` |
+| `APT_LOAD_INDEX_ASYNC` | `true` | `apt.load_index_async` |
+| `PROXY_ENABLED` | `true` | `proxy.enabled` |
+| `PROXY_ALLOW_CONNECT` | `true` | `proxy.allow_connect` |
+| `PROXY_CACHE_NON_PACKAGE_REQUESTS` | `false` | `proxy.cache_non_package_requests` |
+| `PROXY_ALLOWED_HOSTS` | empty | Comma-separated `proxy.allowed_hosts` |
 
-#### 5. adaptive (Adaptive Policy)
-Comprehensively applies size, type, and frequency policies, and automatically adjusts based on actual access patterns:
+Docker example:
 
-- Periodically (default 1 hour) analyzes access patterns
-- Automatically identifies hot files and boosts their priority
-- Dynamically adjusts caching policy to optimize hit rate
-
-### Configuration Example
-
-```toml
-[fine_grained_policy]
-# Use adaptive policy
-policy = "adaptive"
-
-# Custom size thresholds
-size_small = "512KB"
-size_medium = "20MB"
-size_large = "500MB"
-
-# Access frequency thresholds
-hot_threshold = 50
-cold_threshold = 0
-
-# Enable adaptive adjustment
-adaptive = true
-adjust_interval = "30m"
-
-# Custom type rules
-[[fine_grained_policy.type_rules]]
-pattern = "^apk-tools.*\\.apk$"
-priority = "high"
-ttl = "1d"
-memory_cache = true
-
-[[fine_grained_policy.type_rules]]
-pattern = ".*-doc.*\\.apk$"
-priority = "low"
-ttl = "30d"
+```sh
+docker run -d \
+  --name apk-cache \
+  -p 3142:3142 \
+  -v "$PWD/cache:/app/cache" \
+  -e APK_UPSTREAM=https://mirrors.tuna.tsinghua.edu.cn/alpine \
+  -e UPSTREAM_PROXY=socks5://127.0.0.1:1080 \
+  ghcr.io/tursom/apk-cache:latest
 ```
 
-### How Policies Affect Caching Behavior
+## How It Works
 
-1. **TTL (Cache Duration)**: Determines how long files need to be revalidated
-2. **Priority**: When cache space is insufficient, lower priority files are cleared earlier
-3. **Memory Cache**: Higher priority files are more likely to be cached in memory for faster access
-4. **Preload**: Higher priority files can be pre-loaded into cache
+### Request Routing
 
-### Prometheus Metrics
+Every request enters the same HTTP handler:
 
-- `apk_cache_policy_adjustments_total` - Policy adjustment count
+1. `/_health` returns health information.
+2. `/metrics` returns Prometheus metrics.
+3. `CONNECT` enters the tunnel proxy.
+4. Other requests are classified as APK, APT, or generic proxy traffic.
 
-## Health Check and Self-Healing Mechanism
+### Cache Pipeline
 
-### How It Works
+APK, APT, and cacheable generic proxy requests share the same cache flow:
 
-APK Cache implements a comprehensive health check and self-healing mechanism to ensure high service availability:
+1. Check memory cache; hit returns `X-Cache: MEMORY-HIT`.
+2. Check disk cache; hit returns `X-Cache: HIT`.
+3. Lock by cache key to prevent duplicate concurrent downloads.
+4. Check caches again after acquiring the lock.
+5. Fetch upstream while streaming the response to the client and a temporary file.
+6. Validate the temporary file.
+7. Atomically `rename` the temporary file into the final cache path.
+8. Store in memory cache when applicable.
+9. First upstream fetch returns `X-Cache: MISS`.
 
-#### 1. Health Check Components
+Non-`200 OK` upstream responses are passed through without caching and return `X-Cache: BYPASS`.
 
-**Upstream Server Health Check**:
-- Periodically checks availability of all upstream servers
-- Tests multiple paths using HEAD requests (root directory, Alpine mirror directories, index files, etc.)
-- Supports failover, automatically switching to healthy upstream servers
-- Configurable check interval and timeout
+### APK Validation
 
-**Filesystem Health Check**:
-- Verifies cache directory existence and writability
-- Monitors disk space usage
-- Automatically repairs directory permission issues
+APK validation is implemented in `internal/apk`:
 
-**Memory Cache Health Check**:
-- Monitors memory usage and cache item count
-- Detects when memory cache approaches capacity limits
-- Automatically cleans up expired cache items
+- `APKINDEX.tar.gz` is parsed into package name, version, size, and checksum records.
+- `.apk` files can be checked against APKINDEX size and hash records.
+- APK/APKINDEX archives can be verified using `.SIGN.*` RSA signatures.
+- Built-in Alpine public keys are included; extra keys can be loaded from `apk.keys_dir`.
+- A newly fetched response with an invalid signature is returned to the client but is not cached.
 
-**Cache Quota Health Check**:
-- Monitors disk cache usage
-- Alerts when cache quota approaches limits
+### APT Validation
 
-**Data Integrity Health Check**:
-- Periodically verifies cache file integrity
-- Detects corrupted or tampered files
-- Monitors checksum verification status
+APT validation is implemented in `internal/apt`:
 
-#### 2. Self-Healing Mechanism
+- `Release` / `InRelease` files provide SHA256 file lists.
+- `Packages*` / `Sources*` files provide package paths, sizes, and SHA256 hashes.
+- `by-hash/SHA256/<hash>` requests are checked against the hash declared in the URL.
+- If a `by-hash` request matches an index file recorded by `Release`, its `Packages*` / `Sources*` body is parsed through the original index path.
+- `Packages*` / `Sources*` files referenced by `Release` are validated on cache hits and after downloads.
+- `.deb` files are checked against index SHA256 when an index record is available.
+- Missing index records do not block the request.
 
-When issues are detected, the system automatically attempts repairs:
+### CONNECT Tunnels
 
-**Upstream Server Self-Healing**:
-- Automatically retries connections to failed upstream servers
-- Resets health status counters
-- Supports automatic recovery of failed servers
+`CONNECT` only creates a TCP tunnel:
 
-**Filesystem Self-Healing**:
-- Automatically repairs cache directory permissions
-- Recreates necessary subdirectory structures
-- Cleans up corrupted temporary files
+- TLS is not inspected.
+- TLS contents are not cached.
+- `proxy.allow_connect=false` disables tunnels.
+- `proxy.allowed_hosts` can restrict destination hosts.
+- Concurrent tunnels have a fixed limit to prevent unbounded connection usage.
 
-**Memory Cache Self-Healing**:
-- Automatically cleans up expired cache items
-- Resets memory cache statistics
+## Operations Endpoints
 
-**Data Integrity Self-Healing**:
-- Automatically repairs corrupted cache files
-- Re-downloads files with failed checksum verification
-- Cleans up files that cannot be repaired
+### `GET /_health`
 
-## Troubleshooting
+Example response:
 
-### Common Issues
+```json
+{
+  "status": "healthy",
+  "apk_upstreams_total": 1,
+  "apk_upstreams": {
+    "healthy": 1,
+    "total": 1
+  },
+  "disk_cache": {
+    "status": "healthy"
+  },
+  "memory_cache": {
+    "items": 0,
+    "size": 0,
+    "max": 268435456
+  }
+}
+```
 
-**Cache Miss**: Check cache directory permissions and disk space
+If the cache directory is unavailable or all APK upstreams are unhealthy, the status becomes `degraded` and the HTTP status code is `503`.
 
-**Proxy Connection Failed**: Verify proxy address format and availability (supports SOCKS5/HTTP protocols)
+### `GET /metrics`
 
-**Management Interface Unreachable**: Ensure correct access to `/_admin/` path
+Prometheus metrics include:
 
-**Health Check Failed**: Check upstream server reachability and network connectivity
+- `apk_cache_hits_total`
+- `apk_cache_misses_total`
+- `apk_cache_download_bytes_total`
+- `apk_cache_response_bytes_total`
+- `apk_cache_upstream_requests_total`
+- `apk_cache_upstream_failovers_total`
+- `apk_cache_validation_failures_total`
+- `apk_cache_apk_hash_failures_total`
+- `apk_cache_apk_signature_failures_total`
+- `apk_cache_apk_bypass_responses_total`
+- `apk_cache_memory_hits_total`
+- `apk_cache_memory_misses_total`
+- `apk_cache_memory_evictions_total`
+- `apk_cache_memory_size_bytes`
+- `apk_cache_memory_items_total`
 
-**Data Integrity Errors**: Check disk space and filesystem integrity
+## Development And Testing
 
-## Development
+Common commands:
 
-See [DEV.md](DEV.md) for development guidelines and build instructions.
+```sh
+go test ./...
+go test ./... -coverprofile=coverage.out
+go tool cover -func=coverage.out
+./build.sh
+docker build -t apk-cache:local .
+```
 
-## License
+Real-data integration tests live in `internal/app/real_integration_test.go`:
 
-GPLv3 License
+- APT uses `Release`, `Packages.xz`, and `.deb` fixtures fetched from `deb.debian.org`, covering the `Release -> Packages.xz -> by-hash -> .deb` cache and SHA256 validation chain.
+- APK uses `APKINDEX.tar.gz` and `.apk` fixtures fetched from `dl-cdn.alpinelinux.org`, covering real signature verification, APKINDEX hash validation, and refetch after cache corruption.
+- Tests serve those fixtures through a local `httptest.Server`, so they do not require external network access.
 
-## Development Roadmap
+Local Docker smoke test:
 
-See [ROADMAP.md](ROADMAP.md) for future development directions and improvement plans.
+```sh
+docker run --rm -p 3142:3142 apk-cache:local
+curl http://127.0.0.1:3142/_health
+```
 
-## Links
+## GitHub Actions
 
-- GitHub: https://github.com/tursom/apk-cache
-- Docker Hub: https://hub.docker.com/r/tursom/apk-cache
-- GitHub Container Registry: https://ghcr.io/tursom/apk-cache
-- Issue Tracker: https://github.com/tursom/apk-cache/issues
+[.github/workflows/build.yml](.github/workflows/build.yml) currently runs:
+
+- Go unit tests and coverage artifact upload.
+- Linux / Windows / macOS binary builds.
+- Docker image build and `/_health` smoke test.
+- GHCR image push for non-PR events.
+- GitHub Release creation for `v*` tags, including binary artifacts.
+
+## Current Limitations
+
+- No web dashboard; use `/_health` and `/metrics` for observation.
+- No dashboard authentication.
+- No global request rate limiter.
+- No disk quota manager or automatic cleanup policy.
+- HTTPS APT sources are forwarded through `CONNECT`; they are not decrypted or cached.
+- `data_root` is reserved for future extensions. The current cache state is primarily disk cache plus in-memory indexes.
+
+These capabilities can be redesigned on top of the current smaller core, but the old mismatched implementations are not restored.

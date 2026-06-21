@@ -1,407 +1,157 @@
 package upstream
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"iter"
-	"log"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
-
-	"github.com/tursom/apk-cache/utils"
-	"golang.org/x/sync/singleflight"
 )
 
-// Server 上游服务器配置，集成健康检查功能
 type Server struct {
+	Name  string
 	URL   string
 	Proxy string
-	Name  string
 
-	// 健康检查相关字段
-	mu               sync.RWMutex
-	lastHealthCheck  time.Time
-	isHealthy        bool
-	healthCacheTTL   time.Duration
-	lastError        string
-	retryCount       int
-	maxRetries       int
-	healthCheckGroup singleflight.Group // 用于合并并发健康检查
+	healthy atomic.Bool
+	lastErr atomic.Value
 }
 
-// Manager 上游服务器管理器
+func NewServer(url, proxyAddr, name string) *Server {
+	s := &Server{Name: name, URL: url, Proxy: proxyAddr}
+	s.healthy.Store(true)
+	return s
+}
+
+func (s *Server) Healthy() bool {
+	return s.healthy.Load()
+}
+
+func (s *Server) LastError() string {
+	value := s.lastErr.Load()
+	if value == nil {
+		return ""
+	}
+	return value.(string)
+}
+
+func (s *Server) mark(ok bool, err error) {
+	s.healthy.Store(ok)
+	if err == nil {
+		s.lastErr.Store("")
+		return
+	}
+	s.lastErr.Store(err.Error())
+}
+
+type ClientFactory interface {
+	Client(proxyAddr string) *http.Client
+}
+
 type Manager struct {
-	servers atomic.Pointer[[]*Server] // Copy On Write 切片
-	current int32                     // 使用原子操作保证并发安全
+	mu      sync.RWMutex
+	servers []*Server
+	next    uint64
+	clients ClientFactory
+
+	onRequest  func()
+	onFailover func()
 }
 
-// NewServer 创建新的上游服务器实例
-func NewServer(url, proxy, name string, healthCheckTTL time.Duration) *Server {
-	return &Server{
-		URL:            url,
-		Proxy:          proxy,
-		Name:           name,
-		healthCacheTTL: healthCheckTTL,
-		maxRetries:     3,
-		isHealthy:      true,
-	}
+func NewManager(clients ClientFactory) *Manager {
+	return &Manager{clients: clients}
 }
 
-// SetHealthCacheTTL 设置健康检查缓存TTL
-func (u *Server) SetHealthCacheTTL(ttl time.Duration) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.healthCacheTTL = ttl
+func (m *Manager) SetMetricsHooks(onRequest, onFailover func()) {
+	m.onRequest = onRequest
+	m.onFailover = onFailover
 }
 
-// SetMaxRetries 设置最大重试次数
-func (u *Server) SetMaxRetries(maxRetries int) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.maxRetries = maxRetries
+func (m *Manager) Add(server *Server) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.servers = append(m.servers, server)
 }
 
-// IsHealthy 检查上游服务器是否健康（使用缓存）
-func (u *Server) IsHealthy() bool {
-	// 如果健康检查被禁用（TTL <= 0），直接返回当前状态
-	if u.healthCacheTTL <= 0 {
-		return u.getHealthyStatus()
-	}
-
-	// 如果缓存未过期，直接返回缓存结果
-	if u.isCacheValid() {
-		return u.getHealthyStatus()
-	}
-
-	// 缓存过期，执行健康检查
-	return u.checkHealth()
+func (m *Manager) Count() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.servers)
 }
 
-// getHealthyStatus 获取健康状态（线程安全）
-func (u *Server) getHealthyStatus() bool {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	return u.isHealthy
-}
-
-// isCacheValid 检查缓存是否有效（线程安全）
-func (u *Server) isCacheValid() bool {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	return time.Since(u.lastHealthCheck) < u.healthCacheTTL
-}
-
-// GetHealthStatus 获取详细的健康状态信息
-func (u *Server) GetHealthStatus() map[string]any {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-
-	return map[string]any{
-		"healthy":       u.isHealthy,
-		"last_check":    u.lastHealthCheck,
-		"last_error":    u.lastError,
-		"retry_count":   u.retryCount,
-		"url":           u.URL,
-		"proxy":         u.Proxy,
-		"name":          u.Name,
-		"cache_ttl":     u.healthCacheTTL,
-		"cache_expired": time.Since(u.lastHealthCheck) >= u.healthCacheTTL,
-	}
-}
-
-// checkHealth 执行实际的健康检查（使用 singleflight 合并并发请求）
-func (u *Server) checkHealth() bool {
-	key := u.URL + "|" + u.Proxy // 唯一标识符
-	result, _, _ := u.healthCheckGroup.Do(key, func() (interface{}, error) {
-		return u.doHealthCheck(), nil
-	})
-	return result.(bool)
-}
-
-// doHealthCheck 执行实际的健康检查逻辑（无并发合并）
-func (u *Server) doHealthCheck() bool {
-	timeout := u.healthCacheTTL
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-
-	client := &http.Client{
-		Timeout:   timeout,
-		Transport: CreateTransport(u.Proxy),
-	}
-	if client.Transport == nil {
-		client.Transport = http.DefaultTransport
-	}
-
-	testPaths := []string{
-		"/",
-		"/alpine/",
-		"/alpine/latest-stable/",
-		"/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz",
-	}
-
-	var lastError error
-	healthy := false
-
-	for _, testPath := range testPaths {
-		targetURL, err := buildUpstreamURL(u.URL, testPath)
-		if err != nil {
-			lastError = err
-			continue
-		}
-		resp, err := client.Head(targetURL)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			healthy = true
-			resp.Body.Close()
-			break
-		}
-		if err != nil {
-			lastError = err
-		} else {
-			resp.Body.Close()
-			lastError = fmt.Errorf("status code: %d", resp.StatusCode)
-		}
-	}
-
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	u.lastHealthCheck = time.Now()
-
-	if healthy {
-		u.isHealthy = true
-		u.lastError = ""
-		u.retryCount = 0
-		log.Printf("[upstream] Server %s is healthy", u.URL)
-	} else {
-		u.retryCount++
-		if u.retryCount >= u.maxRetries {
-			u.isHealthy = false
-		}
-		u.lastError = lastError.Error()
-		log.Printf("[upstream] Server %s is unhealthy: %v", u.URL, lastError)
-	}
-
-	return u.isHealthy
-}
-
-// GetURL 获取服务器URL
-func (u *Server) GetURL() string {
-	return u.URL
-}
-
-// GetProxy 获取代理配置
-func (u *Server) GetProxy() string {
-	return u.Proxy
-}
-
-// GetName 获取服务器名称
-func (u *Server) GetName() string {
-	return u.Name
-}
-
-// GetLastError 获取最后一次错误信息
-func (u *Server) GetLastError() string {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	return u.lastError
-}
-
-// GetRetryCount 获取重试次数
-func (u *Server) GetRetryCount() int {
-	u.mu.RLock()
-	defer u.mu.RUnlock()
-	return u.retryCount
-}
-
-// ResetHealth 重置健康状态
-func (u *Server) ResetHealth() {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.retryCount = 0
-	u.isHealthy = true
-	u.lastError = ""
-	u.lastHealthCheck = time.Time{}
-}
-
-// NewManager 创建上游服务器管理器
-func NewManager() *Manager {
-	m := &Manager{
-		current: 0,
-	}
-	empty := make([]*Server, 0)
-	m.servers.Store(&empty)
-	return m
-}
-
-// AddServer 添加上游服务器
-func (m *Manager) AddServer(server *Server) {
-	for {
-		oldPtr := m.servers.Load()
-		var newServers []*Server
-		if oldPtr == nil {
-			newServers = []*Server{server}
-		} else {
-			newServers = make([]*Server, len(*oldPtr)+1)
-			copy(newServers, *oldPtr)
-			newServers[len(*oldPtr)] = server
-		}
-		if m.servers.CompareAndSwap(oldPtr, &newServers) {
-			break
-		}
-	}
-}
-
-// GetHealthyServer 获取健康的上游服务器（轮询）
-func (m *Manager) GetHealthyServer() *Server {
-	servers := m.getServers()
-	if len(servers) == 0 {
-		return nil
-	}
-
-	start := int(atomic.LoadInt32(&m.current))
-	for i := range servers {
-		index := (start + i) % len(servers)
-		server := servers[index]
-		if server.IsHealthy() {
-			next := (index + 1) % len(servers)
-			atomic.StoreInt32(&m.current, int32(next))
-			return server
-		}
-	}
-
-	if len(servers) > 0 {
-		log.Printf("[upstream] No healthy server available, using fallback: %s", servers[0].URL)
-		return servers[0]
-	}
-	return nil
-}
-
-// GetAllServers 获取所有服务器
-func (m *Manager) GetAllServers() iter.Seq[*Server] {
-	servers := m.getServers()
-	if len(servers) == 0 {
-		return func(yield func(*Server) bool) {}
-	}
-
-	return func(yield func(*Server) bool) {
-		for _, s := range servers {
-			if !yield(s) {
-				return
-			}
-		}
-	}
-}
-
-// GetServerCount 获取服务器数量
-func (m *Manager) GetServerCount() int {
-	ptr := m.servers.Load()
-	if ptr == nil {
-		return 0
-	}
-	return len(*ptr)
-}
-
-// GetHealthyCount 获取健康服务器数量
-func (m *Manager) GetHealthyCount() int {
-	ptr := m.servers.Load()
-	if ptr == nil {
-		return 0
-	}
-	servers := *ptr
+func (m *Manager) HealthyCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	count := 0
-	for _, server := range servers {
-		if server.IsHealthy() {
+	for _, server := range m.servers {
+		if server.Healthy() {
 			count++
 		}
 	}
 	return count
 }
 
-// getServers 返回服务器切片的引用
-func (m *Manager) getServers() []*Server {
-	ptr := m.servers.Load()
-	if ptr == nil {
-		return nil
+func (m *Manager) Servers() []*Server {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*Server, len(m.servers))
+	copy(out, m.servers)
+	return out
+}
+
+func (m *Manager) Fetch(ctx context.Context, path string, headers http.Header) (*http.Response, error) {
+	servers := m.orderedServers()
+	if len(servers) == 0 {
+		return nil, errors.New("no configured upstream servers")
 	}
-	return *ptr
-}
-
-// Fetcher 上游数据获取器接口
-type Fetcher interface {
-	Fetch(urlPath string, requestModifier func(*http.Request)) (*http.Response, error)
-}
-
-// DefaultFetcher 默认的上游数据获取实现
-type DefaultFetcher struct {
-	manager *Manager
-	client  func(proxy string) *http.Client
-}
-
-// NewFetcher 创建新的上游数据获取器
-func NewFetcher(manager *Manager, clientFn func(proxy string) *http.Client) *DefaultFetcher {
-	return &DefaultFetcher{
-		manager: manager,
-		client:  clientFn,
+	if m.onRequest != nil {
+		m.onRequest()
 	}
-}
 
-// Fetch 从上游服务器获取数据，支持故障转移
-func (f *DefaultFetcher) Fetch(urlPath string, requestModifier func(*http.Request)) (*http.Response, error) {
 	var lastErr error
 	var lastResp *http.Response
-
-	servers := f.manager.getServers()
-	log.Printf("[upstream] Fetching from upstream, path: %s, server count: %d", urlPath, len(servers))
-	utils.Monitoring.RecordUpstreamRequest()
-
-	for i, server := range servers {
-		client := f.client(server.Proxy)
-		targetURL, err := buildUpstreamURL(server.URL, urlPath)
+	for idx, server := range servers {
+		target, err := BuildURL(server.URL, path)
 		if err != nil {
 			lastErr = err
-			log.Printf("[upstream] Invalid server URL %s: %v", server.URL, err)
+			server.mark(false, err)
 			continue
 		}
-
-		req, err := http.NewRequest("GET", targetURL, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 		if err != nil {
 			lastErr = err
+			server.mark(false, err)
 			continue
 		}
+		copyEndToEndHeaders(req.Header, headers)
 
-		if requestModifier != nil {
-			requestModifier(req)
-		}
-
-		resp, err := client.Do(req)
+		resp, err := m.clients.Client(server.Proxy).Do(req)
 		if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent) {
-			if i > 0 {
-				serverName := server.Name
-				if serverName == "" {
-					serverName = server.URL
-				}
-				log.Printf("[upstream] Fallback to server %d: %s", i+1, serverName)
-				utils.Monitoring.RecordUpstreamFailover()
+			server.mark(true, nil)
+			if idx > 0 && m.onFailover != nil {
+				m.onFailover()
 			}
 			return resp, nil
 		}
-
 		if err != nil {
 			lastErr = err
-			log.Printf("[upstream] Server %s failed: %v", server.URL, err)
-		} else {
-			if lastResp != nil {
-				lastResp.Body.Close()
-			}
-			lastResp = resp
-			lastErr = fmt.Errorf("upstream returned status: %d", resp.StatusCode)
-			log.Printf("[upstream] Server %s returned error status: %d", server.URL, resp.StatusCode)
+			server.mark(false, err)
+			slog.Warn("apk upstream request failed", "url", server.URL, "err", err)
+			continue
 		}
+
+		server.mark(false, fmt.Errorf("status %d", resp.StatusCode))
+		if lastResp != nil {
+			_, _ = io.Copy(io.Discard, lastResp.Body)
+			_ = lastResp.Body.Close()
+		}
+		lastResp = resp
+		lastErr = fmt.Errorf("upstream returned status %d", resp.StatusCode)
 	}
 
 	if lastResp != nil {
@@ -413,41 +163,62 @@ func (f *DefaultFetcher) Fetch(urlPath string, requestModifier func(*http.Reques
 	return nil, lastErr
 }
 
-func buildUpstreamURL(baseURL, requestPath string) (string, error) {
+func (m *Manager) orderedServers() []*Server {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.servers) == 0 {
+		return nil
+	}
+	start := int(atomic.AddUint64(&m.next, 1)-1) % len(m.servers)
+	out := make([]*Server, 0, len(m.servers))
+	for i := 0; i < len(m.servers); i++ {
+		server := m.servers[(start+i)%len(m.servers)]
+		if server.Healthy() {
+			out = append(out, server)
+		}
+	}
+	for i := 0; i < len(m.servers); i++ {
+		server := m.servers[(start+i)%len(m.servers)]
+		if !server.Healthy() {
+			out = append(out, server)
+		}
+	}
+	return out
+}
+
+func BuildURL(baseURL, requestPath string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
 		return "", err
 	}
-	parsed.Path = joinUpstreamPath(parsed.Path, requestPath)
+	parsed.Path = joinPath(parsed.Path, requestPath)
 	parsed.RawPath = ""
+	parsed.RawQuery = ""
 	return parsed.String(), nil
 }
 
-func joinUpstreamPath(basePath, requestPath string) string {
-	baseSegments := splitPathSegments(basePath)
-	requestSegments := splitPathSegments(requestPath)
-
-	maxOverlap := 0
-	limit := min(len(baseSegments), len(requestSegments))
-	for overlap := limit; overlap > 0; overlap-- {
+func joinPath(basePath, requestPath string) string {
+	base := splitSegments(basePath)
+	request := splitSegments(requestPath)
+	overlap := 0
+	limit := min(len(base), len(request))
+	for size := limit; size > 0; size-- {
 		matched := true
-		for i := 0; i < overlap; i++ {
-			if baseSegments[len(baseSegments)-overlap+i] != requestSegments[i] {
+		for i := 0; i < size; i++ {
+			if base[len(base)-size+i] != request[i] {
 				matched = false
 				break
 			}
 		}
 		if matched {
-			maxOverlap = overlap
+			overlap = size
 			break
 		}
 	}
-
-	combined := append(append([]string{}, baseSegments...), requestSegments[maxOverlap:]...)
+	combined := append(append([]string{}, base...), request[overlap:]...)
 	if len(combined) == 0 {
 		return "/"
 	}
-
 	joined := "/" + strings.Join(combined, "/")
 	if strings.HasSuffix(requestPath, "/") && joined != "/" {
 		return joined + "/"
@@ -455,7 +226,7 @@ func joinUpstreamPath(basePath, requestPath string) string {
 	return joined
 }
 
-func splitPathSegments(path string) []string {
+func splitSegments(path string) []string {
 	trimmed := strings.Trim(path, "/")
 	if trimmed == "" {
 		return nil
@@ -468,4 +239,25 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func copyEndToEndHeaders(dst, src http.Header) {
+	for key, values := range src {
+		if isHopByHopHeader(key) {
+			continue
+		}
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func isHopByHopHeader(key string) bool {
+	switch strings.ToLower(key) {
+	case "connection", "proxy-connection", "keep-alive", "proxy-authenticate",
+		"proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
 }

@@ -1,0 +1,10 @@
+# Real APT fixture data fetched from deb.debian.org on 2026-06-21.
+release_url=https://deb.debian.org/debian/dists/bookworm-updates/Release
+packages_url=https://deb.debian.org/debian/dists/bookworm-updates/main/binary-amd64/Packages.xz
+packages_by_hash_path=/debian/dists/bookworm-updates/main/binary-amd64/by-hash/SHA256/87e7e94047fb7fb6f4ceecc7022d4bee55b66031cc2a7666d3196f3e0aabb846
+packages_sha256=87e7e94047fb7fb6f4ceecc7022d4bee55b66031cc2a7666d3196f3e0aabb846
+packages_size=6924
+deb_url=https://deb.debian.org/debian/pool/main/s/samba/libwbclient-dev_4.17.12+dfsg-0+deb12u2_amd64.deb
+deb_filename=pool/main/s/samba/libwbclient-dev_4.17.12+dfsg-0+deb12u2_amd64.deb
+deb_sha256=b7f8b74c8f163cc4c4fa7b854d476c5c7b8334c355452811714a0a24733b4d5a
+deb_size=39308

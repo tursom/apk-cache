@@ -1,4 +1,4 @@
-# APK Cache v2 example configuration
+# APK Cache example configuration
 
 [server]
 listen = ":3142"
@@ -6,11 +6,6 @@ listen = ":3142"
 [[upstreams]]
 name = "Official Alpine CDN"
 url = "https://dl-cdn.alpinelinux.org"
-kind = "apk"
-
-[[upstreams]]
-name = "TUNA Alpine Mirror"
-url = "https://mirrors.tuna.tsinghua.edu.cn/alpine"
 kind = "apk"
 # proxy = "socks5://127.0.0.1:1080"
 
@@ -47,8 +42,5 @@ load_index_async = true
 enabled = true
 allow_connect = true
 cache_non_package_requests = false
-require_auth = false
-# Affects APT outbound fetches and ProxyAdapter traffic such as HTTP absolute-URL requests and CONNECT tunnels.
-# Supports socks5://, http://, or https://.
-# upstream_proxy = "socks5://127.0.0.1:1080"
-# allowed_hosts = ["deb.debian.org", "security.debian.org"]
+upstream_proxy = ""
+allowed_hosts = []

@@ -2,7 +2,6 @@ package config
 
 import (
 	"errors"
-	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -56,13 +55,10 @@ type TransportConfig struct {
 }
 
 type APKConfig struct {
-	Enabled bool `toml:"enabled"`
-	// VerifyHash 控制是否使用 APKINDEX 中的记录校验 .apk 内容。
-	VerifyHash bool `toml:"verify_hash"`
-	// VerifySignature 控制是否要求 APK/APKINDEX 在写入缓存前通过签名校验。
-	VerifySignature bool `toml:"verify_signature"`
-	// KeysDir 允许额外加载一组受信任 RSA 公钥，与内置 keyring 合并使用。
-	KeysDir string `toml:"keys_dir"`
+	Enabled         bool   `toml:"enabled"`
+	VerifyHash      bool   `toml:"verify_hash"`
+	VerifySignature bool   `toml:"verify_signature"`
+	KeysDir         string `toml:"keys_dir"`
 }
 
 type APTConfig struct {
@@ -75,7 +71,6 @@ type ProxyConfig struct {
 	Enabled         bool     `toml:"enabled"`
 	AllowConnect    bool     `toml:"allow_connect"`
 	CacheNonPackage bool     `toml:"cache_non_package_requests"`
-	RequireAuth     bool     `toml:"require_auth"`
 	UpstreamProxy   string   `toml:"upstream_proxy"`
 	AllowedHosts    []string `toml:"allowed_hosts"`
 }
@@ -114,7 +109,6 @@ func Default() *Config {
 			Enabled:         true,
 			VerifyHash:      true,
 			VerifySignature: true,
-			KeysDir:         "",
 		},
 		APT: APTConfig{
 			Enabled:        true,
@@ -122,125 +116,109 @@ func Default() *Config {
 			LoadIndexAsync: true,
 		},
 		Proxy: ProxyConfig{
-			Enabled:         true,
-			AllowConnect:    true,
-			CacheNonPackage: false,
-			RequireAuth:     false,
-			UpstreamProxy:   "",
+			Enabled:      true,
+			AllowConnect: true,
 		},
 	}
 }
 
 func Load(path string) (*Config, error) {
 	cfg := Default()
-	if _, err := toml.DecodeFile(path, cfg); err != nil {
-		return nil, err
+	if path != "" {
+		if _, err := toml.DecodeFile(path, cfg); err != nil {
+			return nil, err
+		}
 	}
-	applyEnvOverrides(cfg)
+	ApplyEnvOverrides(cfg)
 	if err := Validate(cfg); err != nil {
 		return nil, err
 	}
 	return cfg, nil
 }
 
-// applyEnvOverrides applies environment variable overrides to the config.
-// This allows Docker deployments to override config values without modifying
-// the TOML file. Environment variables take precedence over TOML values.
-func applyEnvOverrides(cfg *Config) {
-	if v, ok := envLookup("ADDR"); ok {
+func ApplyEnvOverrides(cfg *Config) {
+	if v, ok := env("LISTEN", "ADDR"); ok {
 		cfg.Server.Listen = v
 	}
-	if v, ok := envLookup("CACHE_DIR"); ok {
+	if v, ok := env("CACHE_ROOT", "CACHE_DIR"); ok {
 		cfg.Cache.Root = v
 	}
-	if v, ok := envLookup("CACHE_DATA_DIR"); ok {
+	if v, ok := env("DATA_ROOT", "CACHE_DATA_DIR"); ok {
 		cfg.Cache.DataRoot = v
 	}
-	if v, ok := envLookup("INDEX_CACHE"); ok {
+	if v, ok := env("INDEX_TTL", "INDEX_CACHE"); ok {
 		cfg.Cache.IndexTTL = v
 	}
-	if v, ok := envLookup("PKG_CACHE"); ok {
+	if v, ok := env("PACKAGE_TTL", "PKG_CACHE"); ok {
 		cfg.Cache.PackageTTL = v
 	}
-	if v, ok := envLookup("MEMORY_CACHE_ENABLED"); ok {
-		cfg.Cache.Memory.Enabled = strings.ToLower(v) == "true"
+	if v, ok := env("MEMORY_CACHE_ENABLED"); ok {
+		cfg.Cache.Memory.Enabled = parseBool(v)
 	}
-	if v, ok := envLookup("MEMORY_CACHE_SIZE"); ok {
+	if v, ok := env("MEMORY_CACHE_SIZE"); ok {
 		cfg.Cache.Memory.MaxSize = v
 	}
-	if v, ok := envLookup("MEMORY_CACHE_MAX_ITEM_SIZE"); ok {
+	if v, ok := env("MEMORY_CACHE_MAX_ITEM_SIZE"); ok {
 		cfg.Cache.Memory.MaxItemSize = v
 	}
-	if v, ok := envLookup("MEMORY_CACHE_TTL"); ok {
+	if v, ok := env("MEMORY_CACHE_TTL"); ok {
 		cfg.Cache.Memory.TTL = v
 	}
-	if v, ok := envLookup("MEMORY_CACHE_MAX_ITEMS"); ok {
-		if n, err := envAtoi(v); err == nil {
+	if v, ok := env("MEMORY_CACHE_MAX_ITEMS"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
 			cfg.Cache.Memory.MaxItems = n
 		}
 	}
-	if v, ok := envLookup("UPSTREAM_PROXY"); ok {
+	if v, ok := env("TRANSPORT_TIMEOUT"); ok {
+		cfg.Transport.Timeout = v
+	}
+	if v, ok := env("TRANSPORT_IDLE_CONN_TIMEOUT"); ok {
+		cfg.Transport.IdleConnTimeout = v
+	}
+	if v, ok := env("TRANSPORT_MAX_IDLE_CONNS"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Transport.MaxIdleConns = n
+		}
+	}
+	if v, ok := env("APK_ENABLED"); ok {
+		cfg.APK.Enabled = parseBool(v)
+	}
+	if v, ok := env("APK_VERIFY_HASH"); ok {
+		cfg.APK.VerifyHash = parseBool(v)
+	}
+	if v, ok := env("APK_VERIFY_SIGNATURE"); ok {
+		cfg.APK.VerifySignature = parseBool(v)
+	}
+	if v, ok := env("APT_ENABLED"); ok {
+		cfg.APT.Enabled = parseBool(v)
+	}
+	if v, ok := env("APT_VERIFY_HASH"); ok {
+		cfg.APT.VerifyHash = parseBool(v)
+	}
+	if v, ok := env("APT_LOAD_INDEX_ASYNC"); ok {
+		cfg.APT.LoadIndexAsync = parseBool(v)
+	}
+	if v, ok := env("PROXY_ENABLED"); ok {
+		cfg.Proxy.Enabled = parseBool(v)
+	}
+	if v, ok := env("PROXY_ALLOW_CONNECT"); ok {
+		cfg.Proxy.AllowConnect = parseBool(v)
+	}
+	if v, ok := env("PROXY_CACHE_NON_PACKAGE_REQUESTS"); ok {
+		cfg.Proxy.CacheNonPackage = parseBool(v)
+	}
+	if v, ok := env("UPSTREAM_PROXY"); ok {
 		cfg.Proxy.UpstreamProxy = v
 	}
-	if v, ok := envLookup("PROXY_ENABLED"); ok {
-		cfg.Proxy.Enabled = strings.ToLower(v) == "true"
-	}
-	if v, ok := envLookup("HEALTH_CHECK_INTERVAL"); ok {
-		slog.Warn("env var HEALTH_CHECK_INTERVAL is no longer supported; configure health check via upstream configuration")
-		_ = v
-	}
-	if v, ok := envLookup("DATA_INTEGRITY_CHECK_INTERVAL"); ok {
-		slog.Warn("env var DATA_INTEGRITY_CHECK_INTERVAL is no longer supported")
-		_ = v
-	}
-	if v, ok := envLookup("ENABLE_SELF_HEALING"); ok {
-		slog.Warn("env var ENABLE_SELF_HEALING is no longer supported")
-		_ = v
-	}
-	if v, ok := envLookup("RATE_LIMIT_ENABLED"); ok {
-		slog.Warn("env var RATE_LIMIT_ENABLED is no longer supported")
-		_ = v
-	}
-	if v, ok := envLookup("RATE_LIMIT_RATE"); ok {
-		slog.Warn("env var RATE_LIMIT_RATE is no longer supported")
-		_ = v
-	}
-	if v, ok := envLookup("RATE_LIMIT_BURST"); ok {
-		slog.Warn("env var RATE_LIMIT_BURST is no longer supported")
-		_ = v
-	}
-	if v, ok := envLookup("RATE_LIMIT_EXEMPT_PATHS"); ok {
-		slog.Warn("env var RATE_LIMIT_EXEMPT_PATHS is no longer supported")
-		_ = v
-	}
-	if v, ok := envLookup("DATA_INTEGRITY_AUTO_REPAIR"); ok {
-		slog.Warn("env var DATA_INTEGRITY_AUTO_REPAIR is no longer supported")
-		_ = v
-	}
-	if v, ok := envLookup("DATA_INTEGRITY_PERIODIC_CHECK"); ok {
-		slog.Warn("env var DATA_INTEGRITY_PERIODIC_CHECK is no longer supported")
-		_ = v
-	}
-}
-
-func envLookup(key string) (string, bool) {
-	v, ok := os.LookupEnv(key)
-	return v, ok && v != ""
-}
-
-func envAtoi(s string) (int, error) {
-	return strconv.Atoi(s)
 }
 
 func Validate(cfg *Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
 	}
-
 	if cfg.Server.Listen == "" || !strings.Contains(cfg.Server.Listen, ":") {
 		return errors.New("server.listen must include host:port or :port")
 	}
-
 	if cfg.Cache.Root == "" {
 		return errors.New("cache.root is required")
 	}
@@ -250,49 +228,58 @@ func Validate(cfg *Config) error {
 	if strings.Contains(cfg.Cache.Root, "..") || strings.Contains(cfg.Cache.DataRoot, "..") {
 		return errors.New("cache paths must not contain '..'")
 	}
-
-	if err := validateDuration("cache.index_ttl", cfg.Cache.IndexTTL); err != nil {
-		return err
-	}
-	if err := validateDuration("cache.package_ttl", cfg.Cache.PackageTTL); err != nil {
-		return err
-	}
-	if cfg.Cache.Memory.Enabled {
-		if err := validateDuration("cache.memory.ttl", cfg.Cache.Memory.TTL); err != nil {
+	for name, value := range map[string]string{
+		"cache.index_ttl":          cfg.Cache.IndexTTL,
+		"cache.package_ttl":        cfg.Cache.PackageTTL,
+		"cache.memory.ttl":         cfg.Cache.Memory.TTL,
+		"transport.timeout":        cfg.Transport.Timeout,
+		"transport.idle_conn_time": cfg.Transport.IdleConnTimeout,
+	} {
+		if err := validateDuration(name, value); err != nil {
 			return err
 		}
 	}
-	if err := validateDuration("transport.timeout", cfg.Transport.Timeout); err != nil {
-		return err
-	}
-	if err := validateDuration("transport.idle_conn_timeout", cfg.Transport.IdleConnTimeout); err != nil {
-		return err
-	}
-
 	if cfg.APK.Enabled {
 		hasAPKUpstream := false
-		for _, upstream := range cfg.Upstreams {
-			if upstream.URL == "" {
-				return errors.New("upstream.url is required")
+		for _, candidate := range cfg.Upstreams {
+			kind := strings.ToLower(strings.TrimSpace(candidate.Kind))
+			if kind != "" && kind != "apk" {
+				continue
 			}
-			if !strings.HasPrefix(upstream.URL, "http://") && !strings.HasPrefix(upstream.URL, "https://") {
-				return errors.New("upstream.url must start with http:// or https://")
+			hasAPKUpstream = true
+			if err := validateHTTPURL("upstream.url", candidate.URL); err != nil {
+				return err
 			}
-			kind := strings.ToLower(strings.TrimSpace(upstream.Kind))
-			if kind == "" || kind == "apk" {
-				hasAPKUpstream = true
+			if err := validateProxyURL("upstream.proxy", candidate.Proxy); err != nil {
+				return err
 			}
 		}
 		if !hasAPKUpstream {
 			return errors.New("at least one APK upstream is required when apk.enabled=true")
 		}
 	}
-
-	if err := validateProxyAddress("proxy.upstream_proxy", cfg.Proxy.UpstreamProxy); err != nil {
+	if err := validateProxyURL("proxy.upstream_proxy", cfg.Proxy.UpstreamProxy); err != nil {
 		return err
 	}
-
 	return nil
+}
+
+func env(keys ...string) (string, bool) {
+	for _, key := range keys {
+		if value, ok := os.LookupEnv(key); ok && value != "" {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+func parseBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateDuration(name, value string) error {
@@ -305,11 +292,27 @@ func validateDuration(name, value string) error {
 	return nil
 }
 
-func validateProxyAddress(name, value string) error {
+func validateHTTPURL(name, value string) error {
+	if value == "" {
+		return errors.New(name + " is required")
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return errors.New(name + " is invalid: " + err.Error())
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New(name + " must start with http:// or https://")
+	}
+	if parsed.Host == "" {
+		return errors.New(name + " must include host")
+	}
+	return nil
+}
+
+func validateProxyURL(name, value string) error {
 	if value == "" {
 		return nil
 	}
-
 	parsed, err := url.Parse(value)
 	if err != nil {
 		return errors.New(name + " is invalid: " + err.Error())

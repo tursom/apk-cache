@@ -1,202 +1,213 @@
 package upstream
 
 import (
+	"bufio"
+	"context"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-func TestFetcherFallbackScenarios(t *testing.T) {
-	t.Run("fallback on 5xx", func(t *testing.T) {
-		failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "boom", http.StatusBadGateway)
-		}))
-		defer failing.Close()
-
-		healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte("ok"))
-		}))
-		defer healthy.Close()
-
-		manager := newTestManager(
-			NewServer(failing.URL, "", "bad", time.Second),
-			NewServer(healthy.URL, "", "good", time.Second),
-		)
-
-		resp, err := newTestFetcher(manager).Fetch("/alpine/v3.20/main/x86_64/test.apk", nil)
-		if err != nil {
-			t.Fatalf("fetch: %v", err)
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		if got := string(body); got != "ok" {
-			t.Fatalf("body = %q want %q", got, "ok")
-		}
-	})
-
-	t.Run("fallback on network error", func(t *testing.T) {
-		unavailableURL := newUnavailableURL(t)
-
-		healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte("ok"))
-		}))
-		defer healthy.Close()
-
-		manager := newTestManager(
-			NewServer(unavailableURL, "", "offline", time.Second),
-			NewServer(healthy.URL, "", "good", time.Second),
-		)
-
-		resp, err := newTestFetcher(manager).Fetch("/alpine/v3.20/main/x86_64/test.apk", nil)
-		if err != nil {
-			t.Fatalf("fetch: %v", err)
-		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		if got := string(body); got != "ok" {
-			t.Fatalf("body = %q want %q", got, "ok")
-		}
-	})
-
-	t.Run("returns last error when all upstreams fail", func(t *testing.T) {
-		manager := newTestManager(
-			NewServer(newUnavailableURL(t), "", "offline-1", time.Second),
-			NewServer(newUnavailableURL(t), "", "offline-2", time.Second),
-		)
-
-		resp, err := newTestFetcher(manager).Fetch("/alpine/v3.20/main/x86_64/test.apk", nil)
-		if err == nil {
-			if resp != nil {
-				resp.Body.Close()
-			}
-			t.Fatalf("expected fetch to fail")
-		}
-		if !strings.Contains(strings.ToLower(err.Error()), "connect") && !strings.Contains(strings.ToLower(err.Error()), "refused") {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+func TestBuildURLAvoidsDuplicateAlpineSegment(t *testing.T) {
+	got, err := BuildURL("https://mirror.example/alpine", "/alpine/v3.23/main/x86_64/APKINDEX.tar.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "https://mirror.example/alpine/v3.23/main/x86_64/APKINDEX.tar.gz"
+	if got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
 }
 
-func TestFetcherReturnsLastNonOKResponse(t *testing.T) {
+func TestManagerFetchFailoverAndHealth(t *testing.T) {
+	var firstHits, secondHits atomic.Int32
 	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		firstHits.Add(1)
+		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer first.Close()
-
-	last := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "missing", http.StatusNotFound)
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHits.Add(1)
+		if r.URL.Path != "/alpine/pkg.apk" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("ok"))
 	}))
-	defer last.Close()
+	defer second.Close()
 
-	manager := newTestManager(
-		NewServer(first.URL, "", "bad", time.Second),
-		NewServer(last.URL, "", "missing", time.Second),
-	)
+	var requests, failovers atomic.Int32
+	manager := NewManager(realClientFactory{})
+	manager.SetMetricsHooks(func() { requests.Add(1) }, func() { failovers.Add(1) })
+	bad := NewServer(first.URL, "", "bad")
+	good := NewServer(second.URL, "", "good")
+	manager.Add(bad)
+	manager.Add(good)
 
-	resp, err := newTestFetcher(manager).Fetch("/alpine/v3.20/main/x86_64/test.apk", nil)
+	resp, err := manager.Fetch(context.Background(), "/alpine/pkg.apk", http.Header{"X-Test": []string{"1"}})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("status = %d want %d", resp.StatusCode, http.StatusNotFound)
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "ok" {
+		t.Fatalf("body=%q", body)
 	}
-	body, err := io.ReadAll(resp.Body)
+	if firstHits.Load() != 1 || secondHits.Load() != 1 || requests.Load() != 1 || failovers.Load() != 1 {
+		t.Fatalf("hits/metrics first=%d second=%d req=%d fail=%d", firstHits.Load(), secondHits.Load(), requests.Load(), failovers.Load())
+	}
+	if bad.Healthy() || bad.LastError() == "" {
+		t.Fatal("failed server health not updated")
+	}
+	if manager.Count() != 2 || manager.HealthyCount() != 1 || len(manager.Servers()) != 2 {
+		t.Fatal("manager counts are wrong")
+	}
+}
+
+func TestManagerFetchReturnsLastNonOKResponse(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer up.Close()
+	manager := NewManager(realClientFactory{})
+	manager.Add(NewServer(up.URL, "", "only"))
+	resp, err := manager.Fetch(context.Background(), "/missing.apk", nil)
 	if err != nil {
-		t.Fatalf("read body: %v", err)
+		t.Fatalf("fetch returned error instead of last response: %v", err)
 	}
-	if !strings.Contains(string(body), "missing") {
-		t.Fatalf("body = %q, want missing response", string(body))
-	}
-}
-
-func TestBuildUpstreamURLCompatibility(t *testing.T) {
-	testCases := []struct {
-		name        string
-		baseSuffix  string
-		requestPath string
-		wantPath    string
-	}{
-		{
-			name:        "official alpine base",
-			baseSuffix:  "",
-			requestPath: "/alpine/v3.22/main/x86_64/APKINDEX.tar.gz",
-			wantPath:    "/alpine/v3.22/main/x86_64/APKINDEX.tar.gz",
-		},
-		{
-			name:        "mirror base already ends with alpine",
-			baseSuffix:  "/alpine",
-			requestPath: "/alpine/v3.22/main/x86_64/APKINDEX.tar.gz",
-			wantPath:    "/alpine/v3.22/main/x86_64/APKINDEX.tar.gz",
-		},
-		{
-			name:        "extra slashes remain stable",
-			baseSuffix:  "/alpine//",
-			requestPath: "/alpine/v3.22/main/",
-			wantPath:    "/alpine/v3.22/main/",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			var gotPath string
-			upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotPath = r.URL.Path
-				_, _ = w.Write([]byte("ok"))
-			}))
-			defer upstreamServer.Close()
-
-			manager := newTestManager(NewServer(upstreamServer.URL+tc.baseSuffix, "", tc.name, time.Second))
-			resp, err := newTestFetcher(manager).Fetch(tc.requestPath, nil)
-			if err != nil {
-				t.Fatalf("fetch: %v", err)
-			}
-			resp.Body.Close()
-
-			if gotPath != tc.wantPath {
-				t.Fatalf("requested path = %q want %q", gotPath, tc.wantPath)
-			}
-		})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d", resp.StatusCode)
 	}
 }
 
-func newTestFetcher(manager *Manager) *DefaultFetcher {
-	return NewFetcher(manager, func(proxy string) *http.Client {
-		return &http.Client{Timeout: 2 * time.Second}
-	})
-}
-
-func newTestManager(servers ...*Server) *Manager {
-	manager := NewManager()
-	for _, server := range servers {
-		manager.AddServer(server)
+func TestManagerFetchNoServers(t *testing.T) {
+	manager := NewManager(realClientFactory{})
+	if _, err := manager.Fetch(context.Background(), "/pkg.apk", nil); err == nil {
+		t.Fatal("expected no upstream error")
 	}
-	return manager
 }
 
-func newUnavailableURL(t *testing.T) string {
+func TestTransportProxyHelpers(t *testing.T) {
+	parsed, err := url.Parse("http://user:pass@proxy.local:8080")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ProxyAuthorizationValue(parsed); got != "Basic dXNlcjpwYXNz" {
+		t.Fatalf("auth=%s", got)
+	}
+
+	transport := CreateTransport(parsed.String())
+	if transport.Proxy == nil {
+		t.Fatal("http proxy function not configured")
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+	proxyURL, err := transport.Proxy(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proxyURL.Host != "proxy.local:8080" {
+		t.Fatalf("proxy url=%s", proxyURL)
+	}
+
+	if direct := CreateTransport(""); direct.Proxy != nil {
+		t.Fatal("empty proxy should not use environment proxy")
+	}
+	if socks := CreateTransport("socks5://127.0.0.1:1080"); socks.DialContext == nil {
+		t.Fatal("socks5 proxy should configure DialContext")
+	}
+}
+
+func TestDialContextViaProxyDirectAndHTTPProxy(t *testing.T) {
+	target := newEchoListener(t)
+	defer target.Close()
+	conn, err := DialContextViaProxy(context.Background(), "", "tcp", target.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("direct dial: %v", err)
+	}
+	_ = conn.Close()
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyListener.Close()
+	go func() {
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		req, err := http.ReadRequest(bufio.NewReader(conn))
+		if err != nil {
+			return
+		}
+		if req.Method != http.MethodConnect || !strings.Contains(req.Host, target.Addr().String()) {
+			t.Errorf("unexpected CONNECT request: %s %s", req.Method, req.Host)
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	}()
+	proxyURL := "http://" + proxyListener.Addr().String()
+	proxied, err := DialContextViaProxy(context.Background(), proxyURL, "tcp", target.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("http proxy dial: %v", err)
+	}
+	_ = proxied.Close()
+}
+
+func TestDialContextViaProxyErrors(t *testing.T) {
+	if _, err := DialContextViaProxy(context.Background(), "ftp://127.0.0.1:1", "tcp", "example.com:443", time.Second); err == nil {
+		t.Fatal("expected unsupported proxy scheme")
+	}
+	if _, err := DialContextViaProxy(context.Background(), "http://127.0.0.1:1", "udp", "example.com:443", time.Second); err == nil {
+		t.Fatal("expected non-tcp error")
+	}
+
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxyListener.Close()
+	go func() {
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = http.ReadRequest(bufio.NewReader(conn))
+		_, _ = conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"))
+	}()
+	_, err = DialContextViaProxy(context.Background(), "http://"+proxyListener.Addr().String(), "tcp", "example.com:443", time.Second)
+	if err == nil {
+		t.Fatal("expected proxy rejection error")
+	}
+}
+
+type realClientFactory struct{}
+
+func (realClientFactory) Client(proxyAddr string) *http.Client {
+	return &http.Client{Transport: CreateTransport(proxyAddr), Timeout: 2 * time.Second}
+}
+
+func newEchoListener(t *testing.T) net.Listener {
 	t.Helper()
-
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("listen: %v", err)
+		t.Fatal(err)
 	}
-	address := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatalf("close listener: %v", err)
-	}
-	return "http://" + address
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+	return listener
 }

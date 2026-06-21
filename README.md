@@ -1,496 +1,433 @@
 # APK Cache
 
-[English](README_EN.md) | 简体中文
+简体中文 | [English](README_EN.md)
 
-一个用于缓存 Alpine Linux APK 包的代理服务器，支持 SOCKS5/HTTP 代理、APT 包缓存、HTTP/HTTPS 代理和多语言界面。
+APK Cache 是一个面向 Linux 包仓库的 HTTP 缓存代理服务，当前实现聚焦三条核心链路：
 
-## 功能特性
+- Alpine Linux APK 缓存代理
+- Debian/Ubuntu APT HTTP 代理缓存
+- 通用 HTTP/HTTPS 代理转发，主要用于 HTTPS APT 源的 `CONNECT` 隧道
 
-- 🚀 **自动缓存** - 自动缓存 Alpine Linux APK 包
-- 📦 **三级缓存架构** - 内存 → 文件 → 上游缓存架构
-- 🔄 **智能缓存** - 缓存命中时直接从本地提供服务，未命中时从上游获取
-- 🌐 **代理支持** - 支持 SOCKS5/HTTP 代理访问上游服务器
-- 📦 **APT 包缓存** - 支持 Debian/Ubuntu APT 包缓存
-- 🔄 **HTTP/HTTPS 代理** - 支持 HTTP/HTTPS 代理功能，可缓存 APT 和 APK 包
-- 💾 **灵活配置** - 可配置的缓存目录、监听地址和缓存策略
-- ⏱️ **过期策略** - 灵活的缓存过期时间和自动清理机制
-- 🧹 **自动清理** - 自动清理过期缓存和磁盘空间管理
-- 🔒 **并发安全** - 文件级锁管理，避免并发下载冲突
-- 🌍 **多语言界面** - 支持中文/英文界面和错误消息
-- 📊 **监控指标** - Prometheus 监控指标和实时统计
-- 🎛️ **Web 管理界面** - 现代化的管理仪表板
-- 💰 **缓存配额** - 缓存配额管理（支持 LRU/LFU/FIFO 清理策略）
-- 🚀 **内存缓存** - 高性能内存缓存层，减少磁盘 I/O
-- 🩺 **健康检查** - 上游服务器状态监控和自愈机制
-- 🚦 **请求限流** - 基于令牌桶算法的请求频率限制
-- 🔍 **数据完整性** - SHA-256 文件校验和验证和自动修复
-- 🎯 **细粒度缓存策略** - 基于大小/类型/访问频率的自适应缓存策略
-- 🔐 **身份验证** - 支持代理身份验证和管理界面认证
-- 📈 **故障转移** - 多上游服务器支持和自动故障转移
-- 🛡️ **安全增强** - IP 白名单、反向代理支持和路径安全验证
+项目已经按新的轻量内核重写，保留核心缓存、校验、代理、监控和 Docker 部署能力；旧管理台、旧 i18n、未接入主流程的限流/磁盘配额/策略系统不再属于当前版本。
+
+## 功能概览
+
+- APK 缓存：缓存 `.apk` 包和 `APKINDEX.tar.gz`。
+- APT 缓存：通过 HTTP 代理模式缓存 `.deb`、`Release`、`InRelease`、`Packages*`、`Sources*` 和 `by-hash` 请求。
+- 统一缓存流水线：内存缓存 -> 磁盘缓存 -> 上游回源。
+- 并发安全：同一缓存 key 使用文件级互斥，避免并发重复下载和写坏缓存。
+- 完整性校验：APK 支持 APKINDEX hash 和 RSA 签名校验；APT 支持 Release/Packages 索引 SHA256、by-hash 和包文件校验。
+- 多 APK 上游：支持多个 APK upstream，按健康状态和顺序 failover。
+- 上游代理：APK upstream 可单独配置代理；APT/通用代理可使用统一 `proxy.upstream_proxy`。
+- HTTPS 隧道：支持 `CONNECT`，用于 HTTPS APT 源透传。
+- 运维端点：`/_health` 和 `/metrics`。
+- Docker 部署：entrypoint 可根据环境变量生成运行配置。
+- CI/CD：GitHub Actions 覆盖测试、二进制构建、Docker 构建/冒烟和 tag release。
 
 ## 快速开始
 
-### 使用 Docker（推荐）
+### Docker 运行
 
-```bash
-# 拉取并运行
+```sh
 docker run -d \
   --name apk-cache \
   -p 3142:3142 \
-  -v ./cache:/app/cache \
+  -v "$PWD/cache:/app/cache" \
+  -v "$PWD/data:/app/data" \
   ghcr.io/tursom/apk-cache:latest
 ```
 
-访问 http://localhost:3142/_admin/ 查看管理界面。
+健康检查：
+
+```sh
+curl http://127.0.0.1:3142/_health
+```
+
+Prometheus 指标：
+
+```sh
+curl http://127.0.0.1:3142/metrics
+```
 
 ### 从源码构建
 
-**必须使用构建脚本**，因为需要预压缩管理界面的HTML文件：
+要求：
 
-```bash
-git clone https://github.com/tursom/apk-cache.git
-cd apk-cache
+- Go `1.25.4` 或兼容版本
+- 可选：Docker，用于容器构建和本地冒烟
+
+构建：
+
+```sh
 ./build.sh
 ```
 
-构建脚本会自动：
-- 检测系统中可用的HTML压缩工具
-- 压缩管理界面的HTML文件
-- 使用最高压缩率生成gzip版本
-- 执行优化的Go构建
+运行：
 
-**注意**：直接使用 `go build` 会失败，因为缺少预压缩的HTML文件。
-
-### 运行
-
-```bash
-# 默认配置运行
-./apk-cache
-
-# 使用配置文件
+```sh
+cp config.example.toml config.toml
 ./apk-cache -config config.toml
 ```
 
-当前版本推荐通过 `config.toml` 管理运行配置。APT 出站请求和 `ProxyAdapter` 的上游代理都可以在 `[proxy]` 节中通过 `upstream_proxy` 配置，支持 `socks5://`、`http://` 和 `https://`。
+测试：
 
-## 配置 Alpine Linux 使用缓存服务器
-
-编辑 `/etc/apk/repositories`:
-
-```bash
-sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
+```sh
+go test ./...
+go test ./... -coverprofile=coverage.out
 ```
 
-或在 Dockerfile 中使用:
+## 客户端配置
+
+### Alpine APK
+
+将 Alpine 源改为 APK Cache 服务地址。例如服务地址为 `http://cache.example:3142`：
+
+```sh
+sed -i 's|https://dl-cdn.alpinelinux.org|http://cache.example:3142|g' /etc/apk/repositories
+apk update
+apk add curl
+```
+
+Dockerfile 示例：
 
 ```dockerfile
-FROM alpine:3.22
+FROM alpine:3.23
 
-# 配置使用 APK 缓存服务器
-RUN sed -i 's/https:\/\/dl-cdn.alpinelinux.org/http:\/\/your-cache-server:3142/g' /etc/apk/repositories
-
-# 安装软件包（将使用缓存）
-RUN apk update && apk add --no-cache curl wget git
+RUN sed -i 's|https://dl-cdn.alpinelinux.org|http://cache.example:3142|g' /etc/apk/repositories \
+    && apk add --no-cache curl
 ```
 
-## 配置 Debian/Ubuntu 使用 APT 缓存服务器
+APK 请求示例：
 
-APT 代理功能需要通过 HTTP 代理方式使用，不支持直接 URL 访问。
-
-### 配置 APT 使用 HTTP 代理
-
-方法一：创建代理配置文件
-
-```bash
-echo 'Acquire::HTTP::Proxy "http://your-cache-server:3142";
-Acquire::HTTPS::Proxy "http://your-cache-server:3142";' > /etc/apt/apt.conf.d/01proxy
+```text
+/alpine/v3.23/main/x86_64/APKINDEX.tar.gz
+/alpine/v3.23/main/x86_64/busybox-1.37.0-r0.apk
 ```
 
-方法二：编辑现有配置文件
+### Debian/Ubuntu APT
 
-编辑 `/etc/apt/apt.conf.d/95proxies`：
+APT 通过 HTTP 代理方式使用 APK Cache。
 
-```bash
-Acquire::HTTP::Proxy "http://your-cache-server:3142";
-Acquire::HTTPS::Proxy "http://your-cache-server:3142";
+创建 `/etc/apt/apt.conf.d/01-apk-cache-proxy`：
+
+```conf
+Acquire::HTTP::Proxy "http://cache.example:3142";
+Acquire::HTTPS::Proxy "http://cache.example:3142";
 ```
 
-如果希望命中 APT 包缓存，建议 `sources.list` 中的源地址使用 `http://`。`https://` 源通常会通过 `CONNECT` 建立隧道，这类流量可以转发，但不会被当前版本解析和缓存。
+然后运行：
 
-## 主要配置参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `-addr` | `:3142` | 监听地址 |
-| `-cache` | `./cache` | 缓存目录路径 |
-| `-upstream` | `https://dl-cdn.alpinelinux.org` | 上游服务器地址 |
-| `-proxy` | (空) | 代理地址（支持 SOCKS5/HTTP 协议） |
-| `-index-cache` | `24h` | 索引文件缓存时间 |
-| `-pkg-cache` | `0` | 包文件缓存时间（0 = 永不过期） |
-| `-cleanup-interval` | `1h` | 自动清理间隔（0 = 禁用） |
-| `-locale` | (空) | 语言设置 (en/zh)，留空自动检测 |
-| `-admin-user` | `admin` | 管理界面用户名 |
-| `-admin-password` | (空) | 管理界面密码（留空则无需认证） |
-| `-config` | (空) | 配置文件路径（可选） |
-| `-proxy-auth` | `false` | 启用代理身份验证 |
-| `-proxy-user` | `proxy` | 代理身份验证用户名 |
-| `-proxy-password` | (空) | 代理身份验证密码（留空则无需认证） |
-| `-proxy-auth-exempt-ips` | (空) | 不需要验证的 IP 网段（CIDR格式，逗号分隔） |
-| `-trusted-reverse-proxy-ips` | (空) | 信任的反向代理 IP（逗号分隔） |
-| `-cache-max-size` | (空) | 最大缓存大小（如 `10GB`, `1TB`） |
-| `-cache-clean-strategy` | `LRU` | 缓存清理策略 (`LRU`/`LFU`/`FIFO`) |
-| `-memory-cache` | `false` | 启用内存缓存 |
-| `-memory-cache-size` | `100MB` | 内存缓存大小 |
-| `-memory-cache-max-items` | `1000` | 内存缓存最大项目数 |
-| `-memory-cache-ttl` | `30m` | 内存缓存项过期时间 |
-| `-memory-cache-max-file-size` | `10MB` | 单个文件最大缓存大小 |
-| `-health-check-interval` | `30s` | 健康检查间隔 |
-| `-health-check-timeout` | `10s` | 健康检查超时时间 |
-| `-enable-self-healing` | `true` | 启用自愈机制 |
-| `-rate-limit` | `false` | 启用请求限流 |
-| `-rate-limit-rate` | `100` | 限流速率（每秒请求数） |
-| `-rate-limit-burst` | `200` | 限流突发容量 |
-| `-rate-limit-exempt-paths` | `/_health` | 豁免限流的路径（逗号分隔） |
-| `-data-integrity-check-interval` | `1h` | 数据完整性检查间隔（0 = 禁用） |
-| `-data-integrity-auto-repair` | `true` | 启用损坏文件自动修复 |
-| `-data-integrity-periodic-check` | `true` | 启用定期数据完整性检查 |
-| `-data-integrity-initialize-existing-files` | `false` | 启动时初始化现有文件的哈希记录 |
-| `-cache-policy` | `default` | 细粒度缓存策略 (default/size/type/frequency/adaptive) |
-| `-cache-policy-size-small` | `1MB` | 小文件阈值 |
-| `-cache-policy-size-medium` | `10MB` | 中等文件阈值 |
-| `-cache-policy-size-large` | `100MB` | 大文件阈值 |
-| `-cache-policy-hot-threshold` | `100` | 热门文件阈值（每天访问次数） |
-| `-cache-policy-cold-threshold` | `1` | 冷门文件阈值（每天访问次数） |
-| `-cache-policy-adaptive` | `false` | 启用自适应策略调整 |
-| `-cache-policy-adjust-interval` | `1h` | 自适应策略调整间隔 |
-
-## 配置文件示例
-
-完整的配置示例请参考 [`config.example.toml`](config.example.toml) 文件。
-
-创建 `config.toml` 并参考示例文件进行配置：
-
-```bash
-# 复制示例配置文件
-cp config.example.toml config.toml
-
-# 编辑配置文件
-vim config.toml
+```sh
+apt-get update
+apt-get install curl
 ```
 
-主要配置节包括：
-- `[server]` - 服务器基本配置
-- `[[upstreams]]` - 上游服务器列表（支持多个）
-- `[cache]` - 缓存配置
-- `[transport]` - 出站 HTTP 连接超时与连接池配置
-- `[apk]` - APK 缓存与校验配置
-- `[apt]` - APT 缓存与索引校验配置
-- `[proxy]` - 通用 HTTP/HTTPS 代理配置
+注意：
 
-### APK 校验配置
+- `http://` APT 源可以被解析和缓存。
+- `https://` APT 源通常通过 `CONNECT` 建立 TLS 隧道，当前服务会透传，但不会解密或缓存 TLS 内部内容。
+
+## 配置文件
+
+默认配置文件路径是 `config.toml`，也可以用 `-config` 指定：
+
+```sh
+./apk-cache -config /path/to/config.toml
+```
+
+完整示例见 [config.example.toml](config.example.toml)。
+
+### 配置示例
 
 ```toml
+[server]
+listen = ":3142"
+
+[[upstreams]]
+name = "Official Alpine CDN"
+url = "https://dl-cdn.alpinelinux.org"
+kind = "apk"
+# proxy = "socks5://127.0.0.1:1080"
+
+[cache]
+root = "./cache"
+data_root = "./data"
+index_ttl = "24h"
+package_ttl = "720h"
+
+[cache.memory]
+enabled = true
+max_size = "256MB"
+max_item_size = "16MB"
+ttl = "30m"
+max_items = 2048
+
+[transport]
+timeout = "30s"
+idle_conn_timeout = "90s"
+max_idle_conns = 128
+
 [apk]
 enabled = true
 verify_hash = true
 verify_signature = true
 keys_dir = ""
-```
 
-- `verify_hash`：使用 `APKINDEX` 校验缓存和新下载的 `.apk` 文件
-- `verify_signature`：只有可识别签名且验签通过的 APK/APKINDEX 才会进入缓存
-- `keys_dir`：可选的额外 RSA 公钥目录，会和内置公钥一起作为信任源加载
+[apt]
+enabled = true
+verify_hash = true
+load_index_async = true
 
-### ProxyAdapter 上游代理配置
-
-```toml
 [proxy]
 enabled = true
 allow_connect = true
 cache_non_package_requests = false
-upstream_proxy = "socks5://127.0.0.1:1080"
+upstream_proxy = ""
+allowed_hosts = []
 ```
 
-- `upstream_proxy`：作用于 APT 的出站请求，以及 `ProxyAdapter` 的出站请求和 `CONNECT` 隧道；不影响 `[[upstreams]].proxy` 的 APK 回源配置
-- `allowed_hosts`：仍然匹配目标站点 host，而不是上游代理服务器 host
+### 配置项说明
 
-## Docker Compose 示例
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `server.listen` | `:3142` | HTTP 监听地址 |
+| `upstreams[].name` | `Official Alpine CDN` | APK 上游名称，仅用于识别 |
+| `upstreams[].url` | `https://dl-cdn.alpinelinux.org` | APK 上游基础地址 |
+| `upstreams[].kind` | `apk` | 当前仅 APK 上游参与 APK 回源 |
+| `upstreams[].proxy` | 空 | 当前 APK 上游使用的出站代理 |
+| `cache.root` | `./cache` | 磁盘缓存目录 |
+| `cache.data_root` | `./data` | 运行数据目录，当前保留给后续扩展 |
+| `cache.index_ttl` | `24h` | 索引文件缓存 TTL |
+| `cache.package_ttl` | `720h` | 包文件缓存 TTL；`0` 表示不过期 |
+| `cache.memory.enabled` | `true` | 是否启用内存缓存 |
+| `cache.memory.max_size` | `256MB` | 内存缓存总大小 |
+| `cache.memory.max_item_size` | `16MB` | 可进入内存缓存的单文件最大大小 |
+| `cache.memory.ttl` | `30m` | 内存缓存项 TTL |
+| `cache.memory.max_items` | `2048` | 内存缓存最大条目数 |
+| `transport.timeout` | `30s` | 回源 HTTP client 超时 |
+| `transport.idle_conn_timeout` | `90s` | 空闲连接保留时间 |
+| `transport.max_idle_conns` | `128` | HTTP transport 最大空闲连接数 |
+| `apk.enabled` | `true` | 是否启用 APK 链路 |
+| `apk.verify_hash` | `true` | 是否使用 APKINDEX 校验 `.apk` |
+| `apk.verify_signature` | `true` | 是否校验 APK/APKINDEX RSA 签名 |
+| `apk.keys_dir` | 空 | 额外 Alpine RSA 公钥目录 |
+| `apt.enabled` | `true` | 是否启用 APT 链路 |
+| `apt.verify_hash` | `true` | 是否校验 APT by-hash、Release 索引引用文件和包文件 SHA256 |
+| `apt.load_index_async` | `true` | 是否异步加载新缓存的 APT 索引 |
+| `proxy.enabled` | `true` | 是否启用通用 HTTP/HTTPS 代理 |
+| `proxy.allow_connect` | `true` | 是否允许 `CONNECT` 隧道 |
+| `proxy.cache_non_package_requests` | `false` | 是否缓存非 APK/APT 普通 HTTP 请求 |
+| `proxy.upstream_proxy` | 空 | APT 和通用代理使用的出站代理 |
+| `proxy.allowed_hosts` | `[]` | 非空时只允许代理这些目标 host |
 
-```yaml
-version: '3.8'
-services:
-  apk-cache:
-    image: ghcr.io/tursom/apk-cache:latest
-    ports:
-      - "3142:3142"
-    volumes:
-      - ./cache:/app/cache
-    environment:
-      - ADDR=:3142
-      - CACHE_DIR=/app/cache
-      - INDEX_CACHE=24h
-      - MEMORY_CACHE_ENABLED=true
-      - MEMORY_CACHE_SIZE=100MB
-      - HEALTH_CHECK_INTERVAL=30s
-      - ENABLE_SELF_HEALING=true
-      - RATE_LIMIT_ENABLED=true
-      - RATE_LIMIT_RATE=100
-      - RATE_LIMIT_BURST=200
-      - RATE_LIMIT_EXEMPT_PATHS=/_health
-      - DATA_INTEGRITY_CHECK_INTERVAL=1h
-      - DATA_INTEGRITY_AUTO_REPAIR=true
-      - DATA_INTEGRITY_PERIODIC_CHECK=true
-    restart: unless-stopped
+支持的代理 URL：
+
+```text
+socks5://127.0.0.1:1080
+http://127.0.0.1:8080
+https://127.0.0.1:8443
 ```
 
-## 管理界面
+带认证的 HTTP 代理可写成：
 
-访问 `http://your-server:3142/_admin/` 查看：
-
-- 实时统计数据（缓存命中率、下载量等）
-- 缓存总大小和文件数量
-- 一键清空缓存功能
-- Prometheus 指标链接
-
-## 监控
-
-访问 `http://your-server:3142/metrics` 获取 Prometheus 指标：
-
-### 缓存性能指标
-- `apk_cache_hits_total` - 缓存命中次数
-- `apk_cache_misses_total` - 缓存未命中次数
-- `apk_cache_download_bytes_total` - 下载总字节数
-
-### 内存缓存指标
-- `apk_cache_memory_hits_total` - 内存缓存命中次数
-- `apk_cache_memory_misses_total` - 内存缓存未命中次数
-- `apk_cache_memory_size_bytes` - 内存缓存当前大小
-- `apk_cache_memory_items_total` - 内存缓存项数量
-- `apk_cache_memory_evictions_total` - 内存缓存淘汰次数
-
-### 健康检查指标
-- `apk_cache_health_status` - 组件健康状态（1=健康，0=不健康）
-  - `component="upstream"` - 上游服务器健康状态
-  - `component="filesystem"` - 文件系统健康状态
-  - `component="memory_cache"` - 内存缓存健康状态
-  - `component="cache_quota"` - 缓存配额健康状态
-- `apk_cache_health_check_duration_seconds` - 健康检查耗时
-  - `component="upstream"` - 上游服务器检查耗时
-  - `component="filesystem"` - 文件系统检查耗时
-  - `component="memory_cache"` - 内存缓存检查耗时
-  - `component="cache_quota"` - 缓存配额检查耗时
-- `apk_cache_health_check_errors_total` - 健康检查错误次数
-  - `component="upstream"` - 上游服务器检查错误
-  - `component="filesystem"` - 文件系统检查错误
-  - `component="memory_cache"` - 内存缓存检查错误
-  - `component="cache_quota"` - 缓存配额检查错误
-
-### 上游服务器指标
-- `apk_cache_upstream_healthy_count` - 健康上游服务器数量
-- `apk_cache_upstream_total_count` - 总上游服务器数量
-- `apk_cache_upstream_failover_count` - 故障转移次数
-
-### 请求限流指标
-- `apk_cache_rate_limit_allowed_total` - 允许通过的请求数量
-- `apk_cache_rate_limit_rejected_total` - 被拒绝的请求数量
-- `apk_cache_rate_limit_tokens_current` - 当前令牌数量
-
-### 数据完整性校验指标
-- `apk_cache_data_integrity_checks_total` - 数据完整性检查次数
-- `apk_cache_data_integrity_corrupted_files_total` - 损坏文件数量
-- `apk_cache_data_integrity_repaired_files_total` - 数据完整性修复次数
-- `apk_cache_data_integrity_check_duration_seconds` - 数据完整性检查耗时
-- `apk_cache_apk_hash_failures_total` - APK 哈希校验失败次数
-- `apk_cache_apk_signature_failures_total` - APK 签名校验失败次数
-- `apk_cache_apk_bypass_responses_total` - 因签名校验失败而绕过缓存的 APK 响应次数
-
-## 细粒度缓存策略
-
-### 概述
-
-细粒度缓存策略允许对不同类型的文件应用不同的缓存规则，优化缓存效率和资源利用。支持以下策略类型：
-
-### 策略类型
-
-#### 1. default（默认策略）
-不应用任何细粒度策略，使用全局配置（`index-cache`、`pkg-cache`）控制缓存时间。
-
-#### 2. size（基于大小的策略）
-根据文件大小应用不同的缓存规则：
-
-| 文件类型 | 大小范围 | 优先级 | 内存缓存 | 默认 TTL |
-|----------|----------|--------|----------|----------|
-| 小文件 | < size_small | 高 | 启用 | 1 天 |
-| 中等文件 | size_small ~ size_medium | 正常 | 启用 | 7 天 |
-| 大文件 | >= size_medium | 低 | 禁用 | 30 天 |
-
-默认阈值：`size_small=1MB`，`size_medium=10MB`，`size_large=100MB`
-
-#### 3. type（基于类型的策略）
-根据文件名模式（正则表达式）匹配应用不同的缓存规则：
-
-```toml
-[[fine_grained_policy.type_rules]]
-pattern = "^linux-lts.*\\.apk$"    # 内核相关包
-priority = "high"                    # 高优先级
-ttl = "7d"                          # 7天TTL
-memory_cache = true                  # 启用内存缓存
-preload = true                      # 允许预加载
-
-[[fine_grained_policy.type_rules]]
-pattern = ".*-debug$"               # 调试包
-priority = "low"                    # 低优先级
-ttl = "30d"                         # 30天TTL
+```text
+http://user:password@proxy.example:8080
 ```
 
-#### 4. frequency（基于访问频率的策略）
-根据文件的访问频率（每天访问次数）动态调整缓存策略：
+## Docker 环境变量
 
-| 文件类型 | 每天访问次数 | 优先级 | 内存缓存 |
-|----------|--------------|--------|----------|
-| 热门文件 | > hot_threshold | 高 | 启用 |
-| 正常文件 | cold_threshold ~ hot_threshold | 正常 | 正常 |
-| 冷门文件 | <= cold_threshold | 低 | 禁用 |
+容器启动时，`entrypoint.sh` 会根据环境变量生成临时 TOML 配置，然后执行 `/app/apk-cache -config <generated>`。
 
-默认阈值：`hot_threshold=100`，`cold_threshold=1`
+| 环境变量 | 默认值 | 对应配置 |
+| --- | --- | --- |
+| `CONFIG` | `/tmp/apk-cache.toml` | 生成的配置文件路径 |
+| `LISTEN` / `ADDR` | `:3142` | `server.listen` |
+| `CACHE_ROOT` / `CACHE_DIR` | `/app/cache` | `cache.root` |
+| `DATA_ROOT` | `/app/data` | `cache.data_root` |
+| `APK_UPSTREAM` / `UPSTREAM` | `https://dl-cdn.alpinelinux.org` | APK upstream URL |
+| `APK_UPSTREAM_PROXY` / `PROXY` | 空 | APK upstream proxy |
+| `UPSTREAM_PROXY` | 空 | `proxy.upstream_proxy` |
+| `INDEX_TTL` | `24h` | `cache.index_ttl` |
+| `PACKAGE_TTL` | `720h` | `cache.package_ttl` |
+| `MEMORY_CACHE_ENABLED` | `true` | `cache.memory.enabled` |
+| `MEMORY_CACHE_SIZE` | `256MB` | `cache.memory.max_size` |
+| `MEMORY_CACHE_MAX_ITEM_SIZE` | `16MB` | `cache.memory.max_item_size` |
+| `MEMORY_CACHE_TTL` | `30m` | `cache.memory.ttl` |
+| `MEMORY_CACHE_MAX_ITEMS` | `2048` | `cache.memory.max_items` |
+| `TRANSPORT_TIMEOUT` | `30s` | `transport.timeout` |
+| `TRANSPORT_IDLE_CONN_TIMEOUT` | `90s` | `transport.idle_conn_timeout` |
+| `TRANSPORT_MAX_IDLE_CONNS` | `128` | `transport.max_idle_conns` |
+| `APK_ENABLED` | `true` | `apk.enabled` |
+| `APK_VERIFY_HASH` | `true` | `apk.verify_hash` |
+| `APK_VERIFY_SIGNATURE` | `true` | `apk.verify_signature` |
+| `APT_ENABLED` | `true` | `apt.enabled` |
+| `APT_VERIFY_HASH` | `true` | `apt.verify_hash` |
+| `APT_LOAD_INDEX_ASYNC` | `true` | `apt.load_index_async` |
+| `PROXY_ENABLED` | `true` | `proxy.enabled` |
+| `PROXY_ALLOW_CONNECT` | `true` | `proxy.allow_connect` |
+| `PROXY_CACHE_NON_PACKAGE_REQUESTS` | `false` | `proxy.cache_non_package_requests` |
+| `PROXY_ALLOWED_HOSTS` | 空 | 逗号分隔的 `proxy.allowed_hosts` |
 
-#### 5. adaptive（自适应策略）
-综合应用大小、类型、频率三种策略，并根据实际访问模式自动调整：
+Docker 示例：
 
-- 定期（默认1小时）分析访问模式
-- 自动识别热门文件并提升优先级
-- 动态调整缓存策略以优化命中率
-
-### 配置示例
-
-```toml
-[fine_grained_policy]
-# 使用自适应策略
-policy = "adaptive"
-
-# 自定义大小阈值
-size_small = "512KB"
-size_medium = "20MB"
-size_large = "500MB"
-
-# 访问频率阈值
-hot_threshold = 50
-cold_threshold = 0
-
-# 启用自适应调整
-adaptive = true
-adjust_interval = "30m"
-
-# 自定义类型规则
-[[fine_grained_policy.type_rules]]
-pattern = "^apk-tools.*\\.apk$"
-priority = "high"
-ttl = "1d"
-memory_cache = true
-
-[[fine_grained_policy.type_rules]]
-pattern = ".*-doc.*\\.apk$"
-priority = "low"
-ttl = "30d"
+```sh
+docker run -d \
+  --name apk-cache \
+  -p 3142:3142 \
+  -v "$PWD/cache:/app/cache" \
+  -e APK_UPSTREAM=https://mirrors.tuna.tsinghua.edu.cn/alpine \
+  -e UPSTREAM_PROXY=socks5://127.0.0.1:1080 \
+  ghcr.io/tursom/apk-cache:latest
 ```
 
-### 策略如何影响缓存行为
+## 工作原理
 
-1. **TTL（缓存时间）**：决定文件多久后需要重新验证
-2. **优先级**：在缓存空间不足时，低优先级文件更早被清除
-3. **内存缓存**：高优先级文件更可能被缓存在内存中以加快访问速度
-4. **预加载**：高优先级文件可以提前加载到缓存
+### 请求分流
 
-### Prometheus 指标
+所有请求进入同一个 HTTP handler：
 
-- `apk_cache_policy_adjustments_total` - 策略调整次数
+1. `/_health` 返回健康检查。
+2. `/metrics` 返回 Prometheus 指标。
+3. `CONNECT` 进入隧道代理。
+4. 普通请求按路径或 URL 判断为 APK、APT 或通用代理。
 
-## 健康检查和自愈机制
+### 缓存流程
 
-### 工作原理
+APK、APT 和可缓存的普通代理请求都会走统一缓存流程：
 
-APK Cache 实现了完整的健康检查和自愈机制，确保服务的高可用性：
+1. 查询内存缓存，命中返回 `X-Cache: MEMORY-HIT`。
+2. 查询磁盘缓存，命中返回 `X-Cache: HIT`。
+3. 对同一缓存 key 加锁，避免并发重复下载。
+4. 再次查询缓存，防止等待锁期间已有其他请求写入。
+5. 回源请求，上游响应一边返回客户端，一边写入临时文件。
+6. 下载完成后执行协议校验。
+7. 校验通过后原子 `rename` 为正式缓存文件。
+8. 必要时写入内存缓存。
+9. 首次回源返回 `X-Cache: MISS`。
 
-#### 1. 健康检查组件
+非 `200 OK` 的上游响应会直接透传，不写入缓存，返回 `X-Cache: BYPASS`。
 
-**上游服务器健康检查**：
-- 定期检查所有上游服务器的可用性
-- 使用 HEAD 请求测试多个路径（根目录、Alpine 镜像目录、索引文件等）
-- 支持故障转移，自动切换到健康的上游服务器
-- 可配置的检查间隔和超时时间
+### APK 校验
 
-**文件系统健康检查**：
-- 检查缓存目录是否存在且可写
-- 验证磁盘空间使用情况
-- 自动修复目录权限问题
+APK 校验由 `internal/apk` 实现：
 
-**内存缓存健康检查**：
-- 监控内存使用率和缓存项数量
-- 检测内存缓存是否接近容量上限
-- 自动清理过期缓存项
+- `APKINDEX.tar.gz` 会被解析为包名、版本、大小和 checksum 的映射。
+- `.apk` 命中缓存或下载完成后，可以按 APKINDEX 记录校验大小和 hash。
+- APK/APKINDEX 可以校验 `.SIGN.*` RSA 签名。
+- 内置 Alpine 默认公钥，也可以通过 `apk.keys_dir` 加载额外公钥。
+- 新下载内容签名失败时会返回给客户端，但不会写入缓存。
 
-**缓存配额健康检查**：
-- 监控磁盘缓存使用情况
-- 预警缓存配额接近上限
+### APT 校验
 
-**数据完整性健康检查**：
-- 定期验证缓存文件的完整性
-- 检测损坏或篡改的文件
-- 监控校验和验证状态
+APT 校验由 `internal/apt` 实现：
 
-#### 2. 自愈机制
+- `Release` / `InRelease` 会解析 SHA256 文件清单。
+- `Packages*` / `Sources*` 会解析包文件路径、大小和 SHA256。
+- `by-hash/SHA256/<hash>` 请求会按 URL 中声明的 hash 校验。
+- 如果 `by-hash` 命中的是 `Release` 中记录的索引文件，会按原始索引路径解析 `Packages*` / `Sources*` 内容。
+- `Release` 引用的 `Packages*` / `Sources*` 文件会在缓存命中和下载完成后按 SHA256 校验。
+- `.deb` 如果能从索引中找到 SHA256，就在缓存命中和下载完成后校验。
+- 未找到索引记录时不阻断请求。
 
-当检测到问题时，系统会自动尝试修复：
+### CONNECT 隧道
 
-**上游服务器自愈**：
-- 自动重试连接失败的上游服务器
-- 重置健康状态计数器
-- 支持故障服务器自动恢复
+`CONNECT` 只建立 TCP 隧道：
 
-**文件系统自愈**：
-- 自动修复缓存目录权限
-- 重新创建必要的子目录结构
-- 清理损坏的临时文件
+- 不解析 TLS。
+- 不缓存 TLS 内部内容。
+- 可通过 `proxy.allow_connect=false` 禁用。
+- 可通过 `proxy.allowed_hosts` 限制目标 host。
+- 并发隧道有固定上限，防止无限占用连接。
 
-**内存缓存自愈**：
-- 自动清理过期缓存项
-- 重置内存缓存统计信息
+## 运维端点
 
-**数据完整性自愈**：
-- 自动修复损坏的缓存文件
-- 重新下载校验和验证失败的文件
-- 清理无法修复的损坏文件
+### `GET /_health`
 
-## 故障排除
+返回 JSON，例如：
 
-### 常见问题
+```json
+{
+  "status": "healthy",
+  "apk_upstreams_total": 1,
+  "apk_upstreams": {
+    "healthy": 1,
+    "total": 1
+  },
+  "disk_cache": {
+    "status": "healthy"
+  },
+  "memory_cache": {
+    "items": 0,
+    "size": 0,
+    "max": 268435456
+  }
+}
+```
 
-**缓存未命中**：检查缓存目录权限和磁盘空间
+当缓存目录不可用或 APK upstream 全部不可用时，状态会降级为 `degraded`，HTTP 状态码为 `503`。
 
-**代理连接失败**：验证代理地址格式和可用性（支持 SOCKS5/HTTP 协议）
+### `GET /metrics`
 
-**管理界面无法访问**：确保正确访问 `/_admin/` 路径
+暴露 Prometheus 指标，主要包括：
 
-**健康检查失败**：检查上游服务器可达性和网络连接
+- `apk_cache_hits_total`
+- `apk_cache_misses_total`
+- `apk_cache_download_bytes_total`
+- `apk_cache_response_bytes_total`
+- `apk_cache_upstream_requests_total`
+- `apk_cache_upstream_failovers_total`
+- `apk_cache_validation_failures_total`
+- `apk_cache_apk_hash_failures_total`
+- `apk_cache_apk_signature_failures_total`
+- `apk_cache_apk_bypass_responses_total`
+- `apk_cache_memory_hits_total`
+- `apk_cache_memory_misses_total`
+- `apk_cache_memory_evictions_total`
+- `apk_cache_memory_size_bytes`
+- `apk_cache_memory_items_total`
 
-**数据完整性错误**：检查磁盘空间和文件系统完整性
+## 开发与测试
 
-## 开发
+常用命令：
 
-查看 [DEV.md](DEV.md) 了解项目的开发规范和构建指南。
+```sh
+go test ./...
+go test ./... -coverprofile=coverage.out
+go tool cover -func=coverage.out
+./build.sh
+docker build -t apk-cache:local .
+```
 
-## 许可证
+真实数据集成测试在 `internal/app/real_integration_test.go`：
 
-GPLv3 License
+- APT 使用从 `deb.debian.org` 获取的 `Release`、`Packages.xz` 和 `.deb` fixture，覆盖 `Release -> Packages.xz -> by-hash -> .deb` 的缓存与 SHA256 校验。
+- APK 使用从 `dl-cdn.alpinelinux.org` 获取的 `APKINDEX.tar.gz` 和 `.apk` fixture，覆盖真实签名校验、APKINDEX hash 校验和缓存损坏后回源重取。
+- 测试运行时由本地 `httptest.Server` 提供这些 fixture，不依赖外网。
 
-## 开发路线图
+本地 Docker 冒烟：
 
-查看 [ROADMAP.md](ROADMAP.md) 了解项目的未来发展方向和改进计划。
+```sh
+docker run --rm -p 3142:3142 apk-cache:local
+curl http://127.0.0.1:3142/_health
+```
 
-## 链接
+## GitHub Actions
 
-- GitHub: https://github.com/tursom/apk-cache
-- Docker Hub: https://hub.docker.com/r/tursom/apk-cache
-- GitHub Container Registry: https://ghcr.io/tursom/apk-cache
-- Issue Tracker: https://github.com/tursom/apk-cache/issues
+[.github/workflows/build.yml](.github/workflows/build.yml) 当前包含：
+
+- Go 单元测试和 coverage artifact。
+- Linux / Windows / macOS 多平台二进制构建。
+- Docker 镜像构建和 `/_health` 冒烟。
+- 非 PR 事件推送 GHCR 镜像。
+- `v*` tag 创建 GitHub Release 并上传二进制产物。
+
+## 当前限制
+
+- 没有 Web 管理台；观察入口是 `/_health` 和 `/metrics`。
+- 没有管理台认证。
+- 没有全局限流。
+- 没有磁盘配额和自动清理策略。
+- HTTPS APT 源通过 `CONNECT` 透传，不解密也不缓存。
+- `data_root` 当前保留给后续扩展，核心缓存状态主要来自磁盘缓存和内存索引。
+
+这些能力后续可以在当前简化内核之上重新设计，但不再恢复旧版已经失配的实现。
