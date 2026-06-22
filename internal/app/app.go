@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	adminui "github.com/tursom/apk-cache/internal/admin"
 	apkpkg "github.com/tursom/apk-cache/internal/apk"
 	aptpkg "github.com/tursom/apk-cache/internal/apt"
 	cachepkg "github.com/tursom/apk-cache/internal/cache"
@@ -379,6 +380,10 @@ func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	switch {
+	case r.URL.Path == "/favicon.ico" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		adminui.ServeFavicon(lw, r)
+	case r.URL.Path == "/favicon.svg" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+		adminui.ServeFaviconSVG(lw, r)
 	case r.URL.Path == "/admin" && r.Method == http.MethodGet:
 		http.Redirect(lw, r, "/admin/", http.StatusFound)
 	case strings.HasPrefix(r.URL.Path, "/admin/assets/") && r.Method == http.MethodGet:

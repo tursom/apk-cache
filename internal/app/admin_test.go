@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,9 @@ func TestAdminDefaultLoginAccountAndConfigUpdate(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(body, `id="root"`) || !strings.Contains(body, `/admin/assets/assets/index-`) {
 		t.Fatalf("admin page code=%d body=%s", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(body, `href="/admin/assets/favicon.ico"`) || !strings.Contains(body, `href="/admin/assets/favicon.svg"`) {
+		t.Fatalf("admin page missing favicon links: %s", body)
+	}
 	cssPath := regexp.MustCompile(`href="([^"]+\.css)"`).FindStringSubmatch(body)
 	jsPath := regexp.MustCompile(`src="([^"]+\.js)"`).FindStringSubmatch(body)
 	if len(cssPath) != 2 || len(jsPath) != 2 {
@@ -39,6 +43,21 @@ func TestAdminDefaultLoginAccountAndConfigUpdate(t *testing.T) {
 	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, jsPath[1], nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "APK Cache Admin") {
 		t.Fatalf("admin js code=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/favicon.ico", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "image/x-icon") || !bytes.HasPrefix(rec.Body.Bytes(), []byte{0, 0, 1, 0}) {
+		t.Fatalf("favicon ico code=%d content-type=%s len=%d", rec.Code, rec.Header().Get("Content-Type"), rec.Body.Len())
+	}
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/assets/favicon.ico", nil))
+	if rec.Code != http.StatusOK || !bytes.HasPrefix(rec.Body.Bytes(), []byte{0, 0, 1, 0}) {
+		t.Fatalf("admin asset favicon ico code=%d len=%d", rec.Code, rec.Body.Len())
+	}
+	rec = httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/favicon.svg", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Header().Get("Content-Type"), "image/svg+xml") || !strings.Contains(rec.Body.String(), "<svg") {
+		t.Fatalf("favicon svg code=%d content-type=%s body=%s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
