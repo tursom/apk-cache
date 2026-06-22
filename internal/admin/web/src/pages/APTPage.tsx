@@ -48,18 +48,19 @@ function APTIndexes({ toast }: { toast: (message: string, ok?: boolean) => void 
 
 function APTRecords({ byHashOnly, toast }: { byHashOnly: boolean; toast: (message: string, ok?: boolean) => void }) {
   const [items, setItems] = useState<APTRecord[]>([]);
-  const [search, setSearch] = useState('');
+  const [draft, setDraft] = useState('');
+  const [queryText, setQueryText] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const pageSize = 50;
-  const load = async (nextPage = page) => {
+  const load = async (nextPage = page, activeQuery = queryText) => {
     setLoading(true);
     setError('');
     try {
       const query = new URLSearchParams({ page: String(nextPage), page_size: String(pageSize) });
-      if (search) query.set('q', search);
+      if (activeQuery) query.set('q', activeQuery);
       if (byHashOnly) query.set('by_hash', '1');
       const data = await api<PaginatedResponse<APTRecord>>(`/apt/records?${query.toString()}`);
       setItems(data.items || []);
@@ -70,15 +71,29 @@ function APTRecords({ byHashOnly, toast }: { byHashOnly: boolean; toast: (messag
       setLoading(false);
     }
   };
-  useEffect(() => { void load(); }, [search, page, byHashOnly]);
+  useEffect(() => { void load(); }, [queryText, page, byHashOnly]);
+  const applySearch = () => {
+    const nextQuery = draft.trim();
+    if (page === 1 && queryText === nextQuery) {
+      void load(1, nextQuery);
+      return;
+    }
+    setPage(1);
+    setQueryText(nextQuery);
+  };
   if (error) return <ErrorMessage message={error} />;
   if (loading) return <Loading />;
   return (
     <>
       <div className="toolbar">
-        <input placeholder="package / filename / sha256" value={search} onChange={event => { setPage(1); setSearch(event.target.value); }} />
-        <button type="button" onClick={() => { setPage(1); void load(1); }}><Search size={15} />搜索</button>
-        <button type="button" onClick={() => api('/apt/indexes/reload', { method: 'POST' }).then(() => { toast('APT 索引已重载'); setPage(1); return load(1); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
+        <input
+          placeholder="package / filename / sha256"
+          value={draft}
+          onChange={event => setDraft(event.target.value)}
+          onKeyDown={event => { if (event.key === 'Enter') applySearch(); }}
+        />
+        <button type="button" onClick={applySearch}><Search size={15} />搜索</button>
+        <button type="button" onClick={() => api('/apt/indexes/reload', { method: 'POST' }).then(() => { toast('APT 索引已重载'); setPage(1); return load(1, queryText); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
       </div>
       <DataTable
         columns={['Index', 'Type', 'Package', 'Filename', 'Size', 'SHA256']}

@@ -9,10 +9,9 @@ type APKTab = 'packages' | 'indexes' | 'keys';
 
 export function APKPage({ toast }: { toast: (message: string, ok?: boolean) => void }) {
   const [tab, setTab] = useState<APKTab>('packages');
-  const [search, setSearch] = useState('');
   return (
     <Page title="APK" actions={<InlineTabs tab={tab} setTab={setTab} />}>
-      {tab === 'packages' ? <APKPackages search={search} setSearch={setSearch} toast={toast} /> : null}
+      {tab === 'packages' ? <APKPackages toast={toast} /> : null}
       {tab === 'indexes' ? <APKIndexes toast={toast} /> : null}
       {tab === 'keys' ? <APKKeys toast={toast} /> : null}
     </Page>
@@ -29,19 +28,21 @@ function InlineTabs({ tab, setTab }: { tab: APKTab; setTab: (tab: APKTab) => voi
   );
 }
 
-function APKPackages({ search, setSearch, toast }: { search: string; setSearch: (value: string) => void; toast: (message: string, ok?: boolean) => void }) {
+function APKPackages({ toast }: { toast: (message: string, ok?: boolean) => void }) {
   const [items, setItems] = useState<APKPackage[]>([]);
+  const [draft, setDraft] = useState('');
+  const [queryText, setQueryText] = useState('');
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const pageSize = 50;
-  const load = async (nextPage = page) => {
+  const load = async (nextPage = page, activeQuery = queryText) => {
     setLoading(true);
     setError('');
     try {
       const query = new URLSearchParams({ page: String(nextPage), page_size: String(pageSize) });
-      if (search) query.set('q', search);
+      if (activeQuery) query.set('q', activeQuery);
       const data = await api<PaginatedResponse<APKPackage>>(`/apk/packages?${query.toString()}`);
       setItems(data.items || []);
       setTotal(data.total || 0);
@@ -51,15 +52,29 @@ function APKPackages({ search, setSearch, toast }: { search: string; setSearch: 
       setLoading(false);
     }
   };
-  useEffect(() => { void load(); }, [search, page]);
+  useEffect(() => { void load(); }, [queryText, page]);
+  const applySearch = () => {
+    const nextQuery = draft.trim();
+    if (page === 1 && queryText === nextQuery) {
+      void load(1, nextQuery);
+      return;
+    }
+    setPage(1);
+    setQueryText(nextQuery);
+  };
   if (error) return <ErrorMessage message={error} />;
   if (loading) return <Loading />;
   return (
     <>
       <div className="toolbar">
-        <input placeholder="包名/版本" value={search} onChange={event => { setPage(1); setSearch(event.target.value); }} />
-        <button type="button" onClick={() => { setPage(1); void load(1); }}><Search size={15} />搜索</button>
-        <button type="button" onClick={() => api('/apk/indexes/reload', { method: 'POST' }).then(() => { toast('APK 索引已重载'); setPage(1); return load(1); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
+        <input
+          placeholder="包名/版本"
+          value={draft}
+          onChange={event => setDraft(event.target.value)}
+          onKeyDown={event => { if (event.key === 'Enter') applySearch(); }}
+        />
+        <button type="button" onClick={applySearch}><Search size={15} />搜索</button>
+        <button type="button" onClick={() => api('/apk/indexes/reload', { method: 'POST' }).then(() => { toast('APK 索引已重载'); setPage(1); return load(1, queryText); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
       </div>
       <DataTable
         columns={['Index', 'Package', 'Version', 'Hash', 'Size']}
