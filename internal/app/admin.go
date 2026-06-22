@@ -906,7 +906,10 @@ func (a *App) adminAPKPackages(w http.ResponseWriter, r *http.Request) {
 		Algorithm string `json:"checksum_algorithm"`
 		Size      int64  `json:"size_bytes"`
 	}
-	var out []item
+	page, pageSize := adminPageFromQuery(r)
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	out := make([]item, 0, pageSize)
+	total := 0
 	indexes, err := a.findFiles(func(path string) bool { return apkpkg.IsIndexFile(path) })
 	if err != nil {
 		a.writeAdminError(w, http.StatusInternalServerError, "scan_failed", err.Error())
@@ -923,12 +926,19 @@ func (a *App) adminAPKPackages(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				for _, pkg := range apkpkg.ParseIndex(entry.Body) {
-					out = append(out, item{IndexPath: indexPath, Name: pkg.Name, Version: pkg.Version, Algorithm: pkg.Algorithm, Size: pkg.Size})
+					adminItem := item{IndexPath: indexPath, Name: pkg.Name, Version: pkg.Version, Algorithm: pkg.Algorithm, Size: pkg.Size}
+					if query != "" && !strings.Contains(strings.ToLower(strings.Join([]string{adminItem.IndexPath, adminItem.Name, adminItem.Version, adminItem.Algorithm}, " ")), query) {
+						continue
+					}
+					if total >= (page-1)*pageSize && len(out) < pageSize {
+						out = append(out, adminItem)
+					}
+					total++
 				}
 			}
 		}
 	}
-	a.writeAdminData(w, map[string]any{"items": out})
+	a.writeAdminData(w, map[string]any{"items": out, "total": total, "page": page, "page_size": pageSize})
 }
 
 func (a *App) adminReloadAPKIndexes(w http.ResponseWriter, r *http.Request) {
@@ -973,7 +983,24 @@ func (a *App) adminAPTRecords(w http.ResponseWriter, r *http.Request) {
 		Size            int64  `json:"size_bytes"`
 		SHA256          string `json:"sha256"`
 	}
-	var out []item
+	page, pageSize := adminPageFromQuery(r)
+	query := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
+	byHashOnly := parseBoolQuery(r.URL.Query().Get("by_hash"))
+	out := make([]item, 0, pageSize)
+	total := 0
+	appendRecord := func(adminItem item) {
+		haystack := strings.ToLower(strings.Join([]string{adminItem.SourceIndexPath, adminItem.RecordType, adminItem.TargetPath, adminItem.Filename, adminItem.PackageName, adminItem.SHA256}, " "))
+		if byHashOnly && !strings.Contains(haystack, "/by-hash/") {
+			return
+		}
+		if query != "" && !strings.Contains(haystack, query) {
+			return
+		}
+		if total >= (page-1)*pageSize && len(out) < pageSize {
+			out = append(out, adminItem)
+		}
+		total++
+	}
 	indexes, err := a.findFiles(func(path string) bool { return aptpkg.IsIndexFile(path) })
 	if err != nil {
 		a.writeAdminError(w, http.StatusInternalServerError, "scan_failed", err.Error())
@@ -993,16 +1020,16 @@ func (a *App) adminAPTRecords(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(name, "Packages"), strings.HasPrefix(name, "Sources"):
 			for _, rec := range aptpkg.ParsePackages(reader) {
-				out = append(out, item{SourceIndexPath: indexPath, RecordType: "package_file", Filename: rec.Filename, PackageName: rec.Package, Size: rec.Size, SHA256: rec.SHA256})
+				appendRecord(item{SourceIndexPath: indexPath, RecordType: "package_file", Filename: rec.Filename, PackageName: rec.Package, Size: rec.Size, SHA256: rec.SHA256})
 			}
 		case name == "Release" || name == "InRelease":
 			for _, rec := range aptpkg.ParseRelease(reader) {
-				out = append(out, item{SourceIndexPath: indexPath, RecordType: "release_file", Filename: rec.Filename, Size: rec.Size, SHA256: rec.SHA256})
+				appendRecord(item{SourceIndexPath: indexPath, RecordType: "release_file", Filename: rec.Filename, Size: rec.Size, SHA256: rec.SHA256})
 			}
 		}
 		_ = file.Close()
 	}
-	a.writeAdminData(w, map[string]any{"items": out})
+	a.writeAdminData(w, map[string]any{"items": out, "total": total, "page": page, "page_size": pageSize})
 }
 
 func (a *App) adminListAPTMirrors(w http.ResponseWriter, r *http.Request) {
@@ -1723,6 +1750,31 @@ func cacheFilterFromQuery(r *http.Request) store.CacheObjectFilter {
 		MaxSize:  maxSize,
 		Page:     page,
 		PageSize: pageSize,
+	}
+}
+
+func adminPageFromQuery(r *http.Request) (int, int) {
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 500 {
+		pageSize = 500
+	}
+	return page, pageSize
+}
+
+func parseBoolQuery(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "t", "true", "y", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 

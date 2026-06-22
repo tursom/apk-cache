@@ -4,6 +4,13 @@ export type AdminResponse<T> = {
   error?: { code: string; message: string } | null;
 };
 
+export type PaginatedResponse<T> = {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
 export type CurrentUser = {
   authenticated: boolean;
   username: string;

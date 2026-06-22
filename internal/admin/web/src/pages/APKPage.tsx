@@ -1,9 +1,9 @@
 import { KeyRound, RefreshCw, Search } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Code, DataTable, ErrorMessage, JsonBlock, Loading, Page, Panel } from '../components';
-import type { APKPackage } from '../types';
-import { formatBytes, includesAll } from '../utils';
+import { Code, DataTable, ErrorMessage, JsonBlock, Loading, Page, Pagination, Panel } from '../components';
+import type { APKPackage, PaginatedResponse } from '../types';
+import { formatBytes } from '../utils';
 
 type APKTab = 'packages' | 'indexes' | 'keys';
 
@@ -31,32 +31,39 @@ function InlineTabs({ tab, setTab }: { tab: APKTab; setTab: (tab: APKTab) => voi
 
 function APKPackages({ search, setSearch, toast }: { search: string; setSearch: (value: string) => void; toast: (message: string, ok?: boolean) => void }) {
   const [items, setItems] = useState<APKPackage[]>([]);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const load = async () => {
+  const pageSize = 50;
+  const load = async (nextPage = page) => {
     setLoading(true);
+    setError('');
     try {
-      setItems((await api<{ items: APKPackage[] }>('/apk/packages')).items || []);
+      const query = new URLSearchParams({ page: String(nextPage), page_size: String(pageSize) });
+      if (search) query.set('q', search);
+      const data = await api<PaginatedResponse<APKPackage>>(`/apk/packages?${query.toString()}`);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { void load(); }, []);
-  const filtered = useMemo(() => items.filter(item => includesAll([item.package_name, item.version, item.index_cache_path].join(' '), search)), [items, search]);
+  useEffect(() => { void load(); }, [search, page]);
   if (error) return <ErrorMessage message={error} />;
   if (loading) return <Loading />;
   return (
     <>
       <div className="toolbar">
-        <input placeholder="包名/版本" value={search} onChange={event => setSearch(event.target.value)} />
-        <button type="button" onClick={() => void load()}><Search size={15} />刷新</button>
-        <button type="button" onClick={() => api('/apk/indexes/reload', { method: 'POST' }).then(() => { toast('APK 索引已重载'); return load(); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
+        <input placeholder="包名/版本" value={search} onChange={event => { setPage(1); setSearch(event.target.value); }} />
+        <button type="button" onClick={() => { setPage(1); void load(1); }}><Search size={15} />搜索</button>
+        <button type="button" onClick={() => api('/apk/indexes/reload', { method: 'POST' }).then(() => { toast('APK 索引已重载'); setPage(1); return load(1); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
       </div>
       <DataTable
         columns={['Index', 'Package', 'Version', 'Hash', 'Size']}
-        rows={filtered.map(item => [
+        rows={items.map(item => [
           <Code>{item.index_cache_path}</Code>,
           item.package_name,
           item.version,
@@ -64,6 +71,7 @@ function APKPackages({ search, setSearch, toast }: { search: string; setSearch: 
           formatBytes(item.size_bytes)
         ])}
       />
+      <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} />
     </>
   );
 }

@@ -69,6 +69,27 @@ export function DataTable({
   );
 }
 
+export function Pagination({
+  total,
+  page,
+  pageSize,
+  onPageChange
+}: {
+  total: number;
+  page: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  return (
+    <div className="actions">
+      <span className="muted">共 {total} 条，第 {page} / {pageCount} 页</span>
+      <button type="button" disabled={page <= 1} onClick={() => onPageChange(page - 1)}>上一页</button>
+      <button type="button" disabled={page >= pageCount} onClick={() => onPageChange(page + 1)}>下一页</button>
+    </div>
+  );
+}
+
 export function Code({ children }: { children: ReactNode }) {
   return <code className="breakable">{children}</code>;
 }

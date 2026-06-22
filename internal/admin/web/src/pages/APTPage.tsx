@@ -1,9 +1,9 @@
 import { Plus, RefreshCw, Save, Search, ShieldCheck, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Code, DataTable, ErrorMessage, Loading, Page, Panel, StatusBadge } from '../components';
-import type { APTMirror, APTRecord } from '../types';
-import { formatBytes, includesAll } from '../utils';
+import { Code, DataTable, ErrorMessage, Loading, Page, Pagination, Panel, StatusBadge } from '../components';
+import type { APTMirror, APTRecord, PaginatedResponse } from '../types';
+import { formatBytes } from '../utils';
 
 type APTTab = 'records' | 'indexes' | 'byhash' | 'mirrors' | 'validate';
 
@@ -49,36 +49,40 @@ function APTIndexes({ toast }: { toast: (message: string, ok?: boolean) => void 
 function APTRecords({ byHashOnly, toast }: { byHashOnly: boolean; toast: (message: string, ok?: boolean) => void }) {
   const [items, setItems] = useState<APTRecord[]>([]);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const load = async () => {
+  const pageSize = 50;
+  const load = async (nextPage = page) => {
     setLoading(true);
+    setError('');
     try {
-      setItems((await api<{ items: APTRecord[] }>('/apt/records')).items || []);
+      const query = new URLSearchParams({ page: String(nextPage), page_size: String(pageSize) });
+      if (search) query.set('q', search);
+      if (byHashOnly) query.set('by_hash', '1');
+      const data = await api<PaginatedResponse<APTRecord>>(`/apt/records?${query.toString()}`);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { void load(); }, []);
-  const filtered = useMemo(() => items.filter(item => {
-    const haystack = [item.source_index_cache_path, item.record_type, item.package_name, item.filename, item.sha256].join(' ');
-    const isByHash = haystack.includes('/by-hash/');
-    return (!byHashOnly || isByHash) && includesAll(haystack, search);
-  }), [items, search, byHashOnly]);
+  useEffect(() => { void load(); }, [search, page, byHashOnly]);
   if (error) return <ErrorMessage message={error} />;
   if (loading) return <Loading />;
   return (
     <>
       <div className="toolbar">
-        <input placeholder="package / filename / sha256" value={search} onChange={event => setSearch(event.target.value)} />
-        <button type="button" onClick={() => void load()}><Search size={15} />刷新</button>
-        <button type="button" onClick={() => api('/apt/indexes/reload', { method: 'POST' }).then(() => { toast('APT 索引已重载'); return load(); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
+        <input placeholder="package / filename / sha256" value={search} onChange={event => { setPage(1); setSearch(event.target.value); }} />
+        <button type="button" onClick={() => { setPage(1); void load(1); }}><Search size={15} />搜索</button>
+        <button type="button" onClick={() => api('/apt/indexes/reload', { method: 'POST' }).then(() => { toast('APT 索引已重载'); setPage(1); return load(1); }).catch(err => toast((err as Error).message, false))}><RefreshCw size={15} />重载索引</button>
       </div>
       <DataTable
         columns={['Index', 'Type', 'Package', 'Filename', 'Size', 'SHA256']}
-        rows={filtered.map(item => [
+        rows={items.map(item => [
           <Code>{item.source_index_cache_path}</Code>,
           item.record_type,
           item.package_name || '',
@@ -87,6 +91,7 @@ function APTRecords({ byHashOnly, toast }: { byHashOnly: boolean; toast: (messag
           <Code>{item.sha256 || ''}</Code>
         ])}
       />
+      <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} />
     </>
   );
 }
