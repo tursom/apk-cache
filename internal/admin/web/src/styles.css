@@ -457,10 +457,30 @@ tr:last-child td {
   padding: 16px;
 }
 
-.modal h2 {
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.modal-head h2 {
+  margin: 0;
+  padding: 0;
+  font-size: 18px;
+}
+
+.modal > h2 {
   margin: 0 0 8px;
   padding: 0;
   font-size: 18px;
+}
+
+.cache-detail-modal {
+  width: min(860px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
 }
 
 .muted { color: var(--muted); }

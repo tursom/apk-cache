@@ -1,4 +1,4 @@
-import { Eye, Recycle, Search, Trash2, Zap } from 'lucide-react';
+import { Eye, Recycle, Search, Trash2, X, Zap } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Code, DataTable, ErrorMessage, JsonBlock, Loading, Page, Panel, StatusBadge } from '../components';
@@ -16,12 +16,24 @@ type CacheFilters = {
 
 const defaultFilters: CacheFilters = { q: '', protocol: '', class: '', status: '', page: 1, page_size: 50 };
 
+type CacheObjectDetail = {
+  object: CacheObject;
+  hash: unknown;
+};
+
+type DetailState = {
+  id: number;
+  loading: boolean;
+  data: CacheObjectDetail | null;
+  error: string;
+};
+
 export function CachePage({ toast }: { toast: (message: string, ok?: boolean) => void }) {
   const [filters, setFilters] = useState<CacheFilters>(defaultFilters);
   const [draft, setDraft] = useState<CacheFilters>(defaultFilters);
   const [items, setItems] = useState<CacheObject[]>([]);
   const [total, setTotal] = useState(0);
-  const [detail, setDetail] = useState<unknown>(null);
+  const [detail, setDetail] = useState<DetailState | null>(null);
   const [prewarm, setPrewarm] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -47,6 +59,17 @@ export function CachePage({ toast }: { toast: (message: string, ok?: boolean) =>
   const search = () => {
     setDetail(null);
     setFilters({ ...draft, page: 1 });
+  };
+  const showDetail = async (item: CacheObject) => {
+    setDetail({ id: item.id, loading: true, data: null, error: '' });
+    try {
+      const data = await api<CacheObjectDetail>(`/cache/objects/${item.id}`);
+      setDetail({ id: item.id, loading: false, data, error: '' });
+    } catch (err) {
+      const message = (err as Error).message;
+      setDetail({ id: item.id, loading: false, data: null, error: message });
+      toast(message, false);
+    }
   };
   const batchDelete = async () => {
     const dry = await api<{ total: number }>('/cache/delete', { method: 'POST', body: { ...filters, dry_run: true } });
@@ -105,7 +128,9 @@ export function CachePage({ toast }: { toast: (message: string, ok?: boolean) =>
               item.validation_status,
               formatTime(item.last_accessed_at || item.updated_at),
               <div className="cell-actions">
-                <button type="button" onClick={() => api(`/cache/objects/${item.id}`).then(setDetail).catch(err => toast((err as Error).message, false))}><Eye size={14} />详情</button>
+                <button type="button" disabled={detail?.id === item.id && detail.loading} onClick={() => void showDetail(item)}>
+                  <Eye size={14} />{detail?.id === item.id && detail.loading ? '加载中' : '详情'}
+                </button>
                 <button className="danger" type="button" onClick={() => void deleteOne(item, toast, load)}><Trash2 size={14} />删除</button>
               </div>
             ])}
@@ -115,9 +140,23 @@ export function CachePage({ toast }: { toast: (message: string, ok?: boolean) =>
             <button type="button" disabled={filters.page <= 1} onClick={() => setFilters({ ...filters, page: filters.page - 1 })}>上一页</button>
             <button type="button" disabled={filters.page * filters.page_size >= total} onClick={() => setFilters({ ...filters, page: filters.page + 1 })}>下一页</button>
           </div>
-          {detail ? <Panel title="缓存详情"><JsonBlock value={detail} /></Panel> : null}
         </>
       )}
+      {detail ? (
+        <div className="modal-backdrop">
+          <div className="panel modal cache-detail-modal">
+            <div className="modal-head">
+              <h2>缓存详情 #{detail.id}</h2>
+              <button className="icon-button" type="button" onClick={() => setDetail(null)} aria-label="关闭详情">
+                <X size={16} />
+              </button>
+            </div>
+            {detail.loading ? <Loading /> : null}
+            {detail.error ? <ErrorMessage message={detail.error} /> : null}
+            {detail.data ? <JsonBlock value={detail.data} /> : null}
+          </div>
+        </div>
+      ) : null}
     </Page>
   );
 }
